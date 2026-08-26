@@ -1,7 +1,15 @@
 import { Command } from "commander";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, resolve, basename } from "node:path";
-import { deriveBookIdFromTitle, normalizePlatformOrOther, PipelineRunner, type BookConfig, type FanficMode } from "@actalk/inkos-core";
+import {
+  createFanficBookTool,
+  deriveBookIdFromTitle,
+  executeExplicitCapabilityTool,
+  normalizePlatformOrOther,
+  PipelineRunner,
+  type BookConfig,
+  type FanficMode,
+} from "@actalk/inkos-core";
 import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
 import {
   formatFanficCanonMissingError,
@@ -65,7 +73,22 @@ fanficCommand
       if (!opts.json) log(`  Source: ${sourceName} (${sourceText.length} chars)`);
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
-      await pipeline.initFanficBook(book, sourceText, sourceName, mode);
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default" },
+        tool: createFanficBookTool(pipeline, root),
+        parameters: {
+          title: book.title,
+          sourceText,
+          sourceName,
+          mode,
+          genre: book.genre,
+          platform: book.platform,
+          language: book.language,
+          targetChapters: book.targetChapters,
+          chapterWordCount: book.chapterWordCount,
+        },
+      });
 
       if (opts.json) {
         log(JSON.stringify({
@@ -74,13 +97,13 @@ fanficCommand
           genre: book.genre,
           fanficMode: mode,
           source: sourceName,
-          location: `books/${bookId}/`,
+          location: `works/${bookId}/source/`,
           nextStep: `inkos write next ${bookId}`,
         }, null, 2));
       } else {
         log(`Fanfic created: ${bookId}`);
         log(`  Mode: ${mode}`);
-        log(`  Location: books/${bookId}/`);
+        log(`  Location: works/${bookId}/source/`);
         log(`  fanfic_canon.md + foundation generated.`);
         log("");
         log(`Next: inkos write next ${bookId}`);

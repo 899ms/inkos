@@ -75,6 +75,12 @@ export {
   createReplaceChapterTextTool,
 } from "./tools/longform-edits.js";
 export {
+  createTranslationCreateTool,
+  createTranslationRunTool,
+  createTranslationExportTool,
+} from "./tools/translation.js";
+export { createReplaceWorkArtifactTool } from "./tools/work-artifacts.js";
+export {
   CreativeHarnessRuntime,
   ActionConfirmationRequiredError,
   isActionAuthorized,

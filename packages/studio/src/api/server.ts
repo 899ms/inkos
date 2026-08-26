@@ -69,7 +69,6 @@ import {
   ingestMaterial,
   createSkillRegistry,
   loadAvailableAgentSkills,
-  activatedSkillIds,
   mergeActivatedSkillGuidance,
   resolveProfileSkillActivations,
   confirmedCapabilityBinding,
@@ -95,6 +94,8 @@ import {
   createShortFictionRunTool,
   createStoryboardCreationTool,
   createTranslationCreateTool,
+  createTranslationRunTool,
+  createTranslationExportTool,
   createFanficBookTool,
   createContinuationImportTool,
   createSpinoffBookTool,
@@ -103,7 +104,6 @@ import {
   createDraftStructureTool,
   createConnectChoiceTool,
   createRemoveNodeTool,
-  createLLMTranslationModel,
   deleteLatestChapter,
   executeEditTransaction,
   listChapterVersions,
@@ -111,11 +111,8 @@ import {
   readChapterUserBrief,
   readChapterVersion,
   saveChapterUserBrief,
-  createTranslationProjectFromFile,
   loadTranslationChapter,
   loadTranslationManifest,
-  runTranslationProject,
-  writeTranslationExport,
   translationProjectDir,
   listWorkManifests,
   loadWorkManifest,
@@ -6274,9 +6271,25 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("fanfic:start", { bookId, title: body.title });
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.initFanficBook(bookConfig, body.sourceText, body.sourceName ?? "source", (body.mode ?? "canon") as "canon");
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default" },
+        tool: createFanficBookTool(pipeline, root),
+        parameters: {
+          title: bookConfig.title,
+          sourceText: body.sourceText,
+          sourceName: body.sourceName ?? "source",
+          mode: body.mode ?? "canon",
+          genre: bookConfig.genre,
+          platform: bookConfig.platform,
+          language: bookConfig.language,
+          targetChapters: bookConfig.targetChapters,
+          chapterWordCount: bookConfig.chapterWordCount,
+        },
+      });
+      const createdBookId = (action.data as { bookId?: string } | undefined)?.bookId ?? bookId;
       broadcast("fanfic:complete", { bookId });
-      return c.json({ ok: true, bookId });
+      return c.json({ ok: true, bookId: createdBookId });
     } catch (e) {
       broadcast("fanfic:error", { bookId, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -6355,7 +6368,21 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
-        await pipeline.initSpinoffBook(bookConfig, body.parentBookId, body.direction);
+        await executeExplicitCapabilityTool({
+          projectRoot: root,
+          binding: { capabilityId: "adaptation", actionId: "spinoff_create", profileId: "workspace-default" },
+          tool: createSpinoffBookTool(pipeline, root),
+          parameters: {
+            title: bookConfig.title,
+            parentBookId: body.parentBookId,
+            direction: body.direction,
+            genre: bookConfig.genre,
+            platform: bookConfig.platform,
+            language: bookConfig.language,
+            targetChapters: bookConfig.targetChapters,
+            chapterWordCount: bookConfig.chapterWordCount,
+          },
+        });
         const book = await loadStudioBookListSummary(state, bookId).catch(() => undefined);
         bookCreateStatus.delete(bookId);
         broadcast("spinoff:complete", { bookId });
@@ -6402,7 +6429,22 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
-        await pipeline.initImitationBook(bookConfig, body.referenceText, body.storyIdea, body.sourceName);
+        await executeExplicitCapabilityTool({
+          projectRoot: root,
+          binding: { capabilityId: "adaptation", actionId: "imitation_create", profileId: "workspace-default" },
+          tool: createImitationBookTool(pipeline, root),
+          parameters: {
+            title: bookConfig.title,
+            referenceText: body.referenceText,
+            storyIdea: body.storyIdea,
+            sourceName: body.sourceName,
+            genre: bookConfig.genre,
+            platform: bookConfig.platform,
+            language: bookConfig.language,
+            targetChapters: bookConfig.targetChapters,
+            chapterWordCount: bookConfig.chapterWordCount,
+          },
+        });
         const book = await loadStudioBookListSummary(state, bookId).catch(() => undefined);
         bookCreateStatus.delete(bookId);
         broadcast("imitation:complete", { bookId });
@@ -6541,17 +6583,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!body.sourceLanguage?.trim() || !body.targetLanguage?.trim()) {
       return c.json({ error: { code: "MISSING_LANGUAGES", message: "sourceLanguage and targetLanguage are required" } }, 400);
     }
-    const result = await createTranslationProjectFromFile(root, {
-      filePath: body.filePath,
-      sourceLanguage: body.sourceLanguage,
-      targetLanguage: body.targetLanguage,
-      title: body.title,
-      segmentMaxChars: body.segmentMaxChars,
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation" },
+      tool: createTranslationCreateTool(root),
+      parameters: {
+        filePath: body.filePath,
+        sourceLanguage: body.sourceLanguage,
+        targetLanguage: body.targetLanguage,
+        title: body.title,
+        segmentMaxChars: body.segmentMaxChars,
+      },
     });
+    const details = result.data as {
+      manifest: { id: string; title: string };
+      manifestPath: string;
+      sourcePath: string;
+    };
     return c.json({
-      ...result,
-      projectId: result.manifest.id,
-      title: result.manifest.title,
+      ...details,
+      projectId: details.manifest.id,
+      title: details.manifest.title,
     });
   });
 
@@ -6599,24 +6651,21 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     const body: { batchSize?: number; maxTokens?: number } = await c.req.json().catch(() => ({}));
     try {
-      const currentConfig = await loadCurrentProjectConfig();
       const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
       const activatedSkills = resolveProfileSkillActivations(
         configuredSkills.skills,
         createBuiltInWorkProfileRegistry().require("translation"),
       );
-      const model = createLLMTranslationModel({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
-        maxTokens: body.maxTokens,
-        activatedSkills,
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      const result = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation" },
+        tool: createTranslationRunTool(pipeline, root, id, { defaultSkills: activatedSkills }),
+        workId: id,
+        parameters: { batchSize: body.batchSize, maxTokens: body.maxTokens },
         signal: c.req.raw.signal,
       });
-      const result = await runTranslationProject(root, id, {
-        model,
-        batchSize: body.batchSize,
-      });
-      return c.json({ ...result, skillIds: activatedSkillIds(activatedSkills) });
+      return c.json(result.data);
     } catch (error) {
       if (error instanceof ApiError) throw error;
       const message = error instanceof Error ? error.message : String(error);
@@ -6635,11 +6684,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
     }
     const body: { format?: "txt" | "md" | "epub"; outputPath?: string } = await c.req.json().catch(() => ({}));
-    const result = await writeTranslationExport(root, id, {
-      format: body.format ?? "md",
-      outputPath: body.outputPath,
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation" },
+      tool: createTranslationExportTool(root, id),
+      workId: id,
+      parameters: { format: body.format ?? "md", outputPath: body.outputPath },
     });
-    return c.json(result);
+    return c.json(result.data);
   });
 
   app.post("/api/v1/projects/:id/story-graph/delta", async (c) => {

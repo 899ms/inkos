@@ -2,7 +2,16 @@ import { Command } from "commander";
 import { access, readFile, rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
-import { deriveBookIdFromTitle, normalizePlatformOrOther, PipelineRunner, StateManager, workDirectory, type BookConfig } from "@actalk/inkos-core";
+import {
+  createSubAgentTool,
+  deriveBookIdFromTitle,
+  executeExplicitCapabilityTool,
+  normalizePlatformOrOther,
+  PipelineRunner,
+  StateManager,
+  workDirectory,
+  type BookConfig,
+} from "@actalk/inkos-core";
 import {
   formatBookBackupCreated,
   formatBookBackupListEmpty,
@@ -75,7 +84,33 @@ bookCommand
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { externalContext: brief }));
 
-      await pipeline.initBook(book);
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "sub_agent", profileId: "longform-novel" },
+        tool: createSubAgentTool(pipeline, null, root, {
+          architectCreateOnly: true,
+          actionPayload: {
+            createBook: {
+              title: book.title,
+              genre: book.genre,
+              platform: book.platform,
+              language: book.language,
+              targetChapters: book.targetChapters,
+              chapterWordCount: book.chapterWordCount,
+            },
+          },
+        }),
+        parameters: {
+          agent: "architect",
+          instruction: brief?.trim() || `Create ${book.title}`,
+          title: book.title,
+          genre: book.genre,
+          platform: book.platform,
+          language: book.language,
+          targetChapters: book.targetChapters,
+          chapterWordCount: book.chapterWordCount,
+        },
+      });
 
       if (opts.json) {
         log(JSON.stringify({

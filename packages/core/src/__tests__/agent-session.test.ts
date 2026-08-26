@@ -747,10 +747,43 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(result).toMatchObject({ profileId: "script", workId: "script-work" });
     expect(agentInstances[0].state.systemPrompt).toContain("Profile: Script (script)");
     expect(agentInstances[0].state.systemPrompt).toContain("Current work: Script Work");
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(WORKSPACE_TOOL_NAMES);
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
+      ...WORKSPACE_TOOL_NAMES.slice(0, -1),
+      "workspace__replace_work_artifact",
+      WORKSPACE_TOOL_NAMES.at(-1),
+    ]);
     const started = (await readTranscriptEvents(projectRoot, "profile-work-session"))
       .find((event) => event.type === "request_started");
     expect(started).toMatchObject({ profileId: "script", workId: "script-work" });
+  });
+
+  it("exposes run and export actions for an existing translation Work", async () => {
+    await saveWorkManifest(projectRoot, createWorkManifest({
+      id: "translation-work",
+      title: "Translation Work",
+      profileId: "translation",
+      language: "en",
+    }));
+    const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
+    await runAgentSession({
+      sessionId: "translation-work-session",
+      bookId: null,
+      profileId: "translation",
+      workId: "translation-work",
+      language: "en",
+      pipeline: { createAgentContext: () => ({}) } as any,
+      projectRoot,
+      model,
+    }, "Inspect this translation");
+
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
+      ...WORKSPACE_TOOL_NAMES.slice(0, -1),
+      "workspace__replace_work_artifact",
+      WORKSPACE_TOOL_NAMES.at(-1),
+      "translation__translation_run",
+      "translation__translation_export",
+    ]);
+    evictAgentCache("translation-work-session");
   });
 
   it("exposes intent-selected skills only on free-text turns", async () => {

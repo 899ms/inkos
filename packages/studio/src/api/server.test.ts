@@ -430,6 +430,16 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     createSingleToolCapabilityRegistry: actual.createSingleToolCapabilityRegistry,
     executeExplicitCapabilityTool: actual.executeExplicitCapabilityTool,
     createExportBookTool: actual.createExportBookTool,
+    createTranslationExportTool: actual.createTranslationExportTool,
+    createTranslationRunTool: (
+      pipeline: InstanceType<typeof MockPipelineRunner>,
+      projectRoot: string,
+      workId: string,
+      options: Record<string, unknown> = {},
+    ) => actual.createTranslationRunTool(pipeline as never, projectRoot, workId, {
+      ...options,
+      createModel: () => createLLMTranslationModelMock(),
+    }),
     resolveSessionHarnessBinding: actual.resolveSessionHarnessBinding,
     CreativeEpisodeStore: actual.CreativeEpisodeStore,
     CreativeHarnessRuntime: actual.CreativeHarnessRuntime,
@@ -6887,7 +6897,7 @@ describe("createStudioServer daemon lifecycle", () => {
     );
   });
 
-  it("spinoff/init validates input, 404s a missing parent, and otherwise runs initSpinoffBook", async () => {
+  it("spinoff/init validates input and executes the shared adaptation capability", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
 
@@ -6896,7 +6906,7 @@ describe("createStudioServer daemon lifecycle", () => {
       body: JSON.stringify({ title: "番外·林深往事" }),
     });
     expect(missing.status).toBe(400);
-    expect(initSpinoffBookMock).not.toHaveBeenCalled();
+    expect(createSpinoffBookToolMock).not.toHaveBeenCalled();
 
     loadBookConfigMock.mockRejectedValueOnce(new Error("not found"));
     const noParent = await app.request("http://localhost/api/v1/spinoff/init", {
@@ -6904,7 +6914,7 @@ describe("createStudioServer daemon lifecycle", () => {
       body: JSON.stringify({ title: "番外·林深往事", parentBookId: "ghost-book" }),
     });
     expect(noParent.status).toBe(404);
-    expect(initSpinoffBookMock).not.toHaveBeenCalled();
+    expect(createSpinoffBookToolMock).not.toHaveBeenCalled();
 
     loadBookConfigMock.mockResolvedValueOnce({ genre: "urban", language: "zh", platform: "tomato" });
     const ok = await app.request("http://localhost/api/v1/spinoff/init", {
@@ -6912,9 +6922,14 @@ describe("createStudioServer daemon lifecycle", () => {
       body: JSON.stringify({ title: "番外·林深往事", parentBookId: "memory-clinic", direction: "学生时代" }),
     });
     await expect(ok.json()).resolves.toMatchObject({ status: "creating", bookId: "番外-林深往事" });
-    await vi.waitFor(() => expect(initSpinoffBookMock).toHaveBeenCalledTimes(1));
-    expect(initSpinoffBookMock.mock.calls[0]?.[1]).toBe("memory-clinic");
-    expect(initSpinoffBookMock.mock.calls[0]?.[2]).toBe("学生时代");
+    await vi.waitFor(() => expect(createSpinoffBookToolMock).toHaveBeenCalledTimes(1));
+    const execute = createSpinoffBookToolMock.mock.results[0]?.value.execute as ReturnType<typeof vi.fn>;
+    expect(execute).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ parentBookId: "memory-clinic", direction: "学生时代" }),
+      undefined,
+      undefined,
+    );
   });
 
   it("spinoff/init rejects a duplicate target book id before running the pipeline", async () => {
@@ -6933,10 +6948,10 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: expect.stringContaining('Book "existing-book" already exists'),
     });
-    expect(initSpinoffBookMock).not.toHaveBeenCalled();
+    expect(createSpinoffBookToolMock).not.toHaveBeenCalled();
   });
 
-  it("imitation/init requires title+reference+idea and otherwise runs initImitationBook", async () => {
+  it("imitation/init validates input and executes the shared adaptation capability", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
 
@@ -6945,15 +6960,21 @@ describe("createStudioServer daemon lifecycle", () => {
       body: JSON.stringify({ title: "仿写新书", storyIdea: "一个原创故事" }),
     });
     expect(missing.status).toBe(400);
-    expect(initImitationBookMock).not.toHaveBeenCalled();
+    expect(createImitationBookToolMock).not.toHaveBeenCalled();
 
     const ok = await app.request("http://localhost/api/v1/imitation/init", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "仿写新书", referenceText: "参考文本片段……", storyIdea: "一个原创故事", sourceName: "范本" }),
     });
     await expect(ok.json()).resolves.toMatchObject({ status: "creating", bookId: "仿写新书" });
-    await vi.waitFor(() => expect(initImitationBookMock).toHaveBeenCalledTimes(1));
-    expect(initImitationBookMock.mock.calls[0]?.[2]).toBe("一个原创故事");
+    await vi.waitFor(() => expect(createImitationBookToolMock).toHaveBeenCalledTimes(1));
+    const execute = createImitationBookToolMock.mock.results[0]?.value.execute as ReturnType<typeof vi.fn>;
+    expect(execute).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ storyIdea: "一个原创故事", sourceName: "范本" }),
+      undefined,
+      undefined,
+    );
   });
 
   it("uploads a translation source, creates a translation project, lists it, and exports markdown", async () => {

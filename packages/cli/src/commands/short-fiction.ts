@@ -13,13 +13,11 @@ import {
   SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
   activatedSkillIds,
   createBuiltInWorkProfileRegistry,
-  createLLMClient,
+  createShortFictionRunTool,
+  executeExplicitCapabilityTool,
   loadAvailableAgentSkills,
+  PipelineRunner,
   resolveProfileSkillActivations,
-  runShortFictionProduction,
-  type LLMConfig,
-  type Logger,
-  type OnStreamProgress,
   type ShortFictionReference,
   type ShortFictionLanguage,
 } from "@actalk/inkos-core";
@@ -82,61 +80,57 @@ shortCommand
         createBuiltInWorkProfileRegistry().require("short-fiction"),
       );
 
-      const plannerRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.planner,
-        quiet: Boolean(opts.json),
-      });
-      const outlineReviewRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.outlineReview,
-        quiet: Boolean(opts.json),
-      });
-      const writerRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.writer,
-        quiet: Boolean(opts.json),
-      });
-      const draftReviewRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.draftReview,
-        quiet: Boolean(opts.json),
-      });
-      const reviseRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.revise,
-        quiet: Boolean(opts.json),
-      });
-      const packageRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.package,
-        quiet: Boolean(opts.json),
-      });
-
-      const result = await runShortFictionProduction({
+      const config = await loadConfig({ projectRoot: root });
+      if (opts.llmBaseUrl) config.llm.baseUrl = opts.llmBaseUrl;
+      if (opts.model) config.llm.model = opts.model;
+      const modelOverrides = { ...(config.modelOverrides ?? {}) };
+      const stageModels = {
+        "short-outline": models.planner,
+        "short-outline-review": models.outlineReview,
+        "short-writer": models.writer,
+        "short-draft-review": models.draftReview,
+        "short-revise": models.revise,
+        "short-package": models.package,
+      };
+      for (const [stage, model] of Object.entries(stageModels)) {
+        if (model) modelOverrides[stage] = model;
+      }
+      config.modelOverrides = modelOverrides;
+      const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { quiet: Boolean(opts.json) }));
+      const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        direction: opts.direction,
-        runtimes: {
-          planner: { ...plannerRuntime, projectRoot: root, activatedSkills },
-          outlineReview: { ...outlineReviewRuntime, projectRoot: root, activatedSkills },
-          writer: { ...writerRuntime, projectRoot: root, activatedSkills },
-          draftReview: { ...draftReviewRuntime, projectRoot: root, activatedSkills },
-          revise: { ...reviseRuntime, projectRoot: root, activatedSkills },
-          package: { ...packageRuntime, projectRoot: root, activatedSkills },
+        binding: { capabilityId: "short-fiction", actionId: "short_fiction_run", profileId: "short-fiction" },
+        tool: createShortFictionRunTool(pipeline, root, { language, defaultSkills: activatedSkills }),
+        parameters: {
+          direction: opts.direction,
+          reference: reference?.text,
+          storyId: opts.storyId,
+          chapters: chapterCount,
+          charsPerChapter,
+          language,
+          cover: opts.cover,
+          coverBaseUrl: opts.coverBaseUrl,
+          coverEndpoint: opts.coverEndpoint,
+          coverModel: opts.coverModel,
+          coverSize: opts.coverSize,
+          coverApiKeyEnv: opts.coverApiKeyEnv,
         },
-        reference,
-        storyId: opts.storyId,
-        chapterCount,
-        charsPerChapter,
-        language,
-        cover: opts.cover,
-        coverBaseUrl: opts.coverBaseUrl,
-        coverEndpoint: opts.coverEndpoint,
-        coverModel: opts.coverModel,
-        coverSize: opts.coverSize,
-        coverApiKeyEnv: opts.coverApiKeyEnv,
-        onProgress: opts.json ? undefined : (message) => log(message),
+        onUpdate: opts.json ? undefined : (update) => {
+          const text = (update as { content?: Array<{ type?: string; text?: string }> }).content
+            ?.filter((item) => item.type === "text")
+            .map((item) => item.text ?? "")
+            .join("\n")
+            .trim();
+          if (text) log(text);
+        },
       });
+      const result = action.data as {
+        storyId: string;
+        finalMarkdownPath: string;
+        salesPackagePath: string;
+        coverImagePath?: string;
+        coverError?: string;
+      };
 
       const payload = {
         ...result,
@@ -186,13 +180,6 @@ function parseShortFictionLanguage(value: string): ShortFictionLanguage {
   throw new Error("lang must be zh or en.");
 }
 
-interface ShortRuntime {
-  readonly client: ReturnType<typeof createLLMClient>;
-  readonly model: string;
-  readonly logger?: Logger;
-  readonly onStreamProgress?: OnStreamProgress;
-}
-
 interface ShortRunModels {
   readonly planner?: string;
   readonly outlineReview?: string;
@@ -210,57 +197,6 @@ function resolveShortRunModels(options: ShortRunOptions): ShortRunModels {
     draftReview: options.draftReviewModel || options.model,
     revise: options.reviseModel || options.model,
     package: options.packageModel || options.model,
-  };
-}
-
-async function createShortRuntime(
-  root: string,
-  options: {
-    readonly llmBaseUrl?: string;
-    readonly model?: string;
-    readonly quiet?: boolean;
-  },
-): Promise<ShortRuntime> {
-  try {
-    const config = await loadConfig({ projectRoot: root });
-    if (options.llmBaseUrl) config.llm.baseUrl = options.llmBaseUrl;
-    if (options.model) config.llm.model = options.model;
-    const pipelineConfig = buildPipelineConfig(config, root, { quiet: options.quiet });
-    return {
-      client: pipelineConfig.client,
-      model: pipelineConfig.model,
-      logger: pipelineConfig.logger,
-      onStreamProgress: pipelineConfig.onStreamProgress,
-    };
-  } catch (e) {
-    if (!String(e).includes("inkos.json not found")) throw e;
-    const llmConfig = buildEnvLLMConfig(options);
-    return {
-      client: createLLMClient(llmConfig),
-      model: llmConfig.model,
-    };
-  }
-}
-
-function buildEnvLLMConfig(options: {
-  readonly llmBaseUrl?: string;
-  readonly model?: string;
-}): LLMConfig {
-  const baseUrl = options.llmBaseUrl ?? process.env.INKOS_LLM_BASE_URL;
-  const model = options.model ?? process.env.INKOS_LLM_MODEL;
-  if (!baseUrl) throw new Error("LLM base URL is required. Set INKOS_LLM_BASE_URL or pass --llm-base-url.");
-  if (!model) throw new Error("LLM model is required. Set INKOS_LLM_MODEL or pass --model.");
-  return {
-    provider: "openai",
-    service: process.env.INKOS_LLM_SERVICE ?? "custom",
-    configSource: "env",
-    baseUrl,
-    apiKey: process.env.INKOS_LLM_API_KEY ?? "",
-    model,
-    temperature: parseEnvNumber(process.env.INKOS_LLM_TEMPERATURE, 0.1),
-    thinkingBudget: parseEnvInteger(process.env.INKOS_LLM_THINKING_BUDGET, 0),
-    apiFormat: process.env.INKOS_LLM_API_FORMAT === "responses" ? "responses" : "chat",
-    stream: process.env.INKOS_LLM_STREAM === "false" ? false : true,
   };
 }
 
@@ -284,18 +220,6 @@ function parseBoundedInteger(
     throw new Error(`${name} must be an integer between ${min} and ${max}.`);
   }
   return parsed;
-}
-
-function parseEnvNumber(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function parseEnvInteger(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function formatCoverStatus(coverImagePath?: string, coverError?: string): string {

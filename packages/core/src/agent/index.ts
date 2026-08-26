@@ -7,7 +7,6 @@ export {
   createScriptCreationTool,
   createStoryboardCreationTool,
   createInteractiveFilmCreationTool,
-  createTranslationCreateTool,
   createFanficBookTool,
   createContinuationImportTool,
   createSpinoffBookTool,
@@ -23,6 +22,11 @@ export {
   createGrepTool,
   createLsTool,
 } from "./agent-tools.js";
+export {
+  createTranslationCreateTool,
+  createTranslationRunTool,
+  createTranslationExportTool,
+} from "../harness/tools/translation.js";
 export {
   createWriteTruthFileTool,
   createRenameEntityTool,

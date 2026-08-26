@@ -1,15 +1,15 @@
 import { Command } from "commander";
 import {
-  activatedSkillIds,
+  createTranslationCreateTool,
+  createTranslationRunTool,
+  createTranslationExportTool,
   createBuiltInWorkProfileRegistry,
-  createLLMTranslationModel,
-  createTranslationProjectFromFile,
+  executeExplicitCapabilityTool,
   loadAvailableAgentSkills,
+  PipelineRunner,
   resolveProfileSkillActivations,
-  runTranslationProject,
-  writeTranslationExport,
 } from "@actalk/inkos-core";
-import { createClient, findProjectRoot, loadConfig, log, logError } from "../utils.js";
+import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError } from "../utils.js";
 
 export const translateCommand = new Command("translate")
   .description("Translate and localize novels/scripts across languages");
@@ -26,13 +26,22 @@ translateCommand
   .action(async (opts) => {
     try {
       const root = findProjectRoot();
-      const result = await createTranslationProjectFromFile(root, {
-        filePath: opts.from,
-        sourceLanguage: opts.source,
-        targetLanguage: opts.target,
-        title: opts.title,
-        segmentMaxChars: opts.segmentMaxChars,
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation" },
+        tool: createTranslationCreateTool(root),
+        parameters: {
+          filePath: opts.from,
+          sourceLanguage: opts.source,
+          targetLanguage: opts.target,
+          title: opts.title,
+          segmentMaxChars: opts.segmentMaxChars,
+        },
       });
+      const result = action.data as {
+        manifest: { id: string; title: string; chapters: ReadonlyArray<unknown> };
+        manifestPath: string;
+      };
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
@@ -62,20 +71,24 @@ translateCommand
         configuredSkills.skills,
         createBuiltInWorkProfileRegistry().require("translation"),
       );
-      const model = createLLMTranslationModel({
-        client: createClient(config),
-        model: config.llm.model,
-        maxTokens: opts.maxTokens,
-        activatedSkills,
+      const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { quiet: Boolean(opts.json) }));
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation" },
+        tool: createTranslationRunTool(pipeline, root, projectId, { defaultSkills: activatedSkills }),
+        workId: projectId,
+        parameters: { batchSize: opts.batchSize, maxTokens: opts.maxTokens },
       });
-      const result = await runTranslationProject(root, projectId, {
-        model,
-        batchSize: opts.batchSize,
-      });
+      const result = action.data as {
+        translatedSegments: number;
+        reviewedChapters: number;
+        reportPath: string;
+        skillIds: ReadonlyArray<string>;
+      };
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
-        log(`Skills: ${activatedSkillIds(activatedSkills).join(", ")}`);
+        log(`Skills: ${result.skillIds.join(", ")}`);
         log(`Translated segments: ${result.translatedSegments}`);
         log(`Reviewed chapters: ${result.reviewedChapters}`);
         log(`Report: ${result.reportPath}`);
@@ -95,10 +108,14 @@ translateCommand
   .action(async (projectId: string, opts) => {
     try {
       const root = findProjectRoot();
-      const result = await writeTranslationExport(root, projectId, {
-        format: opts.format,
-        outputPath: opts.output,
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation" },
+        tool: createTranslationExportTool(root, projectId),
+        workId: projectId,
+        parameters: { format: opts.format, outputPath: opts.output },
       });
+      const result = action.data as { chaptersExported: number; outputPath: string };
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {

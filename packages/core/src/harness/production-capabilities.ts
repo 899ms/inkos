@@ -29,7 +29,6 @@ import {
   createSpinoffBookTool,
   createStoryboardCreationTool,
   createSubAgentTool,
-  createTranslationCreateTool,
   createImitationBookTool,
 } from "../agent/agent-tools.js";
 import {
@@ -38,6 +37,12 @@ import {
   createReplaceChapterTextTool,
   createWriteTruthFileTool,
 } from "./tools/longform-edits.js";
+import {
+  createTranslationCreateTool,
+  createTranslationExportTool,
+  createTranslationRunTool,
+} from "./tools/translation.js";
+import { createReplaceWorkArtifactTool } from "./tools/work-artifacts.js";
 import { createFilmAuthoringTools, filmLLMDepsFromClient } from "../agent/film-authoring-tools.js";
 import {
   createNarrativeForecastCreateTool,
@@ -175,6 +180,9 @@ export function createProductionCapabilityRegistry(
     createIngestMaterialTool(environment.projectRoot),
     createRetrieveMaterialTool(environment.projectRoot),
   ];
+  if (environment.work && ["short-fiction", "script", "storyboard", "translation", "visual-asset"].includes(environment.work.profileId)) {
+    workspaceTools.push(createReplaceWorkArtifactTool(environment.projectRoot, environment.work.id));
+  }
   if (environment.intentSkillTool) workspaceTools.push(environment.intentSkillTool);
   registerToolCapability(registry, "workspace", "Creative workspace", workspaceTools);
 
@@ -296,9 +304,16 @@ export function createProductionCapabilityRegistry(
       )];
   registerToolCapability(registry, "interactive-world", "Interactive world", interactiveWorldTools);
 
-  registerToolCapability(registry, "translation", "Translation", [
-    createTranslationCreateTool(environment.projectRoot, { actionPayload: environment.actionPayload }),
-  ]);
+  const translationTools = environment.work?.profileId === "translation"
+    ? [
+        createTranslationRunTool(environment.pipeline, environment.projectRoot, environment.work.id, {
+          defaultSkills: environment.profileSkills?.("translation"),
+          activeSkills: environment.activeSkills,
+        }),
+        createTranslationExportTool(environment.projectRoot, environment.work.id),
+      ]
+    : [createTranslationCreateTool(environment.projectRoot, { actionPayload: environment.actionPayload })];
+  registerToolCapability(registry, "translation", "Translation", translationTools);
   registerToolCapability(registry, "adaptation", "Adaptation", [
     createFanficBookTool(environment.pipeline, environment.projectRoot, {
       defaultSkills: environment.profileSkills?.("longform-novel"),

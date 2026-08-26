@@ -20,7 +20,6 @@ import {
 } from "../models/book.js";
 import { generateShortFictionCover, runShortFictionProduction } from "../pipeline/short-fiction-runner.js";
 import { runInteractiveFilmCreation, runScriptCreation, runStoryboardCreation } from "../pipeline/script-storyboard-runner.js";
-import { createTranslationProjectFromFile } from "../translation/index.js";
 import { runResearchReport } from "../agents/researcher.js";
 import { ingestMaterial } from "../materials/ingest.js";
 import { retrieveMaterials } from "../materials/retrieve.js";
@@ -2138,65 +2137,7 @@ function summarizeCoverGenerationError(error: string | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Translation tool
-// ---------------------------------------------------------------------------
-
-const TranslationCreateParams = Type.Object({
-  filePath: Type.String({
-    description: "Project-relative EPUB/PDF/TXT/Markdown source file path to translate.",
-  }),
-  sourceLanguage: Type.String({
-    description: "Source language as a human-readable name, e.g. Auto detect, Japanese, English, Chinese (Simplified), 繁体中文（台湾）. Do not require ISO abbreviations.",
-  }),
-  targetLanguage: Type.String({
-    description: "Target language as a human-readable name, e.g. Chinese (Simplified), English, Japanese, Korean, Brazilian Portuguese. Do not require ISO abbreviations.",
-  }),
-  title: Type.Optional(Type.String({
-    description: "Optional translation project title.",
-  })),
-  segmentMaxChars: Type.Optional(Type.Number({
-    description: "Optional max chars per segment before splitting long paragraphs.",
-  })),
-});
-
-type TranslationCreateParamsType = Static<typeof TranslationCreateParams>;
-
-export function createTranslationCreateTool(
-  projectRoot: string,
-  options: { readonly actionPayload?: ActionPayload } = {},
-): AgentTool<typeof TranslationCreateParams> {
-  return {
-    name: "translation_create",
-    description:
-      "Create an InkOS translation project from an EPUB/PDF/TXT/Markdown file. " +
-      "This only ingests and segments the source; running the actual translation is a separate long task.",
-    label: "Translation",
-    parameters: TranslationCreateParams,
-    async execute(_toolCallId: string, params: TranslationCreateParamsType): Promise<AgentToolResult<unknown>> {
-      const payload = options.actionPayload?.translationCreate;
-      const result = await createTranslationProjectFromFile(projectRoot, {
-        filePath: payload?.filePath ?? params.filePath,
-        sourceLanguage: payload?.sourceLanguage ?? params.sourceLanguage,
-        targetLanguage: payload?.targetLanguage ?? params.targetLanguage,
-        title: payload?.title ?? params.title,
-        segmentMaxChars: payload?.segmentMaxChars ?? params.segmentMaxChars,
-      });
-      return textResult(
-        [
-          `Translation project "${result.manifest.title}" created.`,
-          `ID: ${result.manifest.id}`,
-          `Source: ${result.manifest.source.kind} ${result.manifest.sourceLanguage} -> ${result.manifest.targetLanguage}`,
-          `Chapters: ${result.manifest.chapters.length}`,
-          `Manifest: ${result.manifestPath}`,
-        ].join("\n"),
-        { kind: "translation_project_created", ...result },
-      );
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// 4. Script and Storyboard tools
+// 3. Script and Storyboard tools
 // ---------------------------------------------------------------------------
 
 const ScriptCreateParams = Type.Object({
