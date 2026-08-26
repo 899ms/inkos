@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import {
   HARNESS_VERSION,
-  HarnessIdSchema,
+  WorkResourceIdSchema,
   WorkManifestSchema,
   type WorkManifest,
 } from "./contracts.js";
@@ -12,7 +12,7 @@ export const WORKS_DIRECTORY = "works";
 export const WORK_MANIFEST_FILE = "work.json";
 
 export function workDirectory(projectRoot: string, workId: string): string {
-  return join(projectRoot, WORKS_DIRECTORY, HarnessIdSchema.parse(workId));
+  return join(projectRoot, WORKS_DIRECTORY, WorkResourceIdSchema.parse(workId));
 }
 
 export function workManifestPath(projectRoot: string, workId: string): string {
@@ -59,4 +59,3 @@ export async function saveWorkManifest(projectRoot: string, manifest: WorkManife
     }],
   });
 }
-

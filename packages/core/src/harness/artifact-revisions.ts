@@ -5,6 +5,7 @@ import {
   ArtifactManifestSchema,
   ArtifactRevisionSchema,
   HarnessIdSchema,
+  WorkResourceIdSchema,
   WorkManifestSchema,
   type ArtifactManifest,
   type ArtifactRevision,
@@ -26,7 +27,7 @@ export async function stageArtifactRevision(input: {
   readonly promote?: boolean;
 }): Promise<{ readonly manifest: WorkManifest; readonly revision: ArtifactRevision }> {
   const manifest = WorkManifestSchema.parse(input.manifest);
-  const artifactId = HarnessIdSchema.parse(input.artifactId);
+  const artifactId = WorkResourceIdSchema.parse(input.artifactId);
   const artifactKind = HarnessIdSchema.parse(input.artifactKind);
   const revisionId = HarnessIdSchema.parse(input.revisionId);
   const extension = extname(input.fileName);
@@ -82,7 +83,7 @@ export async function promoteArtifactRevision(input: {
   readonly updatedAt?: string;
 }): Promise<WorkManifest> {
   const manifest = WorkManifestSchema.parse(input.manifest);
-  const artifactId = HarnessIdSchema.parse(input.artifactId);
+  const artifactId = WorkResourceIdSchema.parse(input.artifactId);
   const revisionId = HarnessIdSchema.parse(input.revisionId);
   const artifact = manifest.artifacts.find((candidate) => candidate.id === artifactId);
   if (!artifact) throw new Error(`Unknown artifact: ${artifactId}`);
@@ -125,4 +126,3 @@ function upsertArtifact(
     ? artifacts.map((artifact) => artifact.id === next.id ? next : artifact)
     : [...artifacts, next];
 }
-

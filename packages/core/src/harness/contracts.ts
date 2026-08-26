@@ -7,6 +7,15 @@ export const HarnessIdSchema = z.string()
   .max(128)
   .regex(/^[a-z0-9][a-z0-9._-]*$/i, "ID must be filesystem-safe");
 
+const UNSAFE_RESOURCE_ID_RE = /[\u0000-\u001f\u007f/\\:*?"'`{}<>|]/u;
+
+export const WorkResourceIdSchema = z.string()
+  .min(1)
+  .max(120)
+  .refine((value) => value.trim() === value, "Resource ID must not have surrounding whitespace")
+  .refine((value) => value !== "." && value !== ".." && !value.includes(".."), "Resource ID cannot traverse directories")
+  .refine((value) => !UNSAFE_RESOURCE_ID_RE.test(value), "Resource ID contains unsafe path characters");
+
 export const RelativeArtifactPathSchema = z.string()
   .min(1)
   .refine((value) => (
@@ -18,8 +27,8 @@ export const RelativeArtifactPathSchema = z.string()
 
 export const WorkLineageSchema = z.object({
   relation: HarnessIdSchema,
-  sourceWorkId: HarnessIdSchema,
-  sourceArtifactId: HarnessIdSchema.optional(),
+  sourceWorkId: WorkResourceIdSchema,
+  sourceArtifactId: WorkResourceIdSchema.optional(),
 }).strict();
 export type WorkLineage = z.infer<typeof WorkLineageSchema>;
 
@@ -40,7 +49,7 @@ export const ArtifactRevisionSchema = z.object({
 export type ArtifactRevision = z.infer<typeof ArtifactRevisionSchema>;
 
 export const ArtifactManifestSchema = z.object({
-  id: HarnessIdSchema,
+  id: WorkResourceIdSchema,
   kind: HarnessIdSchema,
   currentRevisionId: HarnessIdSchema.nullable().default(null),
   revisions: z.array(ArtifactRevisionSchema).default([]),
@@ -59,7 +68,7 @@ export type ArtifactManifest = z.infer<typeof ArtifactManifestSchema>;
 
 export const WorkManifestSchema = z.object({
   version: z.literal(HARNESS_VERSION),
-  id: HarnessIdSchema,
+  id: WorkResourceIdSchema,
   title: z.string().min(1),
   profileId: HarnessIdSchema,
   language: z.string().min(1),
@@ -103,8 +112,8 @@ export const ActionRiskSchema = z.enum(["read", "recoverable-write", "destructiv
 export type ActionRisk = z.infer<typeof ActionRiskSchema>;
 
 export const ActionArtifactRefSchema = z.object({
-  workId: HarnessIdSchema,
-  artifactId: HarnessIdSchema,
+  workId: WorkResourceIdSchema,
+  artifactId: WorkResourceIdSchema,
   revisionId: HarnessIdSchema.optional(),
   path: RelativeArtifactPathSchema.optional(),
 }).strict();
@@ -159,4 +168,3 @@ export const CreativeEpisodeEventSchema = z.object({
   payload: z.record(z.string(), z.unknown()).default({}),
 }).strict();
 export type CreativeEpisodeEvent = z.infer<typeof CreativeEpisodeEventSchema>;
-

@@ -53,6 +53,21 @@ describe("v2 harness contracts", () => {
     expect(JSON.parse(await readFile(workManifestPath(root, "night-train"), "utf-8"))).toEqual(manifest);
   });
 
+  it("supports safe Unicode work ids without allowing path traversal", () => {
+    expect(createWorkManifest({
+      id: "夜班列车",
+      title: "夜班列车",
+      profileId: "longform-novel",
+      language: "zh",
+    }).id).toBe("夜班列车");
+    expect(() => createWorkManifest({
+      id: "../夜班列车",
+      title: "Unsafe",
+      profileId: "longform-novel",
+      language: "zh",
+    })).toThrow(/Resource ID/);
+  });
+
   it("binds open profiles to registered capabilities without session-kind branching", async () => {
     const registry = new CapabilityRegistry();
     const capability: Capability = {

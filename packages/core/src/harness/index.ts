@@ -1,6 +1,7 @@
 export {
   HARNESS_VERSION,
   HarnessIdSchema,
+  WorkResourceIdSchema,
   RelativeArtifactPathSchema,
   WorkLineageSchema,
   ArtifactRevisionStatusSchema,
@@ -53,3 +54,9 @@ export {
   stageArtifactRevision,
   promoteArtifactRevision,
 } from "./artifact-revisions.js";
+export {
+  scanLegacyWorks,
+  migrateLegacyProject,
+  type LegacyMigrationCandidate,
+  type LegacyMigrationReport,
+} from "./legacy-migration.js";
