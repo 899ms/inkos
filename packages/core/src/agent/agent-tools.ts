@@ -12,6 +12,7 @@ import { deleteLatestChapter } from "../state/chapter-delete.js";
 import { writeExportArtifact } from "../interaction/export-artifact.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../utils/book-id.js";
 import { safeChildPath } from "../utils/path-safety.js";
+import { toPosixPath } from "../utils/posix-path.js";
 import {
   normalizePlatformId,
   normalizePlatformOrOther,
@@ -3553,7 +3554,7 @@ export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
 
   return {
     name: "ls",
-    description: "List files in a book directory. Optionally specify a subdirectory like 'story' or 'chapters'.",
+    description: "List files in a Work source directory. Returns canonical project-relative paths that can be passed directly to workspace__read.",
     label: "List Files",
     parameters: LsParams,
     async execute(
@@ -3572,9 +3573,9 @@ export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
           try {
             const entryStat = await stat(fullPath);
             const suffix = entryStat.isDirectory() ? "/" : ` (${entryStat.size} bytes)`;
-            details.push(`${entry}${suffix}`);
+            details.push(`${toPosixPath(join("works", params.bookId, "source", params.subdir ?? "", entry))}${suffix}`);
           } catch {
-            details.push(entry);
+            details.push(toPosixPath(join("works", params.bookId, "source", params.subdir ?? "", entry)));
           }
         }
 

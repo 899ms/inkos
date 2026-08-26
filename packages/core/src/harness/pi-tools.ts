@@ -85,8 +85,7 @@ export function capabilityActionId(toolName: string): string {
 }
 
 function renderActionResultForAgent(result: ActionResult): string {
-  const lines = [result.summary];
-  if (result.content && result.content !== result.summary) lines.push(result.content);
+  const lines = [result.content?.trim() || result.summary];
   if (result.artifacts.length > 0) {
     lines.push("Artifacts:", ...result.artifacts.map((artifact) => (
       `- ${artifact.workId}/${artifact.artifactId}${artifact.revisionId ? `@${artifact.revisionId}` : ""}`

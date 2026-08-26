@@ -252,6 +252,7 @@ describe("v2 harness contracts", () => {
           return ActionResultSchema.parse({
             status: "success",
             summary: `Inspected ${input.topic}`,
+            content: `Inspected ${input.topic}\nSecond line`,
             artifacts: [],
             observations: [],
             nextActions: [],
@@ -286,7 +287,7 @@ describe("v2 harness contracts", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["workspace__inspect"]);
     await expect(tools[0]!.execute("call-1", { topic: "outline" }))
       .resolves.toMatchObject({
-        content: [{ type: "text", text: "Inspected outline" }],
+        content: [{ type: "text", text: "Inspected outline\nSecond line" }],
         details: { kind: "inspection", topic: "outline" },
       });
   });

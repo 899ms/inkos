@@ -1500,7 +1500,7 @@ describe("agent deterministic writing tools", () => {
 
     expect(result.content[0]).toEqual({
       type: "text",
-      text: expect.stringContaining("0001_Arrival.md"),
+      text: expect.stringContaining("works/harbor/source/chapters/0001_Arrival.md"),
     });
   });
 
