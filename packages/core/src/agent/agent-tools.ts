@@ -229,9 +229,9 @@ const ProposeActionParams = Type.Object({
   ], {
     description: "The production or assisted Studio workflow the user appears to want, but which needs explicit confirmation from general chat.",
   }),
-  instruction: Type.String({
+  instruction: Type.Optional(Type.String({
     description: "The exact production instruction to run after the user confirms. It must be self-contained: include title, story direction, active target, output directory, cover visual direction, or any referenced context that would otherwise be lost when switching sessions.",
-  }),
+  })),
   title: Type.Optional(Type.String({
     description: "Short user-facing title for the confirmation card.",
   })),
@@ -429,11 +429,42 @@ const ProposeActionParams = Type.Object({
 });
 
 type ProposeActionParamsType = Static<typeof ProposeActionParams>;
+export type ProposedActionName = ProposeActionParamsType["action"];
 type ProposeActionToolOptions = {
   readonly sameSession?: boolean;
+  readonly proposalAction?: ProposedActionName;
   readonly requestedSkillIds?: () => ReadonlyArray<string>;
   readonly attachmentPaths?: () => ReadonlyArray<string>;
 };
+
+const PROPOSAL_PAYLOAD_KEYS: Readonly<Partial<Record<ProposeActionParamsType["action"], keyof ProposeActionParamsType>>> = {
+  create_book: "createBook",
+  short_run: "shortRun",
+  play_start: "playStart",
+  generate_cover: "generateCover",
+  script_create: "scriptCreate",
+  storyboard_create: "storyboardCreate",
+  interactive_film_create: "interactiveFilmCreate",
+  translation_create: "translationCreate",
+  fanfic_init: "fanficCreate",
+  continuation_import: "continuationImport",
+  spinoff_create: "spinoffCreate",
+  style_imitation: "imitationCreate",
+};
+
+function proposalParameters(action: ProposeActionParamsType["action"] | undefined) {
+  const payloadKey = action ? PROPOSAL_PAYLOAD_KEYS[action] : undefined;
+  if (!action || !payloadKey) return ProposeActionParams;
+  const properties = (ProposeActionParams as any).properties as Record<string, unknown>;
+  const requiredPayload = Type.Required(Type.Object({ [payloadKey]: properties[payloadKey] } as any)) as any;
+  return Type.Object({
+    action: Type.Literal(action),
+    instruction: properties.instruction,
+    title: properties.title,
+    summary: properties.summary,
+    [payloadKey]: requiredPayload.properties[payloadKey],
+  } as any, { additionalProperties: false });
+}
 
 function proposedActionSessionKind(action: ProposeActionParamsType["action"]): "book-create" | "short" | "play" | "script" | "storyboard" | "interactive-film" | "interactive-film-authoring" | "chat" {
   if (action === "create_book") return "book-create";
@@ -715,19 +746,21 @@ function assertExecutableProposedAction(params: ProposeActionParamsType, payload
 export function createProposeActionTool(
   language: "zh" | "en" = "zh",
   options: ProposeActionToolOptions = {},
-): AgentTool<typeof ProposeActionParams> {
+): AgentTool<any, unknown> {
+  const parameters = proposalParameters(options.proposalAction);
   return {
     name: "propose_action",
     description:
       "Ask the user to confirm a production action from general chat. " +
       "Use this before creating books, generating shorts/covers, or starting play worlds when the user has not clicked a confirmation.",
     label: "Confirm Action",
-    parameters: ProposeActionParams,
+    parameters,
     async execute(_toolCallId: string, params: ProposeActionParamsType): Promise<AgentToolResult<unknown>> {
       const targetSessionKind = proposedActionSessionKind(params.action);
       const isZh = language === "zh";
       const title = params.title?.trim() || proposedActionFallbackTitle(params.action, isZh);
       const summary = params.summary?.trim() || proposedActionFallbackSummary(params.action, isZh);
+      const instruction = params.instruction?.trim() || summary || title;
       const proposedPayload = validateProposedActionPayload(withSingleAttachmentFallback(
         params,
         proposedActionPayload(params, language),
@@ -744,7 +777,7 @@ export function createProposeActionTool(
           title,
           summary,
           "",
-          `Instruction: ${params.instruction}`,
+          `Instruction: ${instruction}`,
         ].join("\n"),
         {
           kind: "proposed_action",
@@ -753,7 +786,7 @@ export function createProposeActionTool(
           sameSession: options.sameSession === true,
           title,
           summary,
-          instruction: params.instruction,
+          instruction,
           ...(requestedSkills.length > 0 ? { requestedSkills } : {}),
           ...(actionPayload ? { actionPayload } : {}),
         },

@@ -960,6 +960,7 @@ async function runAgentSessionUnlocked(
       pipeline,
       projectRoot,
       sessionId,
+      profileId,
       work,
       language,
       actionPayload,

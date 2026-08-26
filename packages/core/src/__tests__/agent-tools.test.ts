@@ -364,6 +364,38 @@ describe("agent deterministic writing tools", () => {
     });
   });
 
+  it("narrows a creation profile proposal to one required action payload", () => {
+    const tool = createProposeActionTool("zh", { proposalAction: "script_create" });
+    const schema = tool.parameters as any;
+
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "action",
+      "instruction",
+      "scriptCreate",
+      "summary",
+      "title",
+    ]);
+    expect(schema.properties.action).toMatchObject({ const: "script_create" });
+    expect(schema.required).toContain("scriptCreate");
+    expect(schema.required).not.toContain("instruction");
+    expect(schema.additionalProperties).toBe(false);
+  });
+
+  it("derives a confirmed instruction from the proposal summary when omitted", async () => {
+    const tool = createProposeActionTool("zh", { proposalAction: "script_create" });
+    const result = await tool.execute("proposal-script", {
+      action: "script_create",
+      summary: "创建三场现实悬疑短剧。",
+      scriptCreate: { title: "末班车失物处" },
+    });
+
+    expect(result.details).toMatchObject({
+      kind: "proposed_action",
+      instruction: "创建三场现实悬疑短剧。",
+      actionPayload: { scriptCreate: { title: "末班车失物处" } },
+    });
+  });
+
   it("carries skills activated by the agent into the confirmed action", async () => {
     const activatedSkillIds = ["writer-distillation"];
     const tool = createProposeActionTool("zh", {

@@ -30,6 +30,7 @@ import {
   createStoryboardCreationTool,
   createSubAgentTool,
   createImitationBookTool,
+  type ProposedActionName,
 } from "../agent/agent-tools.js";
 import {
   createPatchChapterTextTool,
@@ -70,6 +71,7 @@ export interface ProductionCapabilityEnvironment {
   readonly pipeline: PipelineRunner;
   readonly projectRoot: string;
   readonly sessionId: string;
+  readonly profileId: string;
   readonly work: WorkManifest | null;
   readonly language: string;
   readonly actionPayload?: ActionPayload;
@@ -170,6 +172,7 @@ export function createProductionCapabilityRegistry(
   const lang = environment.language === "en" ? "en" : "zh";
   const proposalTool = createProposeActionTool(lang, {
     sameSession: environment.sameSessionProposal,
+    proposalAction: environment.work ? undefined : proposalActionForProfile(environment.profileId),
     requestedSkillIds: environment.requestedSkillIds,
     attachmentPaths: environment.attachmentPaths,
   });
@@ -338,6 +341,18 @@ export function createProductionCapabilityRegistry(
     createGenerateCoverTool(environment.projectRoot, { actionPayload: environment.actionPayload }),
   ]);
   return registry;
+}
+
+function proposalActionForProfile(profileId: string): ProposedActionName | undefined {
+  if (profileId === "longform-novel") return "create_book";
+  if (profileId === "short-fiction") return "short_run";
+  if (profileId === "interactive-world") return "play_start";
+  if (profileId === "script") return "script_create";
+  if (profileId === "storyboard") return "storyboard_create";
+  if (profileId === "interactive-film") return "interactive_film_create";
+  if (profileId === "translation") return "translation_create";
+  if (profileId === "visual-asset") return "generate_cover";
+  return undefined;
 }
 
 function registerToolCapability(
