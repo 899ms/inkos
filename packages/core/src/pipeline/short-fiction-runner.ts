@@ -19,8 +19,9 @@ import {
   ShortFictionOutlineReviserAgent,
   ShortFictionPackagingAgent,
   ShortFictionWriterAgent,
-  findEmptyShortFictionChapters,
+  findIncompleteShortFictionChapters,
   formatShortFictionChapterHeading,
+  minimumShortFictionChapterLength,
   renderShortFictionDraftMarkdown,
   validateShortFictionDraftForFinal,
   type ShortFictionBatchDraft,
@@ -90,6 +91,7 @@ export interface ShortFictionRunResult {
   readonly coverPromptPath: string;
   readonly coverImagePath?: string;
   readonly coverError?: string;
+  readonly packageError?: string;
 }
 
 export interface ShortFictionCoverOptions {
@@ -271,6 +273,7 @@ async function produceShort(
 
   let finalDraft: ShortFictionBatchDraft;
   let revisionWarning: string | undefined;
+  let packageWarning: string | undefined;
   let salesPackage: ShortFictionSalesPackage;
   try {
     options.onProgress?.("Writing full short fiction draft...");
@@ -282,7 +285,8 @@ async function produceShort(
       charsPerChapter,
       language,
     });
-    let missingFromDraft = findEmptyShortFictionChapters(draftV1);
+    const minimumChapterLength = minimumShortFictionChapterLength(charsPerChapter);
+    let missingFromDraft = findIncompleteShortFictionChapters(draftV1, { minimumChapterLength });
     if (missingFromDraft.length > 0) {
       await writeDraftArtifacts(root, baseDir, "v001-partial", draftV1, language);
       for (let attempt = 1; missingFromDraft.length > 0 && attempt <= SHORT_FICTION_DRAFT_COMPLETION_ATTEMPTS; attempt += 1) {
@@ -295,13 +299,13 @@ async function produceShort(
           language,
           draft: draftV1,
         });
-        missingFromDraft = findEmptyShortFictionChapters(draftV1);
+        missingFromDraft = findIncompleteShortFictionChapters(draftV1, { minimumChapterLength });
         if (missingFromDraft.length > 0) {
           await writeDraftArtifacts(root, baseDir, "v001-partial", draftV1, language);
         }
       }
     }
-    validateShortFictionDraftForFinal(draftV1, { expectedChapters: chapterCount });
+    validateShortFictionDraftForFinal(draftV1, { expectedChapters: chapterCount, minimumChapterLength });
     await writeDraftArtifacts(root, baseDir, "v001", draftV1, language);
 
     options.onProgress?.("Reviewing full draft...");
@@ -329,7 +333,7 @@ async function produceShort(
         charsPerChapter,
         language,
       });
-      validateShortFictionDraftForFinal(draftV2, { expectedChapters: chapterCount });
+      validateShortFictionDraftForFinal(draftV2, { expectedChapters: chapterCount, minimumChapterLength });
       await writeDraftArtifacts(root, baseDir, "v002", draftV2, language);
       finalDraft = draftV2;
     } catch (error) {
@@ -359,12 +363,27 @@ async function produceShort(
 
     options.onProgress?.("Generating synopsis and cover prompt...");
     const packager = new ShortFictionPackagingAgent(options.runtimes.package);
-    salesPackage = await packager.generatePackage({
-      direction: options.direction,
-      outlineMarkdown,
-      draft: finalDraft,
-      language,
-    });
+    try {
+      salesPackage = await packager.generatePackage({
+        direction: options.direction,
+        outlineMarkdown,
+        draft: finalDraft,
+        language,
+      });
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      packageWarning = error instanceof Error ? error.message : String(error);
+      salesPackage = {
+        title: finalDraft.storyTitle,
+        intro: "",
+        sellingPoints: [],
+        coverPrompt: "",
+        rawContent: "",
+      };
+      await writeText(root, join(baseDir, "reviews", "package-warning.md"), language === "en"
+        ? `# Packaging requires retry\n\nThe complete story remains available. Synopsis and cover packaging failed without invalidating the prose.\n\n## Reason\n\n${packageWarning}`
+        : `# 包装阶段需要重试\n\n完整正文已经保留。简介与封面包装失败不会再把正文标成失败。\n\n## 原因\n\n${packageWarning}`);
+    }
     await writePackageArtifacts(root, baseDir, salesPackage, language);
   } catch (error) {
     await writeShortRunSnapshot(root, baseDir, {
@@ -399,11 +418,12 @@ async function produceShort(
   const completionWarnings = [
     outlineRevisionWarning ? `outline revision skipped: ${outlineRevisionWarning}` : "",
     revisionWarning ? `draft revision skipped: ${revisionWarning}` : "",
+    packageWarning ? `packaging requires retry: ${packageWarning}` : "",
   ].filter(Boolean);
   const observations = [
     ...buildShortLengthObservations(finalDraft, charsPerChapter, language),
     ...completionWarnings.map((warning): ProductionObservation => ({
-      metric: "optional-revision",
+      metric: warning.startsWith("packaging") ? "package-generation" : "optional-revision",
       expected: "completed cleanly",
       actual: warning,
       severity: "warning",
@@ -440,13 +460,17 @@ async function produceShort(
     observations,
   });
 
-  return buildShortRunResult(storyId, baseDir, coverArtifacts);
+  return buildShortRunResult(storyId, baseDir, { ...coverArtifacts, packageError: packageWarning });
 }
 
 function buildShortRunResult(
   storyId: string,
   baseDir: string,
-  coverArtifacts: { readonly coverImagePath?: string; readonly coverError?: string },
+  coverArtifacts: {
+    readonly coverImagePath?: string;
+    readonly coverError?: string;
+    readonly packageError?: string;
+  },
 ): ShortFictionRunResult {
   return {
     storyId,
@@ -459,6 +483,7 @@ function buildShortRunResult(
     coverPromptPath: projectPath(join(baseDir, "final", "cover-prompt.md")),
     coverImagePath: coverArtifacts.coverImagePath,
     coverError: coverArtifacts.coverError,
+    packageError: coverArtifacts.packageError,
   };
 }
 

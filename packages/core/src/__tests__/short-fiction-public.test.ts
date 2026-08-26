@@ -7,6 +7,8 @@ import {
   ShortFictionOutlineAgent,
   ShortFictionOutlineReviserAgent,
   ShortFictionDraftReviserAgent,
+  buildShortFictionChapterBatches,
+  minimumShortFictionChapterLength,
   parseShortFictionBatchDraft,
   validateShortFictionDraftForFinal,
 } from "../agents/short-fiction.js";
@@ -78,6 +80,33 @@ describe("public short-fiction chain", () => {
     expect(draft.chapters[0]?.title).toContain("离婚协议");
     expect(draft.chapters[1]?.charCount).toBeGreaterThan(20);
     expect(() => validateShortFictionDraftForFinal(draft, { expectedChapters: 2 })).not.toThrow();
+  });
+
+  it("splits a large short into bounded batches using the active model output limit", () => {
+    expect(buildShortFictionChapterBatches(
+      Array.from({ length: 18 }, (_, index) => index + 1),
+      1200,
+      8192,
+    )).toEqual([
+      [1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16], [17, 18],
+    ]);
+  });
+
+  it("rejects non-empty but near-empty chapters before final promotion", () => {
+    const draft = parseShortFictionBatchDraft(`
+=== SHORT_FICTION_TITLE ===
+近空稿
+=== CHAPTER 1 TITLE ===
+只有标题
+=== CHAPTER 1 CONTENT ===
+只有两句话。仍然不够。
+`, { expectedChapters: 1 });
+
+    expect(minimumShortFictionChapterLength(1200)).toBe(240);
+    expect(() => validateShortFictionDraftForFinal(draft, {
+      expectedChapters: 1,
+      minimumChapterLength: minimumShortFictionChapterLength(1200),
+    })).toThrow(/chapters below the minimum usable length: 1/);
   });
 
   it("recovers chapter content when a model repeats the title tag instead of the content tag", () => {

@@ -30,6 +30,7 @@ export interface ShortFictionDraftPromptInput {
   readonly outlineMarkdown: string;
   readonly chapterCount: number;
   readonly charsPerChapter: number;
+  readonly chapterNumbers?: readonly number[];
 }
 
 export interface ShortFictionDraftContinuationPromptInput extends ShortFictionDraftPromptInput {
@@ -215,7 +216,8 @@ export function buildShortFictionOutlineRevisionFollowup(
 export function buildShortFictionWriterSystemPrompt(language: ShortFictionLanguage = "zh"): string {
   if (language === "en") {
     return [
-      "You are an English short-fiction BatchWriter. You write the complete short story in one API pass, following the story plan.",
+      "You are an English short-fiction BatchWriter. Follow the complete story plan and write exactly the chapters requested in the current batch.",
+      "The production system may request the whole story or a bounded chapter batch to respect the active model's output limit. A batch is not a synopsis: every requested chapter must still contain complete scenes and connect to the full plan.",
       "Write natural, native English prose. Vary sentence length; mix short punchy sentences with longer flowing ones, and keep the narrative voice consistent throughout.",
       "This is not serialized-novel continuation and not chapter synopsis. Every chapter needs drama happening on the page: character action, dialogue or reaction, a shift in the situation, and a reason to keep reading at the chapter break.",
       "Keep the drama dialed up, web-fiction style: real-world pressure may be amplified as far as readers will still believe, but never so absurd that immersion breaks.",
@@ -225,7 +227,8 @@ export function buildShortFictionWriterSystemPrompt(language: ShortFictionLangua
     ].join("\n");
   }
   return [
-    "你是中文短篇 BatchWriter。你要根据故事方案一次 API 写完整短篇正文。",
+    "你是中文短篇 BatchWriter。你要根据完整故事方案，写完本批明确要求的章节。",
+    "生产系统会根据当前模型输出上限，选择整篇一次写完或拆成少量章节批次。分批不等于写梗概：本批每章仍须有完整场面，并承接整篇方案。",
     "这不是长篇连载续写，也不是章节梗概。每章都要有当场发生的戏：人物行动、对话或反应、局面变化、章尾继续读的理由。",
     "网文戏剧性要足：现实压力可以放大到读者愿意信的程度，但不能荒诞到失去代入。",
     "标题和章节标题要像平台内容，不要文艺化总结。正文保持移动端节奏，段落短但不要写成电报体。",
@@ -238,10 +241,14 @@ export function buildShortFictionWriterUserPrompt(
   input: ShortFictionDraftPromptInput,
   language: ShortFictionLanguage = "zh",
 ): string {
+  const chapters = requestedShortFictionChapters(input);
+  const wholeDraft = chapters.length === input.chapterCount;
   if (language === "en") {
     return [
       "## Task",
-      `Write the complete ${input.chapterCount}-chapter story in one pass, about ${input.charsPerChapter} words per chapter.`,
+      wholeDraft
+        ? `Write the complete ${input.chapterCount}-chapter story, about ${input.charsPerChapter} words per chapter.`
+        : `Write ONLY chapters ${chapters.join(", ")} of the complete ${input.chapterCount}-chapter story, about ${input.charsPerChapter} words per chapter.`,
       "Read the full story plan before writing. The prose must carry the plan's pressure chain, evidence chain, reversal chain, and emotional payoff — do not swerve into a different story midway.",
       "",
       buildShortFictionCraftPrompt("en"),
@@ -257,8 +264,7 @@ export function buildShortFictionWriterUserPrompt(
       "The story title — plain text, platform-ready, nothing else",
       "=== SHORT_FICTION_OPENING_HOOK ===",
       "An optional pre-story hook of about 130 words; if no standalone teaser is needed, still write the small first-screen scene that opens chapter 1",
-      ...Array.from({ length: input.chapterCount }, (_, index) => {
-        const chapter = index + 1;
+      ...chapters.map((chapter) => {
         return [
           `=== CHAPTER ${chapter} TITLE ===`,
           "Chapter title — plain text only, no #, no \"Chapter N\" prefix",
@@ -270,7 +276,9 @@ export function buildShortFictionWriterUserPrompt(
   }
   return [
     "## 任务",
-    `一次写完整 ${input.chapterCount} 章，每章约 ${input.charsPerChapter} 字。`,
+    wholeDraft
+      ? `写完整 ${input.chapterCount} 章，每章约 ${input.charsPerChapter} 字。`
+      : `本批只写第 ${chapters.join("、")} 章；全篇共 ${input.chapterCount} 章，每章约 ${input.charsPerChapter} 字。`,
     "先读完整故事方案，再写正文。正文要承接大纲的压力链、证据链、反转链和情绪回报，不要临时改成另一种故事。",
     "",
     buildShortFictionCraftPrompt(),
@@ -286,8 +294,7 @@ export function buildShortFictionWriterUserPrompt(
     "短篇标题，只写纯文本平台标题",
     "=== SHORT_FICTION_OPENING_HOOK ===",
     "可选正文前小钩子，约 200 字；如果不需要独立引子，也要写第 1 章第一屏的入局小场面",
-    ...Array.from({ length: input.chapterCount }, (_, index) => {
-      const chapter = index + 1;
+    ...chapters.map((chapter) => {
       return [
         `=== CHAPTER ${chapter} TITLE ===`,
         "章节标题，只写纯文本，不要 #，不要第几章前缀",
@@ -414,11 +421,17 @@ export function buildShortFictionDraftRevisionFollowup(
   input: ShortFictionDraftRevisionPromptInput,
   language: ShortFictionLanguage = "zh",
 ): string {
+  const chapters = requestedShortFictionChapters(input);
+  const wholeDraft = chapters.length === input.chapterCount;
   if (language === "en") {
     return [
-      "Based on the review notes, write the complete second-version draft.",
+      wholeDraft
+        ? "Based on the review notes, write the complete second-version draft."
+        : `Based on the review notes, rewrite ONLY chapters ${chapters.join(", ")} for the second-version draft.`,
       "This is round two of the same story: keep what worked in the last version, fix what breaks immersion or kills the desire to keep reading.",
-      "Do not output a list of suggested edits, and do not patch just a few chapters — output the complete draft.",
+      wholeDraft
+        ? "Do not output a list of suggested edits; output the complete draft."
+        : "Do not output a list of suggested edits and do not repeat chapters outside this batch.",
       "",
       "## Review Notes",
       input.review.trim(),
@@ -434,8 +447,7 @@ export function buildShortFictionDraftRevisionFollowup(
       "The story title — plain text, platform-ready, nothing else",
       "=== SHORT_FICTION_OPENING_HOOK ===",
       "An optional pre-story hook of about 130 words; if no standalone teaser is needed, still write the small first-screen scene that opens chapter 1",
-      ...Array.from({ length: input.chapterCount }, (_, index) => {
-        const chapter = index + 1;
+      ...chapters.map((chapter) => {
         return [
           `=== CHAPTER ${chapter} TITLE ===`,
           "Chapter title — plain text only, no #, no \"Chapter N\" prefix",
@@ -446,9 +458,13 @@ export function buildShortFictionDraftRevisionFollowup(
     ].join("\n");
   }
   return [
-    "根据审稿意见，继续写第二版完整正文。",
+    wholeDraft
+      ? "根据审稿意见，继续写第二版完整正文。"
+      : `根据审稿意见，本批只重写第 ${chapters.join("、")} 章，作为第二版正文的一部分。`,
     "这是同一篇的第二轮写作：保留上一版能打的地方，修掉会让读者出戏或不想读的问题。",
-    "不要只列修改建议，不要只改几章片段，输出完整正文。",
+    wholeDraft
+      ? "不要只列修改建议，输出完整正文。"
+      : "不要只列修改建议，不要重复输出本批之外的章节。",
     "",
     "## 审稿意见",
     input.review.trim(),
@@ -464,8 +480,7 @@ export function buildShortFictionDraftRevisionFollowup(
     "短篇标题，只写纯文本平台标题",
     "=== SHORT_FICTION_OPENING_HOOK ===",
     "可选正文前小钩子，约 200 字；如果不需要独立引子，也要写第 1 章第一屏的入局小场面",
-    ...Array.from({ length: input.chapterCount }, (_, index) => {
-      const chapter = index + 1;
+    ...chapters.map((chapter) => {
       return [
         `=== CHAPTER ${chapter} TITLE ===`,
         "章节标题，只写纯文本，不要 #，不要第几章前缀",
@@ -474,6 +489,15 @@ export function buildShortFictionDraftRevisionFollowup(
       ].join("\n");
     }),
   ].join("\n");
+}
+
+function requestedShortFictionChapters(input: ShortFictionDraftPromptInput): number[] {
+  const requested = input.chapterNumbers?.filter((chapter) => (
+    Number.isInteger(chapter) && chapter >= 1 && chapter <= input.chapterCount
+  ));
+  return requested && requested.length > 0
+    ? [...new Set(requested)].sort((a, b) => a - b)
+    : Array.from({ length: input.chapterCount }, (_, index) => index + 1);
 }
 
 export function buildShortFictionPackageSystemPrompt(language: ShortFictionLanguage = "zh"): string {

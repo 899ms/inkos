@@ -276,6 +276,32 @@ describe("short fiction resume + failure marker (C2)", () => {
     expect(packageSpy).toHaveBeenCalled();
     await expect(access(join(root, "shorts", "elevator", "final", "sales-package.md"))).resolves.toBeUndefined();
   });
+
+  it("keeps complete prose and reports a retryable warning when packaging fails", async () => {
+    await mkdir(join(root, "shorts", "elevator", "outline"), { recursive: true });
+    await writeFile(join(root, "shorts", "elevator", "outline", "v002.md"), "## 既有大纲", "utf-8");
+    const complete = parseShortFictionBatchDraft(DRAFT_MD, { expectedChapters: CH });
+    vi.spyOn(ShortFictionWriterAgent.prototype, "writeDraft").mockResolvedValue(complete);
+    vi.spyOn(ShortFictionDraftReviewerAgent.prototype, "reviewDraft").mockResolvedValue("looks fine");
+    vi.spyOn(ShortFictionDraftReviserAgent.prototype, "reviseDraft").mockResolvedValue(complete);
+    vi.spyOn(ShortFictionPackagingAgent.prototype, "generatePackage").mockRejectedValue(new Error("output limit"));
+
+    const result = await runShortFictionProduction({
+      projectRoot: root, direction: "恐怖短篇", storyId: "elevator",
+      chapterCount: CH, charsPerChapter: 1000, cover: false, runtimes: runtimes(root),
+    });
+
+    expect(result.packageError).toContain("output limit");
+    await expect(readFile(join(root, "shorts", "elevator", "final", "full.md"), "utf-8"))
+      .resolves.toContain("深夜的电梯");
+    await expect(readFile(join(root, "shorts", "elevator", "reviews", "package-warning.md"), "utf-8"))
+      .resolves.toContain("包装阶段需要重试");
+    const status = JSON.parse(await readFile(join(root, "shorts", "elevator", "status.json"), "utf-8"));
+    expect(status.status).toBe("complete");
+    expect(status.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: "package-generation", severity: "warning" }),
+    ]));
+  });
 });
 
 function findEmptyChapterNumbers(draft: ReturnType<typeof parseShortFictionBatchDraft>): number[] {
