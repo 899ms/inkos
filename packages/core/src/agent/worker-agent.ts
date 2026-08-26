@@ -21,6 +21,7 @@ import {
 } from "../llm/provider.js";
 import { guardedPiStream } from "./pi-stream.js";
 import { isLlmStubEnabled, stubChatCompletion } from "./llm-stub.js";
+import { toPiApi } from "../llm/api-format.js";
 
 export interface WorkerAgentOptions {
   readonly temperature?: number;
@@ -52,11 +53,7 @@ function workerModel(client: LLMClient, modelId: string, maxTokens?: number): Mo
   return {
     id: modelId,
     name: modelId,
-    api: (client.apiFormat === "anthropic"
-      ? "anthropic-messages"
-      : client.apiFormat === "responses"
-        ? "openai-responses"
-        : "openai-completions") as Api,
+    api: toPiApi(client.apiFormat),
     provider: client.provider as Provider,
     baseUrl: "",
     reasoning: false,

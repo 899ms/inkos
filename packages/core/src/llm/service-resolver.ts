@@ -5,6 +5,7 @@ import { getServiceApiKey } from "./secrets.js";
 import { getEndpoint } from "./providers/index.js";
 import type { InkosEndpoint } from "./providers/types.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
+import { toPiApi, type LLMApiFormat } from "./api-format.js";
 
 export interface ResolvedModel {
   model: Model<Api>;
@@ -30,7 +31,7 @@ export async function resolveServiceModel(
   modelId: string,
   projectRoot: string,
   customBaseUrl?: string,
-  customApiFormat?: "chat" | "responses" | "anthropic",
+  customApiFormat?: LLMApiFormat,
 ): Promise<ResolvedModel> {
   // Determine pi-ai provider
   const baseService = service.startsWith("custom:") ? "custom" : service;
@@ -42,7 +43,7 @@ export async function resolveServiceModel(
       ? "anthropic"
       : resolveServicePiProvider(baseService) ?? "openai";
   const apiType = service.startsWith("custom:")
-    ? (customApiFormat === "anthropic" ? "anthropic-messages" : customApiFormat === "responses" ? "openai-responses" : "openai-completions")
+    ? toPiApi(customApiFormat ?? "chat")
     : (preset?.api ?? "openai-completions");
   const configuredBaseUrl = customBaseUrl ?? preset?.baseUrl ?? "";
   const endpointModel = baseService === "minimax"

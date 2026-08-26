@@ -17,14 +17,15 @@ import {
   formatDoctorHintStreamRequirement,
   resolveCliLanguage,
 } from "../localization.js";
+import type { LLMApiFormat } from "@actalk/inkos-core";
 
 function buildDoctorProbePlans(
-  preferredApiFormat: "chat" | "responses" | "anthropic" | undefined,
+  preferredApiFormat: LLMApiFormat | undefined,
   preferredStream: boolean | undefined,
-): Array<{ apiFormat: "chat" | "responses" | "anthropic"; stream: boolean }> {
-  const plans: Array<{ apiFormat: "chat" | "responses" | "anthropic"; stream: boolean }> = [];
+): Array<{ apiFormat: LLMApiFormat; stream: boolean }> {
+  const plans: Array<{ apiFormat: LLMApiFormat; stream: boolean }> = [];
   const seen = new Set<string>();
-  const push = (apiFormat: "chat" | "responses" | "anthropic", stream: boolean) => {
+  const push = (apiFormat: LLMApiFormat, stream: boolean) => {
     const key = `${apiFormat}:${stream ? "1" : "0"}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -308,7 +309,7 @@ export const doctorCommand = new Command("doctor")
           : [llmConfig.model];
         const plans = llmConfig.provider === "openai"
           ? buildDoctorProbePlans(llmConfig.apiFormat, llmConfig.stream)
-          : [{ apiFormat: (llmConfig.apiFormat ?? "chat") as "chat" | "responses" | "anthropic", stream: llmConfig.stream ?? true }];
+          : [{ apiFormat: (llmConfig.apiFormat ?? "chat") as LLMApiFormat, stream: llmConfig.stream ?? true }];
 
         for (const model of modelCandidates) {
           for (const plan of plans) {

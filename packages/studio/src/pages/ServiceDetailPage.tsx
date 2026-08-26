@@ -4,6 +4,7 @@ import { useServiceStore } from "../store/service";
 import { Eye, EyeOff, Loader2, ArrowLeft, Plus, Trash2, X } from "lucide-react";
 import { ServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { tr } from "../lib/app-language";
+import { isLLMApiFormat } from "@actalk/inkos-core/llm/api-format";
 import {
   deleteServiceConfig,
   matchServiceConfigEntryForDetail,
@@ -15,6 +16,7 @@ import {
   type ServiceDetailDetectedConfig as DetectedConfig,
   type ServiceDetailModelInfo as ModelInfo,
   type ServiceDetailVerifiedProbe as VerifiedProbe,
+  type LLMApiFormat,
 } from "./service-detail-state";
 
 interface Nav {
@@ -54,7 +56,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const [customName, setCustomName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [temperature, setTemperature] = useState("0.7");
-  const [apiFormat, setApiFormat] = useState<"chat" | "responses" | "anthropic">("chat");
+  const [apiFormat, setApiFormat] = useState<LLMApiFormat>("chat");
   const [stream, setStream] = useState(true);
   const [detectedModel, setDetectedModel] = useState<string>("");
   const [detectedConfig, setDetectedConfig] = useState<DetectedConfig | null>(null);
@@ -78,7 +80,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           setBaseUrl(String(matched.baseUrl ?? ""));
         }
         if (typeof matched.temperature === "number") setTemperature(String(matched.temperature));
-        if (matched.apiFormat === "chat" || matched.apiFormat === "responses" || matched.apiFormat === "anthropic") setApiFormat(matched.apiFormat);
+        if (isLLMApiFormat(matched.apiFormat)) setApiFormat(matched.apiFormat);
         if (typeof matched.stream === "boolean") setStream(matched.stream);
         if (Array.isArray(matched.models)) {
           setConfiguredModels(mergeServiceDetailModels(matched.models.filter((model): model is string => typeof model === "string")));
@@ -374,7 +376,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           <Field label={tr("协议类型", "Protocol")}>
             <select
               value={apiFormat}
-              onChange={(e) => setApiFormat(e.target.value as "chat" | "responses" | "anthropic")}
+              onChange={(e) => setApiFormat(e.target.value as LLMApiFormat)}
               className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm"
             >
               <option value="chat">OpenAI Chat Completions</option>

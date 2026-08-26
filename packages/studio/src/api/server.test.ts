@@ -326,6 +326,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     normalizePlatformOrOther: actual.normalizePlatformOrOther,
     defaultChapterLength: actual.defaultChapterLength,
     inferLanguage: actual.inferLanguage,
+    isLLMApiFormat: actual.isLLMApiFormat,
     ingestMaterial: actual.ingestMaterial,
     chatCompletion: chatCompletionMock,
     runWorkerAgent: runWorkerAgentMock,

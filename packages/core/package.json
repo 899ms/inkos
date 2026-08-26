@@ -25,6 +25,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./llm/api-format": {
+      "types": "./dist/llm/api-format.d.ts",
+      "import": "./dist/llm/api-format.js"
+    },
     "./interactive-film/evaluator": {
       "types": "./dist/interactive-film/evaluator.d.ts",
       "import": "./dist/interactive-film/evaluator.js"

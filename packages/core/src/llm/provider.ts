@@ -23,6 +23,7 @@ import {
   agentTrajectoryHeaders,
   beginAgentModelCall,
 } from "./agent-trajectory.js";
+import type { LLMApiFormat } from "./api-format.js";
 
 
 // === Streaming Monitor Types ===
@@ -275,7 +276,7 @@ export interface LLMClient {
   readonly provider: "openai" | "anthropic";
   readonly service?: string;
   readonly configSource?: LLMConfig["configSource"];
-  readonly apiFormat: "chat" | "responses" | "anthropic";
+  readonly apiFormat: LLMApiFormat;
   readonly stream: boolean;
   readonly proxyUrl?: string;
   readonly _piModel?: PiModel<PiApi>;

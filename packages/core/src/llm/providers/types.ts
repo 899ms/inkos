@@ -1,3 +1,5 @@
+import type { LLMApiFormat } from "../api-format.js";
+
 /**
  * inkos 自维护的 provider 定义。每个 provider 一个 .ts 文件，
  * 里面一个 InkosEndpoint 对象（provider 元数据 + models 数组）。
@@ -60,7 +62,7 @@ export interface ProviderCompat {
 }
 
 export interface ProviderTransportDefaults {
-  readonly apiFormat?: "chat" | "responses" | "anthropic";
+  readonly apiFormat?: LLMApiFormat;
   readonly stream?: boolean;
 }
 

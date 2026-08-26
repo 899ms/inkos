@@ -6,6 +6,7 @@ import { getEndpoint } from "../llm/providers/index.js";
 import { guessServiceFromBaseUrl, resolveServicePreset, resolveServiceProviderFamily } from "../llm/service-presets.js";
 import { isApiKeyOptionalForEndpoint } from "./llm-endpoint-auth.js";
 import { cliOverlayEnv, legacyEnv, studioIgnoredEnv, type LLMEnvLayers, type LLMEnvMap } from "./llm-env.js";
+import { isLLMApiFormat, type LLMApiFormat } from "../llm/api-format.js";
 
 export type LLMConsumer = "studio" | "cli" | "daemon" | "deploy";
 export type LLMConfigMode = "studio-project" | "cli-project" | "legacy-env";
@@ -16,7 +17,7 @@ export interface LLMConfigCliOverrides {
   readonly model?: string;
   readonly apiKeyEnv?: string;
   readonly baseUrl?: string;
-  readonly apiFormat?: "chat" | "responses" | "anthropic";
+  readonly apiFormat?: LLMApiFormat;
   readonly stream?: boolean;
 }
 
@@ -49,7 +50,7 @@ interface ServiceConfigEntry {
   readonly models?: readonly string[];
   readonly temperature?: number;
   readonly maxTokens?: number;
-  readonly apiFormat?: "chat" | "responses" | "anthropic";
+  readonly apiFormat?: LLMApiFormat;
   readonly stream?: boolean;
 }
 
@@ -367,7 +368,7 @@ function normalizeServiceEntries(raw: unknown): ServiceConfigEntry[] {
         ...(Array.isArray(entry.models) ? { models: normalizeModelIds(entry.models) } : {}),
         ...(typeof entry.temperature === "number" ? { temperature: entry.temperature } : {}),
         ...(typeof entry.maxTokens === "number" ? { maxTokens: entry.maxTokens } : {}),
-        ...(entry.apiFormat === "chat" || entry.apiFormat === "responses" || entry.apiFormat === "anthropic" ? { apiFormat: entry.apiFormat } : {}),
+        ...(isLLMApiFormat(entry.apiFormat) ? { apiFormat: entry.apiFormat } : {}),
         ...(typeof entry.stream === "boolean" ? { stream: entry.stream } : {}),
       }));
   }
@@ -390,7 +391,7 @@ function normalizeServiceEntryFromPatch(serviceId: string, value: Record<string,
       ...(Array.isArray(value.models) ? { models: normalizeModelIds(value.models) } : {}),
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(typeof value.maxTokens === "number" ? { maxTokens: value.maxTokens } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" || value.apiFormat === "anthropic" ? { apiFormat: value.apiFormat } : {}),
+      ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
     };
   }
@@ -403,7 +404,7 @@ function normalizeServiceEntryFromPatch(serviceId: string, value: Record<string,
       ...(Array.isArray(value.models) ? { models: normalizeModelIds(value.models) } : {}),
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(typeof value.maxTokens === "number" ? { maxTokens: value.maxTokens } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" || value.apiFormat === "anthropic" ? { apiFormat: value.apiFormat } : {}),
+      ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
     };
   }
@@ -413,7 +414,7 @@ function normalizeServiceEntryFromPatch(serviceId: string, value: Record<string,
     ...(Array.isArray(value.models) ? { models: normalizeModelIds(value.models) } : {}),
     ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
     ...(typeof value.maxTokens === "number" ? { maxTokens: value.maxTokens } : {}),
-    ...(value.apiFormat === "chat" || value.apiFormat === "responses" || value.apiFormat === "anthropic" ? { apiFormat: value.apiFormat } : {}),
+    ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
     ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
   };
 }

@@ -1,4 +1,7 @@
 import { fetchJson } from "../hooks/use-api";
+import type { LLMApiFormat } from "@actalk/inkos-core/llm/api-format";
+
+export type { LLMApiFormat } from "@actalk/inkos-core/llm/api-format";
 
 export interface ServiceDetailModelInfo {
   readonly id: string;
@@ -46,7 +49,7 @@ export function resolveModelsToPersist(args: {
 }
 
 export interface ServiceDetailDetectedConfig {
-  readonly apiFormat?: "chat" | "responses" | "anthropic";
+  readonly apiFormat?: LLMApiFormat;
   readonly stream?: boolean;
   readonly baseUrl?: string;
   readonly modelsSource?: "api" | "fallback";
@@ -73,7 +76,7 @@ export interface ServiceProbeResponse {
 export interface ServiceDetailVerifiedProbe {
   readonly apiKey: string;
   readonly baseUrl: string;
-  readonly apiFormat: "chat" | "responses" | "anthropic";
+  readonly apiFormat: LLMApiFormat;
   readonly stream: boolean;
   readonly models: ServiceDetailModelInfo[];
   readonly selectedModel?: string;
@@ -84,7 +87,7 @@ export async function probeServiceForDetail(
   serviceId: string,
   body: {
     readonly apiKey: string;
-    readonly apiFormat: "chat" | "responses" | "anthropic";
+    readonly apiFormat: LLMApiFormat;
     readonly stream: boolean;
     readonly baseUrl?: string;
     readonly preferredModel?: string;
@@ -107,7 +110,7 @@ export async function rehydrateServiceConnectionStatus(args: {
   readonly shouldVerify: boolean;
   readonly isCustom: boolean;
   readonly baseUrl: string;
-  readonly apiFormat: "chat" | "responses" | "anthropic";
+  readonly apiFormat: LLMApiFormat;
   readonly stream: boolean;
   readonly fetchJsonImpl?: JsonFetcher;
 }): Promise<{
@@ -152,7 +155,7 @@ export async function saveServiceConfig(args: {
   readonly resolvedCustomName: string;
   readonly apiKey: string;
   readonly baseUrl: string;
-  readonly apiFormat: "chat" | "responses" | "anthropic";
+  readonly apiFormat: LLMApiFormat;
   readonly stream: boolean;
   readonly temperature: string;
   readonly detectedModel: string;
