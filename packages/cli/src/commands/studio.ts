@@ -1,8 +1,8 @@
 import { Command } from "commander";
-import { findProjectRoot, log, logError } from "../utils.js";
+import { findProjectRoot, log, logError, GLOBAL_CONFIG_DIR } from "../utils.js";
 import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
-import { access } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureProjectDirectoryInitialized } from "../project-bootstrap.js";
 
@@ -19,11 +19,65 @@ export interface BrowserLaunchSpec {
 
 export interface StudioCommandHooks {
   readonly launchStudio?: (projectRoot: string, port: string) => Promise<void> | void;
+  readonly recentProjectPath?: string;
 }
 
-async function prepareStudioRoot(root: string): Promise<{ readonly root: string; readonly initialized: boolean }> {
-  const initialized = await ensureProjectDirectoryInitialized(root, { language: "zh" });
-  return { root, initialized };
+const DEFAULT_RECENT_STUDIO_PROJECT_PATH = join(GLOBAL_CONFIG_DIR, "studio-project.json");
+
+export async function resolveStudioProjectRoot(
+  requestedRoot: string,
+  options: { readonly explicitProject?: boolean; readonly recentProjectPath?: string } = {},
+): Promise<{ readonly root: string; readonly source: "requested" | "recent" | "new" }> {
+  const root = resolve(requestedRoot);
+  const recentProjectPath = options.recentProjectPath ?? DEFAULT_RECENT_STUDIO_PROJECT_PATH;
+  if (await isInkOSProject(root)) {
+    await saveRecentStudioProject(recentProjectPath, root);
+    return { root, source: "requested" };
+  }
+
+  if (!options.explicitProject) {
+    const recent = await loadRecentStudioProject(recentProjectPath);
+    if (recent && await isInkOSProject(recent)) {
+      return { root: recent, source: "recent" };
+    }
+  }
+
+  return { root, source: "new" };
+}
+
+async function prepareStudioRoot(
+  root: string,
+  options: { readonly explicitProject?: boolean; readonly recentProjectPath?: string } = {},
+): Promise<{ readonly root: string; readonly initialized: boolean; readonly source: "requested" | "recent" | "new" }> {
+  const resolved = await resolveStudioProjectRoot(root, options);
+  const initialized = await ensureProjectDirectoryInitialized(resolved.root, { language: "zh" });
+  await saveRecentStudioProject(options.recentProjectPath ?? DEFAULT_RECENT_STUDIO_PROJECT_PATH, resolved.root);
+  return { ...resolved, initialized };
+}
+
+async function isInkOSProject(root: string): Promise<boolean> {
+  try {
+    await access(join(root, "inkos.json"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function loadRecentStudioProject(path: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf-8")) as { projectRoot?: unknown };
+    return typeof parsed.projectRoot === "string" && parsed.projectRoot.trim()
+      ? resolve(parsed.projectRoot)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function saveRecentStudioProject(path: string, projectRoot: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify({ projectRoot }, null, 2), "utf-8");
 }
 
 async function firstAccessiblePath(paths: readonly string[]): Promise<string | undefined> {
@@ -115,11 +169,8 @@ export async function resolveStudioLaunch(root: string): Promise<StudioLaunchSpe
   return null;
 }
 
-export async function launchStudioWorkbench(root: string, port: string): Promise<void> {
-  const prepared = await prepareStudioRoot(root);
-  const url = prepared.initialized
-    ? `http://localhost:${port}#/services`
-    : `http://localhost:${port}`;
+export async function launchStudioWorkbench(root: string, port: string, initialHash = ""): Promise<void> {
+  const url = `http://localhost:${port}${initialHash}`;
   const launch = await resolveStudioLaunch(root);
 
   if (!launch) {
@@ -166,10 +217,16 @@ export async function launchStudioEntry(
   root: string,
   port: string,
   hooks: StudioCommandHooks = {},
+  options: { readonly explicitProject?: boolean } = {},
 ): Promise<void> {
-  const prepared = await prepareStudioRoot(root);
+  const prepared = await prepareStudioRoot(root, {
+    explicitProject: options.explicitProject,
+    recentProjectPath: hooks.recentProjectPath,
+  });
   if (prepared.initialized) {
-    log(`No inkos.json found in ${root}. Initialized a minimal InkOS project for Studio.`);
+    log(`No inkos.json found in ${prepared.root}. Initialized a minimal InkOS project for Studio.`);
+  } else if (prepared.source === "recent") {
+    log(`No InkOS project found in ${resolve(root)}. Reopening recent project: ${prepared.root}`);
   }
 
   if (hooks.launchStudio) {
@@ -177,17 +234,18 @@ export async function launchStudioEntry(
     return;
   }
 
-  await launchStudioWorkbench(prepared.root, port);
+  await launchStudioWorkbench(prepared.root, port, prepared.initialized ? "#/services" : "");
 }
 
 export function createStudioCommand(hooks: StudioCommandHooks = {}): Command {
   return new Command("studio")
   .description("Start InkOS Studio web workbench")
   .option("-p, --port <port>", "Server port", "4567")
+  .option("--project <path>", "Open or initialize a specific InkOS project directory")
   .action(async (opts) => {
-    const root = findProjectRoot();
+    const root = opts.project ? resolve(opts.project) : findProjectRoot();
     const port = opts.port;
-    await launchStudioEntry(root, port, hooks);
+    await launchStudioEntry(root, port, hooks, { explicitProject: Boolean(opts.project) });
   });
 }
 

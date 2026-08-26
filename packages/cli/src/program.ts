@@ -41,6 +41,7 @@ const { version } = require("../package.json") as { version: string };
 export interface ProgramHooks {
   readonly launchTui?: (projectRoot: string) => Promise<void> | void;
   readonly launchStudio?: (projectRoot: string, port: string) => Promise<void> | void;
+  readonly studioRecentProjectPath?: string;
   readonly readInteractionInput?: InteractCommandHooks["readInput"];
 }
 
@@ -60,7 +61,10 @@ export function createProgram(hooks: ProgramHooks = {}): Command {
     .option("--stream", "Force streaming LLM responses for this CLI run")
     .option("--no-stream", "Force non-streaming LLM responses for this CLI run")
     .action(async () => {
-      await launchStudioEntry(process.cwd(), "4567", { launchStudio: hooks.launchStudio });
+      await launchStudioEntry(process.cwd(), "4567", {
+        launchStudio: hooks.launchStudio,
+        recentProjectPath: hooks.studioRecentProjectPath,
+      });
     });
 
   program.addCommand(initCommand);
@@ -93,7 +97,10 @@ export function createProgram(hooks: ProgramHooks = {}): Command {
   program.addCommand(shortCommand);
   program.addCommand(forecastCommand);
   program.addCommand(translateCommand);
-  program.addCommand(createStudioCommand({ launchStudio: hooks.launchStudio }));
+  program.addCommand(createStudioCommand({
+    launchStudio: hooks.launchStudio,
+    recentProjectPath: hooks.studioRecentProjectPath,
+  }));
   program.addCommand(consolidateCommand);
   program.addCommand(createInteractCommand({
     readInput: hooks.readInteractionInput,

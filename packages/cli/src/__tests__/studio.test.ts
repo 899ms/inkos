@@ -20,6 +20,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("../utils.js", () => ({
+  GLOBAL_CONFIG_DIR: "/global",
   findProjectRoot: vi.fn(() => "/project"),
   log: logMock,
   logError: logErrorMock,
