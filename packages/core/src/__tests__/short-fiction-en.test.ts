@@ -189,8 +189,8 @@ describe("short-fiction runner English branch", () => {
 
   it("threads language and the en word default through the pipeline and artifacts", async () => {
     const CH = 12;
-    await mkdir(join(root, "shorts", "extra-floor", "outline"), { recursive: true });
-    await writeFile(join(root, "shorts", "extra-floor", "outline", "v002.md"), "## Existing plan", "utf-8");
+    await mkdir(join(root, "works", "extra-floor", "source", "outline"), { recursive: true });
+    await writeFile(join(root, "works", "extra-floor", "source", "outline", "v002.md"), "## Existing plan", "utf-8");
 
     const draftMd = [
       "=== SHORT_FICTION_TITLE ===",
@@ -222,12 +222,12 @@ describe("short-fiction runner English branch", () => {
     });
 
     expect(writeDraft).toHaveBeenCalledWith(expect.objectContaining({ language: "en", charsPerChapter: 650 }));
-    const final = await readFile(join(root, "shorts", "extra-floor", "final", "full.md"), "utf-8");
+    const final = await readFile(join(root, "works", "extra-floor", "source", "final", "full.md"), "utf-8");
     expect(final).toContain("## Chapter 12: Room 12");
     expect(CJK.test(final)).toBe(false);
-    const chapterFile = await readFile(join(root, "shorts", "extra-floor", "final", "chapters", "0001.md"), "utf-8");
+    const chapterFile = await readFile(join(root, "works", "extra-floor", "source", "final", "chapters", "0001.md"), "utf-8");
     expect(chapterFile.startsWith("# Chapter 1: Room 1")).toBe(true);
-    const salesPackage = await readFile(join(root, "shorts", "extra-floor", "final", "sales-package.md"), "utf-8");
+    const salesPackage = await readFile(join(root, "works", "extra-floor", "source", "final", "sales-package.md"), "utf-8");
     expect(salesPackage).toContain("## Synopsis");
     expect(salesPackage).toContain("## Selling Points");
   });

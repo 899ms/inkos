@@ -46,6 +46,8 @@ import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js"
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath as projectPath } from "../utils/posix-path.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
+import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harness/work-store.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 const SHORT_FICTION_DRAFT_COMPLETION_ATTEMPTS = 3;
 
@@ -65,7 +67,6 @@ export interface ShortFictionRunOptions {
   readonly runtimes: ShortFictionRunRuntimes;
   readonly reference?: ShortFictionReference;
   readonly storyId?: string;
-  readonly outDir?: string;
   readonly chapterCount?: number;
   // Per-chapter length in the language's native unit: zh characters or en words.
   readonly charsPerChapter?: number;
@@ -124,7 +125,6 @@ export async function runShortFictionProduction(
   options: ShortFictionRunOptions,
 ): Promise<ShortFictionRunResult> {
   const root = options.projectRoot;
-  const outDir = normalizeOutputDir(options.outDir ?? "shorts");
   const providedStoryId = options.storyId
     ? safeSegment(options.storyId)
     : options.title?.trim()
@@ -136,18 +136,18 @@ export async function runShortFictionProduction(
   // away (orphaning outline/drafts). If it already finished, return it as-is.
   if (
     providedStoryId
-    && await projectFileExists(root, join(outDir, providedStoryId, "final", "full.md"))
-    && !await isFailedShortRun(root, join(outDir, providedStoryId, "status.json"))
+    && await projectFileExists(root, join(shortWorkBaseDir(providedStoryId), "final", "full.md"))
+    && !await isFailedShortRun(root, join(shortWorkBaseDir(providedStoryId), "status.json"))
   ) {
-    return buildShortRunResult(providedStoryId, join(outDir, providedStoryId), { coverError: "already-complete" });
+    return buildShortRunResult(providedStoryId, shortWorkBaseDir(providedStoryId), { coverError: "already-complete" });
   }
 
   try {
-    return await produceShort(options, root, outDir, providedStoryId);
+    return await produceShort(options, root, providedStoryId);
   } catch (error) {
     // Mark the partial output as failed so drafts can't masquerade as a short.
     if (providedStoryId) {
-      await writeShortRunSnapshot(root, join(outDir, providedStoryId), {
+      await writeShortRunSnapshot(root, shortWorkBaseDir(providedStoryId), {
         storyId: providedStoryId,
         status: "failed",
         stage: "production",
@@ -155,6 +155,7 @@ export async function runShortFictionProduction(
         observations: [],
         error: error instanceof Error ? error.message : String(error),
       }).catch(() => undefined);
+      await syncWorkSourceArtifacts({ projectRoot: root, workId: providedStoryId }).catch(() => undefined);
     }
     throw error;
   }
@@ -163,7 +164,6 @@ export async function runShortFictionProduction(
 async function produceShort(
   options: ShortFictionRunOptions,
   root: string,
-  outDir: string,
   providedStoryId: string | undefined,
 ): Promise<ShortFictionRunResult> {
   const language = options.language ?? "zh";
@@ -194,17 +194,20 @@ async function produceShort(
   // Resume the (3-stage) outline from disk if v002 already exists for this id —
   // the writer + everything downstream only need the outline markdown.
   const resumedOutline = providedStoryId
-    ? await tryReadProjectText(root, join(outDir, providedStoryId, "outline", "v002.md"))
+    ? await tryReadProjectText(root, join(shortWorkBaseDir(providedStoryId), "outline", "v002.md"))
     : undefined;
 
   let outlineMarkdown: string;
   let outlineRevisionWarning: string | undefined;
   let storyId: string;
   let baseDir: string;
+  let workTitle: string;
   if (providedStoryId && resumedOutline?.trim()) {
     storyId = providedStoryId;
-    baseDir = join(outDir, storyId);
+    baseDir = shortWorkBaseDir(storyId);
+    workTitle = options.title?.trim() || storyId;
     outlineMarkdown = resumedOutline;
+    await ensureShortWork(root, storyId, workTitle, language);
     options.onProgress?.("Resuming from existing outline (skipping outline stages)...");
   } else {
     options.onProgress?.("Creating short fiction outline...");
@@ -218,7 +221,9 @@ async function produceShort(
     });
 
     storyId = providedStoryId ?? safeSegment(slugify(outlineV1.storyTitle || options.direction));
-    baseDir = join(outDir, storyId);
+    baseDir = shortWorkBaseDir(storyId);
+    workTitle = outlineV1.storyTitle || options.title?.trim() || storyId;
+    await ensureShortWork(root, storyId, workTitle, language);
     await writeText(root, join(baseDir, "outline", "v001.md"), outlineV1.rawContent);
 
     options.onProgress?.("Reviewing outline...");
@@ -459,6 +464,7 @@ async function produceShort(
     artifacts,
     observations,
   });
+  await syncWorkSourceArtifacts({ projectRoot: root, workId: storyId });
 
   return buildShortRunResult(storyId, baseDir, { ...coverArtifacts, packageError: packageWarning });
 }
@@ -524,7 +530,7 @@ export async function generateShortFictionCover(
     throw new Error("title is required for cover generation.");
   }
 
-  const outputDir = normalizeOutputDir(options.outputDir ?? join("covers", safeSegment(title)));
+  const outputDir = normalizeCoverOutputDir(options.outputDir ?? join("covers", safeSegment(title)));
   const salesPackage: ShortFictionSalesPackage = {
     title,
     intro: options.intro?.trim() ?? "",
@@ -1146,11 +1152,35 @@ async function writeText(root: string, path: string, value: string): Promise<voi
   await writeFile(resolved, `${value.trimEnd()}\n`, "utf-8");
 }
 
-function normalizeOutputDir(value: string): string {
-  const trimmed = value.trim() || "shorts";
-  const normalized = projectPath(trimmed).replace(/^\/+/u, "").replace(/\/+$/u, "") || "shorts";
+function shortWorkBaseDir(storyId: string): string {
+  return join("works", safeSegment(storyId), "source");
+}
+
+function normalizeCoverOutputDir(value: string): string {
+  const trimmed = value.trim() || "covers";
+  const normalized = projectPath(trimmed).replace(/^\/+/u, "").replace(/\/+$/u, "") || "covers";
   safeChildPath("/", normalized);
   return normalized;
+}
+
+async function ensureShortWork(
+  root: string,
+  storyId: string,
+  title: string,
+  language: ShortFictionLanguage,
+): Promise<void> {
+  try {
+    await loadWorkManifest(root, storyId);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await saveWorkManifest(root, createWorkManifest({
+    id: storyId,
+    title,
+    profileId: "short-fiction",
+    language,
+  }));
 }
 
 function boundedInteger(value: number | undefined, fallback: number, name: string, min: number, max: number): number {

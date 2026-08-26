@@ -78,8 +78,8 @@ describe("short fiction resume + failure marker (C2)", () => {
   });
 
   it("resumes from an existing outline/v002.md, skipping the three outline stages", async () => {
-    await mkdir(join(root, "shorts", "elevator", "outline"), { recursive: true });
-    await writeFile(join(root, "shorts", "elevator", "outline", "v002.md"), "## 既有大纲\n12章完整方案", "utf-8");
+    await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲\n12章完整方案", "utf-8");
 
     const createOutline = vi.spyOn(ShortFictionOutlineAgent.prototype, "createOutline");
     const reviewOutline = vi.spyOn(ShortFictionOutlineReviewerAgent.prototype, "reviewOutline");
@@ -92,13 +92,13 @@ describe("short fiction resume + failure marker (C2)", () => {
 
     expect(createOutline).not.toHaveBeenCalled();   // outline resumed from disk
     expect(reviewOutline).not.toHaveBeenCalled();
-    await expect(access(join(root, "shorts", "elevator", "final", "full.md"))).resolves.toBeUndefined();
+    await expect(access(join(root, "works", "elevator", "source", "final", "full.md"))).resolves.toBeUndefined();
     expect(result.storyId).toBe("elevator");
   });
 
   it("writes a failure marker (status.json) when a stage throws, instead of orphaning a silent partial", async () => {
-    await mkdir(join(root, "shorts", "elevator", "outline"), { recursive: true });
-    await writeFile(join(root, "shorts", "elevator", "outline", "v002.md"), "## 既有大纲", "utf-8");
+    await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲", "utf-8");
     // Writer stage fails with a transient-style upstream error.
     vi.spyOn(ShortFictionWriterAgent.prototype, "writeDraft").mockRejectedValue(new Error("503 temporarily unavailable"));
 
@@ -107,7 +107,7 @@ describe("short fiction resume + failure marker (C2)", () => {
       chapterCount: CH, charsPerChapter: 1000, cover: false, runtimes: runtimes(root),
     })).rejects.toThrow(/503/);
 
-    const status = JSON.parse(await readFile(join(root, "shorts", "elevator", "status.json"), "utf-8"));
+    const status = JSON.parse(await readFile(join(root, "works", "elevator", "source", "status.json"), "utf-8"));
     expect(status.status).toBe("failed");
     expect(status.error).toContain("503");
   });
@@ -133,9 +133,9 @@ describe("short fiction resume + failure marker (C2)", () => {
 
     expect(writeDraft).toHaveBeenCalledWith(expect.objectContaining({ outlineMarkdown: firstOutline.rawContent }));
     expect((await readFile(join(root, result.outlinePath), "utf-8")).trim()).toBe(firstOutline.rawContent);
-    expect(await readFile(join(root, "shorts", result.storyId, "reviews", "outline-v002-warning.md"), "utf-8"))
+    expect(await readFile(join(root, "works", result.storyId, "source", "reviews", "outline-v002-warning.md"), "utf-8"))
       .toContain("model reached the output limit");
-    const status = JSON.parse(await readFile(join(root, "shorts", result.storyId, "status.json"), "utf-8"));
+    const status = JSON.parse(await readFile(join(root, "works", result.storyId, "source", "status.json"), "utf-8"));
     expect(status).toMatchObject({ status: "complete" });
     expect(status.observations).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -167,13 +167,13 @@ describe("short fiction resume + failure marker (C2)", () => {
     });
 
     expect(result.storyId).toBe("没有录音的承认");
-    await expect(access(join(root, "shorts", "没有录音的承认", "final", "full.md"))).resolves.toBeUndefined();
-    await expect(access(join(root, "shorts", "one-line-platform-title"))).rejects.toThrow();
+    await expect(access(join(root, "works", "没有录音的承认", "source", "final", "full.md"))).resolves.toBeUndefined();
+    await expect(access(join(root, "works", "one-line-platform-title"))).rejects.toThrow();
   });
 
   it("continues a truncated first draft before review instead of reviewing empty chapters", async () => {
-    await mkdir(join(root, "shorts", "elevator", "outline"), { recursive: true });
-    await writeFile(join(root, "shorts", "elevator", "outline", "v002.md"), "## 既有大纲", "utf-8");
+    await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲", "utf-8");
     const partial = parseShortFictionBatchDraft(PARTIAL_DRAFT_MD, { expectedChapters: CH });
     const complete = parseShortFictionBatchDraft(DRAFT_MD, { expectedChapters: CH });
     const continueDraft = vi.spyOn(ShortFictionWriterAgent.prototype, "continueDraft").mockResolvedValue(complete);
@@ -190,14 +190,14 @@ describe("short fiction resume + failure marker (C2)", () => {
     });
 
     expect(continueDraft).toHaveBeenCalled();
-    await expect(access(join(root, "shorts", "elevator", "drafts", "v001-partial", "full.md"))).resolves.toBeUndefined();
-    const final = await readFile(join(root, "shorts", "elevator", "final", "full.md"), "utf-8");
+    await expect(access(join(root, "works", "elevator", "source", "drafts", "v001-partial", "full.md"))).resolves.toBeUndefined();
+    const final = await readFile(join(root, "works", "elevator", "source", "final", "full.md"), "utf-8");
     expect(final).toContain("第12章");
   });
 
   it("keeps completing a draft when the first continuation fills only some missing middle chapters", async () => {
-    await mkdir(join(root, "shorts", "elevator", "outline"), { recursive: true });
-    await writeFile(join(root, "shorts", "elevator", "outline", "v002.md"), "## 既有大纲", "utf-8");
+    await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲", "utf-8");
     const initial = parseShortFictionBatchDraft(MIDDLE_GAP_DRAFT_MD, { expectedChapters: CH });
     const chapter5Only = parseShortFictionBatchDraft(`${MIDDLE_GAP_DRAFT_MD}\n\n${CHAPTER_5_ONLY_CONTINUATION_MD}`, { expectedChapters: CH });
     const complete = parseShortFictionBatchDraft(DRAFT_MD, { expectedChapters: CH });
@@ -217,13 +217,13 @@ describe("short fiction resume + failure marker (C2)", () => {
     });
 
     expect(continueDraft).toHaveBeenCalledTimes(2);
-    const finalJson = JSON.parse(await readFile(join(root, "shorts", "elevator", "final", "short-story.json"), "utf-8"));
+    const finalJson = JSON.parse(await readFile(join(root, "works", "elevator", "source", "final", "short-story.json"), "utf-8"));
     expect(finalJson.chapters.every((chapter: { content: string }) => chapter.content.length > 0)).toBe(true);
   });
 
   it("keeps the complete first draft when the single revision output is invalid", async () => {
-    await mkdir(join(root, "shorts", "elevator", "outline"), { recursive: true });
-    await writeFile(join(root, "shorts", "elevator", "outline", "v002.md"), "## 既有大纲", "utf-8");
+    await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲", "utf-8");
     const complete = parseShortFictionBatchDraft(DRAFT_MD, { expectedChapters: CH });
     const invalidRevision = parseShortFictionBatchDraft("=== SHORT_FICTION_TITLE ===\n空改稿", { expectedChapters: CH });
     vi.spyOn(ShortFictionWriterAgent.prototype, "writeDraft").mockResolvedValue(complete);
@@ -238,15 +238,15 @@ describe("short fiction resume + failure marker (C2)", () => {
       chapterCount: CH, charsPerChapter: 1000, cover: false, runtimes: runtimes(root),
     });
 
-    const warning = await readFile(join(root, "shorts", "elevator", "reviews", "draft-v002-warning.md"), "utf-8");
+    const warning = await readFile(join(root, "works", "elevator", "source", "reviews", "draft-v002-warning.md"), "utf-8");
     expect(warning).toContain("第二轮改稿未采用");
-    const finalJson = JSON.parse(await readFile(join(root, "shorts", "elevator", "final", "short-story.json"), "utf-8"));
+    const finalJson = JSON.parse(await readFile(join(root, "works", "elevator", "source", "final", "short-story.json"), "utf-8"));
     expect(finalJson.chapters.every((chapter: { content: string }) => chapter.content.length > 0)).toBe(true);
   });
 
   it("returns the existing short untouched when final/full.md already exists (idempotent)", async () => {
-    await mkdir(join(root, "shorts", "elevator", "final"), { recursive: true });
-    await writeFile(join(root, "shorts", "elevator", "final", "full.md"), "# done", "utf-8");
+    await mkdir(join(root, "works", "elevator", "source", "final"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "final", "full.md"), "# done", "utf-8");
     const writeDraft = vi.spyOn(ShortFictionWriterAgent.prototype, "writeDraft");
 
     const result = await runShortFictionProduction({
@@ -259,11 +259,11 @@ describe("short fiction resume + failure marker (C2)", () => {
   });
 
   it("does not skip a previously failed run just because final/full.md exists", async () => {
-    await mkdir(join(root, "shorts", "elevator", "outline"), { recursive: true });
-    await mkdir(join(root, "shorts", "elevator", "final"), { recursive: true });
-    await writeFile(join(root, "shorts", "elevator", "outline", "v002.md"), "## 既有大纲", "utf-8");
-    await writeFile(join(root, "shorts", "elevator", "final", "full.md"), "# partial final", "utf-8");
-    await writeFile(join(root, "shorts", "elevator", "status.json"), JSON.stringify({ status: "failed", error: "package failed" }), "utf-8");
+    await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
+    await mkdir(join(root, "works", "elevator", "source", "final"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲", "utf-8");
+    await writeFile(join(root, "works", "elevator", "source", "final", "full.md"), "# partial final", "utf-8");
+    await writeFile(join(root, "works", "elevator", "source", "status.json"), JSON.stringify({ status: "failed", error: "package failed" }), "utf-8");
     stubDownstream();
     const packageSpy = vi.spyOn(ShortFictionPackagingAgent.prototype, "generatePackage");
 
@@ -274,12 +274,12 @@ describe("short fiction resume + failure marker (C2)", () => {
 
     expect(result.coverError).toBe("disabled");
     expect(packageSpy).toHaveBeenCalled();
-    await expect(access(join(root, "shorts", "elevator", "final", "sales-package.md"))).resolves.toBeUndefined();
+    await expect(access(join(root, "works", "elevator", "source", "final", "sales-package.md"))).resolves.toBeUndefined();
   });
 
   it("keeps complete prose and reports a retryable warning when packaging fails", async () => {
-    await mkdir(join(root, "shorts", "elevator", "outline"), { recursive: true });
-    await writeFile(join(root, "shorts", "elevator", "outline", "v002.md"), "## 既有大纲", "utf-8");
+    await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲", "utf-8");
     const complete = parseShortFictionBatchDraft(DRAFT_MD, { expectedChapters: CH });
     vi.spyOn(ShortFictionWriterAgent.prototype, "writeDraft").mockResolvedValue(complete);
     vi.spyOn(ShortFictionDraftReviewerAgent.prototype, "reviewDraft").mockResolvedValue("looks fine");
@@ -292,11 +292,11 @@ describe("short fiction resume + failure marker (C2)", () => {
     });
 
     expect(result.packageError).toContain("output limit");
-    await expect(readFile(join(root, "shorts", "elevator", "final", "full.md"), "utf-8"))
+    await expect(readFile(join(root, "works", "elevator", "source", "final", "full.md"), "utf-8"))
       .resolves.toContain("深夜的电梯");
-    await expect(readFile(join(root, "shorts", "elevator", "reviews", "package-warning.md"), "utf-8"))
+    await expect(readFile(join(root, "works", "elevator", "source", "reviews", "package-warning.md"), "utf-8"))
       .resolves.toContain("包装阶段需要重试");
-    const status = JSON.parse(await readFile(join(root, "shorts", "elevator", "status.json"), "utf-8"));
+    const status = JSON.parse(await readFile(join(root, "works", "elevator", "source", "status.json"), "utf-8"));
     expect(status.status).toBe("complete");
     expect(status.observations).toEqual(expect.arrayContaining([
       expect.objectContaining({ metric: "package-generation", severity: "warning" }),
