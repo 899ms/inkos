@@ -4,7 +4,6 @@ import {
   ActionPayloadSchema,
   ActionSourceSchema,
   BookCreationDraftSchema,
-  InteractionIntentTypeSchema,
   ExecutionStatusSchema,
   InteractionSessionSchema,
   PlayModeSchema,
@@ -35,16 +34,6 @@ describe("interaction models", () => {
     expect(AutomationModeSchema.parse("auto")).toBe("auto");
     expect(AutomationModeSchema.parse("semi")).toBe("semi");
     expect(AutomationModeSchema.parse("manual")).toBe("manual");
-  });
-
-  it("parses supported interaction intents", () => {
-    expect(InteractionIntentTypeSchema.parse("develop_book")).toBe("develop_book");
-    expect(InteractionIntentTypeSchema.parse("create_book")).toBe("create_book");
-    expect(InteractionIntentTypeSchema.parse("discard_book_draft")).toBe("discard_book_draft");
-    expect(InteractionIntentTypeSchema.parse("chat")).toBe("chat");
-    expect(InteractionIntentTypeSchema.parse("write_next")).toBe("write_next");
-    expect(InteractionIntentTypeSchema.parse("rewrite_chapter")).toBe("rewrite_chapter");
-    expect(InteractionIntentTypeSchema.parse("explain_failure")).toBe("explain_failure");
   });
 
   it("parses Studio/agent action envelope fields from one shared schema", () => {

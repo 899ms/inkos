@@ -67,6 +67,13 @@ export { createHarnessContextTransform } from "./agent-context.js";
 export { executeExplicitCapabilityTool } from "./explicit-action.js";
 export { createExportBookTool } from "./tools/export-book.js";
 export {
+  assertSafeTruthFileName,
+  createWriteTruthFileTool,
+  createRenameEntityTool,
+  createPatchChapterTextTool,
+  createReplaceChapterTextTool,
+} from "./tools/longform-edits.js";
+export {
   CreativeHarnessRuntime,
   ActionConfirmationRequiredError,
   isActionAuthorized,

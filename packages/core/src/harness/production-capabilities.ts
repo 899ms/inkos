@@ -15,15 +15,12 @@ import {
   createInteractiveFilmCreationTool,
   createLsTool,
   createManageBookReferenceTool,
-  createPatchChapterTextTool,
   createPlayEditTool,
   createPlayReviseTool,
   createPlayStartTool,
   createPlayStepTool,
   createProposeActionTool,
   createReadTool,
-  createRenameEntityTool,
-  createReplaceChapterTextTool,
   createResearchWebTool,
   createResyncChapterStateTool,
   createRetrieveMaterialTool,
@@ -34,8 +31,13 @@ import {
   createSubAgentTool,
   createTranslationCreateTool,
   createImitationBookTool,
-  createWriteTruthFileTool,
 } from "../agent/agent-tools.js";
+import {
+  createPatchChapterTextTool,
+  createRenameEntityTool,
+  createReplaceChapterTextTool,
+  createWriteTruthFileTool,
+} from "./tools/longform-edits.js";
 import { createFilmAuthoringTools, filmLLMDepsFromClient } from "../agent/film-authoring-tools.js";
 import {
   createNarrativeForecastCreateTool,
@@ -57,6 +59,7 @@ import {
   type CapabilityExecutionContext,
 } from "./capability-registry.js";
 import { loadWorkManifest } from "./work-store.js";
+import { syncWorkSourceArtifacts } from "./source-sync.js";
 
 export interface ProductionCapabilityEnvironment {
   readonly pipeline: PipelineRunner;
@@ -184,10 +187,10 @@ export function createProductionCapabilityRegistry(
           workerSkills: environment.workerSkills,
         }),
         createReadTool(environment.projectRoot, { allowSystemPaths: environment.allowSystemFileRead }),
-        createWriteTruthFileTool(environment.pipeline, environment.projectRoot, environment.work.id),
-        createRenameEntityTool(environment.pipeline, environment.projectRoot, environment.work.id),
-        createPatchChapterTextTool(environment.pipeline, environment.projectRoot, environment.work.id),
-        createReplaceChapterTextTool(environment.pipeline, environment.projectRoot, environment.work.id),
+        createWriteTruthFileTool(environment.projectRoot, environment.work.id),
+        createRenameEntityTool(environment.projectRoot, environment.work.id),
+        createPatchChapterTextTool(environment.projectRoot, environment.work.id),
+        createReplaceChapterTextTool(environment.projectRoot, environment.work.id),
         createResyncChapterStateTool(environment.pipeline, environment.work.id, {
           language: lang,
           defaultSkills: environment.profileSkills?.("longform-novel"),
@@ -375,6 +378,9 @@ async function normalizeToolResult(
   collectWorkIds(details, workIds);
   const artifacts: ActionArtifactRef[] = [];
   for (const workId of workIds) {
+    if (await loadKnownWork(context.projectRoot, workId)) {
+      await syncWorkSourceArtifacts({ projectRoot: context.projectRoot, workId });
+    }
     const after = await loadKnownWork(context.projectRoot, workId);
     if (!after) continue;
     const previous = before?.id === workId ? before : null;

@@ -9,14 +9,11 @@ import {
   createGenerateCoverTool,
   createSubAgentTool,
   createShortFictionRunTool,
-  createPatchChapterTextTool,
-  createReplaceChapterTextTool,
   createResyncChapterStateTool,
   createDeleteLatestChapterTool,
   createPlayEditTool,
   createPlayStartTool,
   createProposeActionTool,
-  createRenameEntityTool,
   createScriptCreationTool,
   createStoryboardCreationTool,
   createInteractiveFilmCreationTool,
@@ -24,8 +21,13 @@ import {
   createLsTool,
   createManageBookReferenceTool,
   createWriteFileTool,
-  createWriteTruthFileTool,
 } from "../agent/agent-tools.js";
+import {
+  createPatchChapterTextTool,
+  createReplaceChapterTextTool,
+  createRenameEntityTool,
+  createWriteTruthFileTool,
+} from "../harness/tools/longform-edits.js";
 import { ingestMaterial } from "../materials/ingest.js";
 import { createPlayDB } from "../play/play-db-factory.js";
 import { PlayStore } from "../play/play-store.js";
@@ -90,7 +92,7 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("writes truth files through the deterministic tool path", async () => {
-    const tool = createWriteTruthFileTool({} as never, root, "harbor");
+    const tool = createWriteTruthFileTool(root, "harbor");
 
     const result = await tool.execute("tool-1", {
       fileName: "story_bible.md",
@@ -172,7 +174,7 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("writes role cards through the deterministic truth-file tool path", async () => {
-    const tool = createWriteTruthFileTool({} as never, root, "harbor");
+    const tool = createWriteTruthFileTool(root, "harbor");
 
     const result = await tool.execute("tool-role", {
       fileName: "roles/主要角色/林月.md",
@@ -185,7 +187,7 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("renames entities through the deterministic edit controller", async () => {
-    const tool = createRenameEntityTool({} as never, root, "harbor");
+    const tool = createRenameEntityTool(root, "harbor");
 
     await tool.execute("tool-3", {
       oldValue: "Lin Yue",
@@ -199,7 +201,7 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("patches chapter text through the deterministic edit controller", async () => {
-    const tool = createPatchChapterTextTool({} as never, root, "harbor");
+    const tool = createPatchChapterTextTool(root, "harbor");
 
     await tool.execute("tool-4", {
       chapterNumber: 3,
@@ -221,7 +223,7 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("patches a high-confidence paragraph match when the model paraphrases the target text", async () => {
-    const tool = createPatchChapterTextTool({} as never, root, "harbor");
+    const tool = createPatchChapterTextTool(root, "harbor");
 
     await tool.execute("tool-4-fuzzy", {
       chapterNumber: 3,
@@ -235,7 +237,7 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("replaces whole chapter text through the deterministic edit controller", async () => {
-    const tool = createReplaceChapterTextTool({} as never, root, "harbor");
+    const tool = createReplaceChapterTextTool(root, "harbor");
 
     await tool.execute("tool-4b", {
       chapterNumber: 3,
@@ -1503,7 +1505,7 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("writes Phase 5 outline truth files through write_truth_file", async () => {
-    const tool = createWriteTruthFileTool({} as never, root, "harbor");
+    const tool = createWriteTruthFileTool(root, "harbor");
 
     const result = await tool.execute("tool-truth-outline", {
       fileName: "outline/story_frame.md",
@@ -1516,7 +1518,7 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("writes Phase 5 role truth files through write_truth_file", async () => {
-    const tool = createWriteTruthFileTool({} as never, root, "harbor");
+    const tool = createWriteTruthFileTool(root, "harbor");
 
     const result = await tool.execute("tool-truth-role", {
       fileName: "roles/major/Lin Yan.md",
@@ -1529,17 +1531,12 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("rejects unsafe truth file names", async () => {
-    const tool = createWriteTruthFileTool({} as never, root, "harbor");
+    const tool = createWriteTruthFileTool(root, "harbor");
 
-    const result = await tool.execute("tool-truth-unsafe", {
+    await expect(tool.execute("tool-truth-unsafe", {
       fileName: "../escape.md",
       content: "escape",
-    });
-
-    expect(result.content[0]?.type).toBe("text");
-    if (result.content[0]?.type === "text") {
-      expect(result.content[0].text).toContain("Invalid truth file name");
-    }
+    })).rejects.toThrow("Invalid truth file name");
   });
 
   it("persists Play world, visual, player persona, and entity edits without advancing a turn", async () => {

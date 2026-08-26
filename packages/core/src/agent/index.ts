@@ -1,9 +1,6 @@
 export {
   createSubAgentTool,
   createReadTool,
-  createWriteTruthFileTool,
-  createRenameEntityTool,
-  createPatchChapterTextTool,
   createEditTool,
   createWriteFileTool,
   createShortFictionRunTool,
@@ -26,6 +23,12 @@ export {
   createGrepTool,
   createLsTool,
 } from "./agent-tools.js";
+export {
+  createWriteTruthFileTool,
+  createRenameEntityTool,
+  createPatchChapterTextTool,
+  createReplaceChapterTextTool,
+} from "../harness/tools/longform-edits.js";
 export {
   abortAgentSession,
   runAgentSession,

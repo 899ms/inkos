@@ -239,12 +239,6 @@ export {
   normalizeAutomationMode,
 } from "./interaction/modes.js";
 export {
-  InteractionIntentTypeSchema,
-  type InteractionIntentType,
-  InteractionRequestSchema,
-  type InteractionRequest,
-} from "./interaction/intents.js";
-export {
   ActionSourceSchema,
   ActionPayloadSchema,
   CreateBookActionPayloadSchema,
@@ -363,11 +357,6 @@ export type {
   SessionCreatedEvent,
   SessionMetadataUpdatedEvent,
 } from "./interaction/session-transcript-schema.js";
-export { routeInteractionRequest } from "./interaction/request-router.js";
-export {
-  processProjectInteractionRequest,
-} from "./interaction/project-control.js";
-export { createInteractionToolsFromDeps } from "./interaction/project-tools.js";
 export { buildExportArtifact, writeExportArtifact } from "./interaction/export-artifact.js";
 export {
   normalizeTruthFileName,
@@ -382,11 +371,6 @@ export {
   type ExecutedEditTransaction,
   type PlannedEditTransaction,
 } from "./interaction/edit-controller.js";
-export {
-  runInteractionRequest,
-  type InteractionRuntimeTools,
-  type InteractionRuntimeResult,
-} from "./interaction/runtime.js";
 export {
   parseDraftDirectives,
   createDirectiveStreamFilter,

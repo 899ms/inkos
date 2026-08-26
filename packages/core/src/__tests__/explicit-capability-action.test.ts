@@ -5,11 +5,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CreativeEpisodeStore,
   createExportBookTool,
+  createWriteTruthFileTool,
   createWorkManifest,
   executeExplicitCapabilityTool,
+  loadWorkManifest,
   saveWorkManifest,
+  syncWorkSourceArtifacts,
   workDirectory,
 } from "../harness/index.js";
+import { StateManager } from "../state/manager.js";
 
 describe("explicit capability actions", () => {
   const roots: string[] = [];
@@ -69,5 +73,58 @@ describe("explicit capability actions", () => {
       "episode-completed",
     ]);
     episodes.close();
+  });
+
+  it("refreshes Work artifact revisions after a deterministic edit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-explicit-edit-"));
+    roots.push(root);
+    const work = createWorkManifest({
+      id: "edit-book",
+      title: "Edit Book",
+      profileId: "longform-novel",
+      language: "en",
+    });
+    await saveWorkManifest(root, work);
+    const state = new StateManager(root);
+    await state.saveBookConfig(work.id, {
+      id: work.id,
+      title: work.title,
+      platform: "other",
+      genre: "mystery",
+      status: "active",
+      targetChapters: 20,
+      chapterWordCount: 2000,
+      language: "en",
+      createdAt: work.createdAt,
+      updatedAt: work.updatedAt,
+    });
+    await state.ensureControlDocuments(work.id);
+    await syncWorkSourceArtifacts({ projectRoot: root, workId: work.id });
+
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: {
+        capabilityId: "longform",
+        actionId: "write_truth_file",
+        profileId: "longform-novel",
+      },
+      tool: createWriteTruthFileTool(root, work.id),
+      parameters: {
+        fileName: "current_focus.md",
+        content: "# Current Focus\n\nFollow the missing ledger.\n",
+      },
+      workId: work.id,
+      episodeId: "episode-edit",
+    });
+
+    expect(result.artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ workId: work.id, path: "source/story/current_focus.md" }),
+    ]));
+    const updated = await loadWorkManifest(root, work.id);
+    const focus = updated.artifacts.find((artifact) => (
+      artifact.revisions.some((revision) => revision.path === "source/story/current_focus.md")
+    ));
+    expect(focus?.revisions).toHaveLength(2);
+    expect(focus?.currentRevisionId).toBe(focus?.revisions[1]?.id);
   });
 });
