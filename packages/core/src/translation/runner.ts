@@ -19,6 +19,7 @@ import type {
   TranslationProjectManifest,
   TranslationSegment,
 } from "./types.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 export async function runTranslationProject(
   projectRoot: string,
@@ -28,10 +29,10 @@ export async function runTranslationProject(
     readonly batchSize?: number;
   },
 ): Promise<RunTranslationProjectResult> {
-  const runPath = join("translations", projectId, "status.json");
+  const runPath = join("works", projectId, "source", "status.json");
   const baseArtifacts = [
-    join("translations", projectId, "manifest.json"),
-    join("translations", projectId, "glossary.json"),
+    join("works", projectId, "source", "manifest.json"),
+    join("works", projectId, "source", "glossary.json"),
   ];
   await writeProductionRunSnapshot({
     rootDir: projectRoot,
@@ -126,7 +127,7 @@ export async function runTranslationProject(
     await saveTranslationManifest(projectRoot, manifest);
   }
 
-    const reportPath = `translations/${projectId}/review-report.md`;
+    const reportPath = `works/${projectId}/source/review-report.md`;
     const artifacts = [
       ...baseArtifacts,
       ...manifest.chapters.map((chapter) => chapter.translatedPath),
@@ -148,6 +149,7 @@ export async function runTranslationProject(
         observations: [],
       }),
     });
+    await syncWorkSourceArtifacts({ projectRoot, workId: projectId });
     return {
       projectId,
       translatedSegments,
@@ -168,6 +170,7 @@ export async function runTranslationProject(
         error: error instanceof Error ? error.message : String(error),
       }),
     }).catch(() => undefined);
+    await syncWorkSourceArtifacts({ projectRoot, workId: projectId }).catch(() => undefined);
     throw error;
   }
 }

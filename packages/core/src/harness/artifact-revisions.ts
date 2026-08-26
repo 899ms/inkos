@@ -75,6 +75,41 @@ export async function stageArtifactRevision(input: {
   return { manifest: nextManifest, revision };
 }
 
+export function createAcceptedArtifact(input: {
+  readonly artifactId: string;
+  readonly artifactKind: string;
+  readonly revisionId?: string;
+  readonly path: string;
+  readonly content: string | Uint8Array;
+  readonly contentType: string;
+  readonly createdAt: string;
+  readonly episodeId?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+}): ArtifactManifest {
+  const artifactId = WorkResourceIdSchema.parse(input.artifactId);
+  const artifactKind = HarnessIdSchema.parse(input.artifactKind);
+  const revisionId = HarnessIdSchema.parse(input.revisionId ?? "initial");
+  const bytes = typeof input.content === "string" ? Buffer.from(input.content) : Buffer.from(input.content);
+  const revision = ArtifactRevisionSchema.parse({
+    id: revisionId,
+    parentRevisionId: null,
+    path: input.path,
+    contentType: input.contentType,
+    status: "accepted",
+    checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    byteLength: bytes.byteLength,
+    episodeId: input.episodeId,
+    createdAt: input.createdAt,
+  });
+  return ArtifactManifestSchema.parse({
+    id: artifactId,
+    kind: artifactKind,
+    currentRevisionId: revision.id,
+    revisions: [revision],
+    metadata: input.metadata ?? {},
+  });
+}
+
 export async function promoteArtifactRevision(input: {
   readonly projectRoot: string;
   readonly manifest: WorkManifest;

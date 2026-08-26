@@ -432,6 +432,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     loadTranslationManifest: actual.loadTranslationManifest,
     runTranslationProject: actual.runTranslationProject,
     writeTranslationExport: actual.writeTranslationExport,
+    translationProjectDir: actual.translationProjectDir,
+    listWorkManifests: actual.listWorkManifests,
   };
 });
 

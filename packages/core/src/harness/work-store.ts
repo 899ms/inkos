@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import {
@@ -58,4 +58,28 @@ export async function saveWorkManifest(projectRoot: string, manifest: WorkManife
       content: `${JSON.stringify(parsed, null, 2)}\n`,
     }],
   });
+}
+
+export async function listWorkManifests(
+  projectRoot: string,
+  profileId?: string,
+): Promise<WorkManifest[]> {
+  let entries;
+  try {
+    entries = await readdir(join(projectRoot, WORKS_DIRECTORY), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const works: WorkManifest[] = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const manifest = await loadWorkManifest(projectRoot, entry.name);
+      if (!profileId || manifest.profileId === profileId) works.push(manifest);
+    } catch {
+      // Invalid/incomplete work directories are not listed as usable works.
+    }
+  }
+  return works.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
 }

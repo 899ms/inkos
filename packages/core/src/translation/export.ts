@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { EPub } from "epub-gen-memory";
 import { loadTranslationChapter, loadTranslationManifest, translationProjectDir } from "./run-store.js";
 import type { TranslationExportFormat, TranslationExportResult } from "./types.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 export async function writeTranslationExport(
   projectRoot: string,
@@ -35,6 +36,8 @@ export async function writeTranslationExport(
   } else {
     await writeFile(outputPath, await renderTextExport(projectRoot, projectId, format), "utf-8");
   }
+
+  await syncWorkSourceArtifacts({ projectRoot, workId: projectId });
 
   return {
     outputPath,

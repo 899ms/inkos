@@ -84,10 +84,12 @@ export {
   createWorkManifest,
   loadWorkManifest,
   saveWorkManifest,
+  listWorkManifests,
 } from "./work-store.js";
 export {
   stageArtifactRevision,
   promoteArtifactRevision,
+  createAcceptedArtifact,
 } from "./artifact-revisions.js";
 export {
   scanLegacyWorks,
@@ -95,3 +97,4 @@ export {
   type LegacyMigrationCandidate,
   type LegacyMigrationReport,
 } from "./legacy-migration.js";
+export { syncWorkSourceArtifacts } from "./source-sync.js";

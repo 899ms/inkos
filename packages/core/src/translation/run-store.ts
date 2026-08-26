@@ -6,9 +6,10 @@ import type {
   TranslationProjectManifest,
 } from "./types.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { workDirectory } from "../harness/work-store.js";
 
 export function translationProjectDir(projectRoot: string, projectId: string): string {
-  return join(projectRoot, "translations", projectId);
+  return join(workDirectory(projectRoot, projectId), "source");
 }
 
 export function translationManifestPath(projectRoot: string, projectId: string): string {
@@ -85,7 +86,7 @@ export async function saveTranslationProgress(
         content: `${JSON.stringify(chapter, null, 2)}\n`,
       },
       {
-        relativePath: join("translations", projectId, "glossary.json"),
+        relativePath: join("works", projectId, "source", "glossary.json"),
         content: `${JSON.stringify({ terms: mergeGlossaryTerms(terms) }, null, 2)}\n`,
       },
     ],

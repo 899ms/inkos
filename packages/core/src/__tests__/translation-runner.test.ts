@@ -8,6 +8,7 @@ import {
   writeTranslationExport,
   type TranslationModelPort,
 } from "../translation/index.js";
+import { loadWorkManifest } from "../harness/index.js";
 
 describe("translation runner", () => {
   let root: string;
@@ -54,6 +55,11 @@ describe("translation runner", () => {
     expect(first.translatedSegments).toBe(2);
     expect(first.reviewedChapters).toBe(1);
     expect(translateSegments).toHaveBeenCalledTimes(2);
+    const workAfterRun = await loadWorkManifest(root, created.manifest.id);
+    const translatedArtifact = workAfterRun.artifacts.find((artifact) => (
+      artifact.revisions.some((revision) => revision.path.includes("source/translated/chapter-0001.json"))
+    ));
+    expect(translatedArtifact?.revisions.length).toBeGreaterThan(1);
 
     const report = await readFile(join(root, first.reportPath), "utf-8");
     expect(report).toContain("ok");
@@ -71,5 +77,9 @@ describe("translation runner", () => {
     expect(markdown).toContain("EN:第一段。");
     expect(markdown).toContain("EN:第二段。");
     expect(markdown).not.toContain("\n第一段。\n");
+    const workAfterExport = await loadWorkManifest(root, created.manifest.id);
+    expect(workAfterExport.artifacts.some((artifact) => (
+      artifact.revisions.some((revision) => revision.path.includes("source/exports/"))
+    ))).toBe(true);
   });
 });

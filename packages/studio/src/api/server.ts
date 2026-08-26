@@ -112,6 +112,8 @@ import {
   loadTranslationManifest,
   runTranslationProject,
   writeTranslationExport,
+  translationProjectDir,
+  listWorkManifests,
   filmLLMDepsFromClient,
   applyGraphDelta,
   loadStoryGraph,
@@ -6353,21 +6355,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.get("/api/v1/translations", async (c) => {
-    const translationsDir = join(root, "translations");
-    let entries: string[] = [];
-    try {
-      const dirents = await readdir(translationsDir, { withFileTypes: true });
-      entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
     const translations: Array<{ projectId: string; title: string; sourceLanguage: string; targetLanguage: string; chapters: number }> = [];
-    for (const projectId of entries) {
-      if (!isSafeBookId(projectId)) continue;
+    for (const work of await listWorkManifests(root, "translation")) {
       try {
-        const manifest = await loadTranslationManifest(root, projectId);
+        const manifest = await loadTranslationManifest(root, work.id);
         translations.push({
-          projectId,
+          projectId: work.id,
           title: manifest.title,
           sourceLanguage: manifest.sourceLanguage,
           targetLanguage: manifest.targetLanguage,
@@ -6422,7 +6415,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     try {
       const manifest = await loadTranslationManifest(root, id);
-      const reportPath = join(root, "translations", id, "review-report.md");
+      const reportPath = join(translationProjectDir(root, id), "review-report.md");
       const report = await readFile(reportPath, "utf-8").catch(() => "");
       const chapters = await Promise.all(manifest.chapters.map(async (chapter) => {
         const source = await loadTranslationChapter(root, chapter.sourcePath);

@@ -1,6 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { toPosixPath } from "../utils/posix-path.js";
+import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
+import { createAcceptedArtifact } from "../harness/artifact-revisions.js";
+import { createWorkManifest } from "../harness/work-store.js";
+import { WorkManifestSchema } from "../harness/contracts.js";
 import { extractTranslationSource } from "./source.js";
 import { segmentTranslationText } from "./text.js";
 import type {
@@ -18,17 +21,14 @@ export async function createTranslationProjectFromFile(
   const source = await extractTranslationSource(projectRoot, input);
   const now = new Date().toISOString();
   const id = `${now.replace(/[:.]/g, "-")}-${slug(source.title)}`;
-  const projectDirAbs = join(projectRoot, "translations", id);
-  const sourceDirAbs = join(projectDirAbs, "source");
-  const translatedDirAbs = join(projectDirAbs, "translated");
-  await mkdir(sourceDirAbs, { recursive: true });
-  await mkdir(translatedDirAbs, { recursive: true });
+  const baseDir = join("works", id, "source");
+  const writes: AtomicFileWrite[] = [];
 
   const chapters: TranslationChapterManifest[] = [];
   for (const [index, chapter] of source.chapters.entries()) {
     const number = index + 1;
-    const sourceChapterAbs = join(sourceDirAbs, `chapter-${number.toString().padStart(4, "0")}.json`);
-    const translatedChapterAbs = join(translatedDirAbs, `chapter-${number.toString().padStart(4, "0")}.json`);
+    const sourceChapterPath = join(baseDir, "source", `chapter-${number.toString().padStart(4, "0")}.json`);
+    const translatedChapterPath = join(baseDir, "translated", `chapter-${number.toString().padStart(4, "0")}.json`);
     const segments = segmentTranslationText(chapter.content, input.segmentMaxChars).map((segment, segmentIndex) => ({
       index: segmentIndex + 1,
       source: segment,
@@ -40,13 +40,15 @@ export async function createTranslationProjectFromFile(
       targetLanguage: input.targetLanguage,
       segments,
     };
-    await writeFile(sourceChapterAbs, JSON.stringify(chapterFile, null, 2), "utf-8");
-    await writeFile(translatedChapterAbs, JSON.stringify({ ...chapterFile, segments: [] }, null, 2), "utf-8");
+    writes.push(
+      { relativePath: sourceChapterPath, content: `${JSON.stringify(chapterFile, null, 2)}\n` },
+      { relativePath: translatedChapterPath, content: `${JSON.stringify({ ...chapterFile, segments: [] }, null, 2)}\n` },
+    );
     chapters.push({
       number,
       title: chapter.title,
-      sourcePath: toPosixPath(relative(projectRoot, sourceChapterAbs)),
-      translatedPath: toPosixPath(relative(projectRoot, translatedChapterAbs)),
+      sourcePath: toPosixPath(sourceChapterPath),
+      translatedPath: toPosixPath(translatedChapterPath),
       segmentCount: segments.length,
       charCount: chapter.content.length,
       status: "pending",
@@ -68,16 +70,54 @@ export async function createTranslationProjectFromFile(
     },
     chapters,
   };
-  const manifestPathAbs = join(projectDirAbs, "manifest.json");
-  await writeFile(manifestPathAbs, JSON.stringify(manifest, null, 2), "utf-8");
-  await writeFile(join(projectDirAbs, "glossary.json"), JSON.stringify({ terms: [] }, null, 2), "utf-8");
-  await writeFile(join(projectDirAbs, "review-report.md"), "# Translation Review\n\nPending.\n", "utf-8");
+  const manifestPath = join(baseDir, "manifest.json");
+  const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
+  const glossaryContent = `${JSON.stringify({ terms: [] }, null, 2)}\n`;
+  const reviewContent = "# Translation Review\n\nPending.\n";
+  writes.push(
+    { relativePath: manifestPath, content: manifestContent },
+    { relativePath: join(baseDir, "glossary.json"), content: glossaryContent },
+    { relativePath: join(baseDir, "review-report.md"), content: reviewContent },
+  );
+  const work = createWorkManifest({
+    id,
+    title: manifest.title,
+    profileId: "translation",
+    language: manifest.targetLanguage,
+    now,
+    metadata: { sourceLanguage: manifest.sourceLanguage, targetLanguage: manifest.targetLanguage },
+  });
+  const artifacts = writes.map((write, index) => createAcceptedArtifact({
+    artifactId: `translation-${index + 1}`,
+    artifactKind: translationArtifactKind(write.relativePath),
+    path: toPosixPath(relative(join("works", id), write.relativePath)),
+    content: write.content,
+    contentType: write.relativePath.endsWith(".md") ? "text/markdown" : "application/json",
+    createdAt: now,
+    metadata: { sourcePath: toPosixPath(write.relativePath) },
+  }));
+  const workContent = `${JSON.stringify(WorkManifestSchema.parse({ ...work, artifacts }), null, 2)}\n`;
+  await commitAtomicFileSet({
+    rootDir: projectRoot,
+    writes: [
+      ...writes,
+      { relativePath: join("works", id, "work.json"), content: workContent },
+    ],
+  });
 
   return {
-    projectDir: toPosixPath(relative(projectRoot, projectDirAbs)),
-    manifestPath: toPosixPath(relative(projectRoot, manifestPathAbs)),
+    projectDir: toPosixPath(baseDir),
+    manifestPath: toPosixPath(manifestPath),
     manifest,
   };
+}
+
+function translationArtifactKind(path: string): string {
+  if (path.endsWith("manifest.json")) return "translation-manifest";
+  if (path.endsWith("glossary.json")) return "glossary";
+  if (path.endsWith("review-report.md")) return "review";
+  if (path.includes("/translated/")) return "translation-chapter";
+  return "source-chapter";
 }
 
 function slug(value: string): string {
