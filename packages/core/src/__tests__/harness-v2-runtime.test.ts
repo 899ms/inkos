@@ -111,4 +111,52 @@ describe("v2 creative harness runtime", () => {
       destructiveMutation: "confirm",
     });
   });
+
+  it("serializes mutating actions for the same Work while preserving their order", async () => {
+    const capabilities = new CapabilityRegistry();
+    let active = 0;
+    let maxActive = 0;
+    const order: string[] = [];
+    capabilities.register({
+      id: "longform",
+      title: "Long-form",
+      description: "",
+      actions: [defineCapabilityAction({
+        id: "mutate",
+        title: "Mutate",
+        description: "Mutate the work.",
+        risk: "recoverable-write",
+        parameters: Type.Object({ id: Type.String() }),
+        async execute(_context, input) {
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          order.push(`start:${input.id}`);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          order.push(`end:${input.id}`);
+          active -= 1;
+          return ActionResultSchema.parse({ status: "success", summary: input.id });
+        },
+      })],
+    });
+    const episodes = new CreativeEpisodeStore(":memory:");
+    const profiles = createBuiltInWorkProfileRegistry();
+    const runtime = new CreativeHarnessRuntime("/tmp/serialized", capabilities, profiles, episodes);
+    const work = createWorkManifest({
+      id: "serialized-work",
+      title: "Serialized Work",
+      profileId: "longform-novel",
+      language: "en",
+    });
+    const first = runtime.startEpisode({ episodeId: "episode-serial-1", profileId: "longform-novel", work });
+    const second = runtime.startEpisode({ episodeId: "episode-serial-2", profileId: "longform-novel", work });
+
+    await Promise.all([
+      runtime.executeAction({ handle: first, capabilityId: "longform", actionId: "mutate", parameters: { id: "first" }, source: "agent" }),
+      runtime.executeAction({ handle: second, capabilityId: "longform", actionId: "mutate", parameters: { id: "second" }, source: "agent" }),
+    ]);
+
+    expect(maxActive).toBe(1);
+    expect(order).toEqual(["start:first", "end:first", "start:second", "end:second"]);
+    episodes.close();
+  });
 });

@@ -16,6 +16,8 @@ import { WorkProfileRegistry } from "./profile-registry.js";
 
 export type ActionRequestSource = "agent" | "explicit";
 
+const workMutationQueues = new Map<string, Promise<void>>();
+
 export interface HarnessEpisodeHandle {
   readonly episode: CreativeEpisode;
   readonly profile: WorkProfile;
@@ -95,33 +97,41 @@ export class CreativeHarnessRuntime {
       });
       throw new ActionConfirmationRequiredError(capability.id, action.id, action.risk);
     }
-    if (input.signal?.aborted) throw input.signal.reason;
-    this.episodes.append({
-      episodeId: input.handle.episode.id,
-      workId: input.handle.episode.workId,
-      type: "action-started",
-      capabilityId: capability.id,
-      actionId: action.id,
-      payload: { risk: action.risk, source: input.source },
-    });
-    const context: CapabilityExecutionContext = {
-      projectRoot: this.projectRoot,
-      episodeId: input.handle.episode.id,
-      work: input.handle.work,
-      profile: input.handle.profile,
-      signal: input.signal,
-      onUpdate: input.onUpdate,
-      appendEvent: async (event) => {
-        this.episodes.append(event);
-      },
-    };
     try {
-      const result = await this.capabilities.invoke(
-        capability.id,
-        action.id,
-        context,
-        input.parameters,
-      );
+      const invoke = async () => {
+        if (input.signal?.aborted) throw input.signal.reason;
+        this.episodes.append({
+          episodeId: input.handle.episode.id,
+          workId: input.handle.episode.workId,
+          type: "action-started",
+          capabilityId: capability.id,
+          actionId: action.id,
+          payload: { risk: action.risk, source: input.source },
+        });
+        const context: CapabilityExecutionContext = {
+          projectRoot: this.projectRoot,
+          episodeId: input.handle.episode.id,
+          work: input.handle.work,
+          profile: input.handle.profile,
+          signal: input.signal,
+          onUpdate: input.onUpdate,
+          appendEvent: async (event) => {
+            this.episodes.append(event);
+          },
+        };
+        return this.capabilities.invoke(
+          capability.id,
+          action.id,
+          context,
+          input.parameters,
+        );
+      };
+      const result = action.risk === "read" || !input.handle.work
+        ? await invoke()
+        : await runInWorkMutationQueue(
+            `${this.projectRoot}\0${input.handle.work.id}`,
+            invoke,
+          );
       this.episodes.append({
         episodeId: input.handle.episode.id,
         workId: input.handle.episode.workId,
@@ -161,6 +171,23 @@ export class CreativeHarnessRuntime {
       payload: {},
     }, completedAt);
     return this.episodes.finish(handle.episode.id, status, completedAt);
+  }
+}
+
+async function runInWorkMutationQueue<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const previous = workMutationQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.catch(() => undefined).then(() => gate);
+  workMutationQueues.set(key, queued);
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    release();
+    if (workMutationQueues.get(key) === queued) workMutationQueues.delete(key);
   }
 }
 
