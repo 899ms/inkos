@@ -310,6 +310,22 @@ describe("ArchitectAgent — Phase 5 prose output", () => {
     expect(out.roles?.length).toBeGreaterThan(0);
   });
 
+  it("accepts a complete repaired response when the first SECTION marker follows same-line prose", async () => {
+    const agent = buildAgent();
+    const repaired = SAMPLE_RESPONSE.replace(
+      "=== SECTION: story_frame ===",
+      "已保留原有内容，只补齐缺失部分。=== SECTION: story_frame ===",
+    );
+    vi.spyOn(agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> }, "chat")
+      .mockResolvedValue({ content: repaired, usage: ZERO_USAGE });
+
+    const out = await agent.generateFoundation(baseBook());
+
+    expect(out.storyFrame).toContain("这本书讲的是");
+    expect(out.volumeMap).toBeTruthy();
+    expect(out.roles?.length).toBeGreaterThan(0);
+  });
+
   it("requires at least one of story_frame or legacy story_bible", async () => {
     const agent = buildAgent();
     vi.spyOn(agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> }, "chat")

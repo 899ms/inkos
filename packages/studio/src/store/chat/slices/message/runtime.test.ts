@@ -187,6 +187,24 @@ describe("deriveResolvedProposals", () => {
 });
 
 describe("deserializeMessages", () => {
+  it("restores capability tool names as their user-facing action ids", () => {
+    const messages = deserializeMessages([{
+      role: "assistant",
+      content: "",
+      timestamp: 1,
+      toolExecutions: [exec({
+        id: "architect-1",
+        tool: "longform__sub_agent",
+        agent: "architect",
+      })],
+    } as any]);
+
+    expect(messages[0]?.toolExecutions?.[0]).toMatchObject({
+      tool: "sub_agent",
+      label: "建书",
+    });
+  });
+
   it("restores tool executions from legacyDisplay for tool-only assistant messages", () => {
     const messages = deserializeMessages([
       {

@@ -50,12 +50,24 @@ export function extractErrorMessage(error: string | { code?: string; message?: s
 }
 
 export function resolveToolLabel(tool: string, agent?: string): string {
+  tool = actionToolName(tool);
   if (tool === "sub_agent" && agent) {
     const label = AGENT_LABELS[agent];
     return label ? tr(label[0], label[1]) : agent;
   }
   const label = TOOL_LABELS[tool];
   return label ? tr(label[0], label[1]) : tool;
+}
+
+function actionToolName(tool: string): string {
+  return tool.split("__").at(-1) ?? tool;
+}
+
+function normalizeToolExecution(execution: ToolExecution): ToolExecution {
+  const tool = actionToolName(execution.tool);
+  return tool === execution.tool
+    ? execution
+    : { ...execution, tool, label: resolveToolLabel(tool, execution.agent) };
 }
 
 export function summarizeResult(result: unknown): string {
@@ -163,6 +175,7 @@ export function withToolExecutions(
   executions: ReadonlyArray<ToolExecution>,
 ): Message {
   if (executions.length === 0) return message;
+  executions = executions.map(normalizeToolExecution);
   const existingIds = new Set((message.toolExecutions ?? []).map((execution) => execution.id));
   const missing = executions.filter((execution) => !existingIds.has(execution.id));
   if (missing.length === 0) return message;
@@ -221,7 +234,7 @@ export function deserializeMessages(
       if (message.thinking) parts.push({ type: "thinking", content: message.thinking, streaming: false });
       if (toolExecutions) {
         for (const execution of toolExecutions) {
-          parts.push({ type: "tool", execution });
+          parts.push({ type: "tool", execution: normalizeToolExecution(execution) });
         }
       }
       if (message.content) parts.push({ type: "text", content: message.content });
@@ -229,7 +242,7 @@ export function deserializeMessages(
         role: message.role as "user" | "assistant",
         content: message.content,
         thinking: message.thinking,
-        toolExecutions,
+        toolExecutions: toolExecutions?.map(normalizeToolExecution),
         timestamp: message.timestamp,
         parts: parts.length > 0 ? parts : undefined,
       };
@@ -240,6 +253,7 @@ export function mergeToolExecution(
   messages: ReadonlyArray<Message>,
   execution: ToolExecution,
 ): ReadonlyArray<Message> {
+  execution = normalizeToolExecution(execution);
   let found = false;
   const next = messages.map((message) => {
     const hasDirectExecution = message.toolExecutions?.some((item) => item.id === execution.id) ?? false;

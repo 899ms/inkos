@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { Type } from "@sinclair/typebox";
 import {
   CreativeEpisodeStore,
   createExportBookTool,
@@ -126,6 +127,38 @@ describe("explicit capability actions", () => {
     ));
     expect(focus?.revisions).toHaveLength(2);
     expect(focus?.currentRevisionId).toBe(focus?.revisions[1]?.id);
+  });
+
+  it("records an incomplete architect result as a failed action instead of success", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-explicit-incomplete-"));
+    roots.push(root);
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: {
+        capabilityId: "longform",
+        actionId: "sub_agent",
+        profileId: "longform-novel",
+      },
+      tool: {
+        name: "sub_agent",
+        label: "Create book",
+        description: "Create a book.",
+        parameters: Type.Object({ agent: Type.String() }),
+        async execute() {
+          return {
+            content: [{ type: "text", text: "Foundation incomplete." }],
+            details: { kind: "architect_incomplete", missing: ["story_frame"] },
+          };
+        },
+      } as any,
+      parameters: { agent: "architect" },
+      episodeId: "episode-incomplete",
+    });
+
+    expect(result).toMatchObject({ status: "error", retry: { allowed: true } });
+    const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+    expect(episodes.requireEpisode("episode-incomplete").status).toBe("failed");
+    episodes.close();
   });
 
   it("keeps deleted source history but removes its authoritative current revision", async () => {

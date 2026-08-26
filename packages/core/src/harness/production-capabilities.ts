@@ -434,6 +434,7 @@ async function normalizeToolResult(
 
 function resultStatus(details: unknown): ActionResult["status"] {
   if (!details || typeof details !== "object") return "success";
+  if ("kind" in details && details.kind === "architect_incomplete") return "error";
   const status = "status" in details ? String(details.status) : "";
   if (status === "failed" || status === "error") return "error";
   if (["partial", "incomplete", "audit-failed", "state-degraded"].includes(status)) return "warning";

@@ -747,7 +747,11 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
   }
 
   private parseArchitectSectionMap(content: string): Map<string, string> {
-    const sectionPattern = /^\s{0,3}(?:#{1,6}\s*)?===\s*SECTION\s*[：:]\s*([^\n=]+?)\s*===\s*(?:#+\s*)?$/gim;
+    // The marker itself is the protocol boundary. Some models prepend a short
+    // sentence on the same line before the first marker; do not discard an
+    // otherwise complete foundation only because that sentence lacks a line
+    // break.
+    const sectionPattern = /(?:#{1,6}\s*)?===\s*SECTION\s*[：:]\s*([^\n=]+?)\s*===\s*(?:#+\s*)?/gim;
     const markerMatches = [...content.matchAll(sectionPattern)].map((match) => ({
       name: this.normalizeSectionName(match[1] ?? ""),
       index: match.index ?? 0,

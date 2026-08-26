@@ -62,6 +62,10 @@ function resolveToolLabel(tool: string, agent?: string): string {
   return label ? tr(label[0], label[1]) : tool;
 }
 
+function actionToolName(tool: string): string {
+  return tool.split("__").at(-1) ?? tool;
+}
+
 function compressionLabel(category: ContextCompressionCategory): string {
   return category === "session_context"
     ? tr("整理会话记忆", "Organize session memory")
@@ -212,10 +216,11 @@ export function buildPartsFromEvents(events: StreamEvent[]): MessagePart[] {
       }
 
       case "tool:start": {
+        const tool = actionToolName(event.tool);
         // For pipeline operations (sub_agent), move trailing text to thinking
         // (it's the agent's reasoning before calling the tool, not user-facing content).
         // For utility tools (read/grep/edit/ls), keep text as-is.
-        if (event.tool === "sub_agent") {
+        if (tool === "sub_agent") {
           const last = parts[parts.length - 1];
           if (last?.type === "text" && last.content) {
             parts.pop();
@@ -234,9 +239,9 @@ export function buildPartsFromEvents(events: StreamEvent[]): MessagePart[] {
 
         const exec: ToolExecution = {
           id: event.id,
-          tool: event.tool,
+          tool,
           agent: event.agent,
-          label: resolveToolLabel(event.tool, event.agent),
+          label: resolveToolLabel(tool, event.agent),
           status: "running",
           stages,
           startedAt: Date.now(),
