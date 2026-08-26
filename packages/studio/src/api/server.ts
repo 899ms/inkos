@@ -72,6 +72,7 @@ import {
   mergeActivatedSkillGuidance,
   resolveProfileSkillActivations,
   confirmedCapabilityBinding,
+  capabilityActionId,
   createBuiltInWorkProfileRegistry,
   executeExplicitCapabilityTool,
   createExportBookTool,
@@ -5288,15 +5289,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               }
             }
             if (event.type === "tool_execution_start") {
+              const toolName = capabilityActionId(event.toolName);
               const args = event.args as Record<string, unknown> | undefined;
-              const agent = event.toolName === "sub_agent" ? (args?.agent as string | undefined) : undefined;
+              const agent = toolName === "sub_agent" ? (args?.agent as string | undefined) : undefined;
               const stages = agent ? (pipelineStages(agent, language) ?? []) : [];
 
               collectedToolExecs.push({
                 id: event.toolCallId,
-                tool: event.toolName,
+                tool: toolName,
                 agent,
-                label: resolveToolLabel(event.toolName, agent, language),
+                label: resolveToolLabel(toolName, agent, language),
                 status: "running",
                 args,
                 stages: stages.length > 0
@@ -5305,7 +5307,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 startedAt: Date.now(),
               });
 
-              if (!agentBookId && event.toolName === "sub_agent" && agent === "architect") {
+              if (!agentBookId && toolName === "sub_agent" && agent === "architect") {
                 const bookId = resolveArchitectBookIdFromArgs(args);
                 if (bookId) {
                   const title = typeof args?.title === "string" && args.title.trim()
@@ -5319,7 +5321,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               broadcast("tool:start", {
                 sessionId: streamSessionId,
                 id: event.toolCallId,
-                tool: event.toolName,
+                tool: toolName,
                 args,
                 stages,
               });

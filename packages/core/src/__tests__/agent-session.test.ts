@@ -112,6 +112,10 @@ vi.mock("@mariozechner/pi-ai", async () => {
                 title: "生成短篇",
                 summary: "确认后生成一篇短篇。",
                 instruction: "生成一篇短篇。",
+                shortRun: {
+                  title: "雨夜回信",
+                  direction: "雨夜里迟到十年的回信改变了一段亲情。",
+                },
               },
             },
           ], timestamp)
@@ -127,6 +131,19 @@ vi.mock("@mariozechner/pi-ai", async () => {
               id: "skill-1",
               name: "workspace__use_skill",
               arguments: { skillId: "specialist-skill" },
+            },
+          ], timestamp)
+        : prompt === "propose invalid short"
+        ? assistant([
+            {
+              type: "toolCall",
+              id: "proposal-invalid-1",
+              name: "workspace__propose_action",
+              arguments: {
+                action: "short_run",
+                title: "生成短篇",
+                summary: "确认后生成一篇短篇。",
+              },
             },
           ], timestamp)
         : prompt === "revise play"
@@ -1037,6 +1054,23 @@ describe("runAgentSession cache — bookId switch", () => {
         expect.objectContaining({ role: "toolResult", toolName: "workspace__propose_action" }),
       ]),
     );
+  });
+
+  it("lets Pi repair an invalid propose_action call instead of terminating the turn", async () => {
+    const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
+    const pipeline = {} as any;
+
+    const result = await runAgentSession(
+      { sessionId: "proposal-repair-session", bookId: null, sessionKind: "short", language: "zh", pipeline, projectRoot, model },
+      "propose invalid short",
+    );
+
+    expect(streamCalls).toHaveLength(2);
+    expect(result.responseText).toBe("ok");
+    expect(result.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "toolResult", toolName: "workspace__propose_action", isError: true }),
+    ]));
+    evictAgentCache("proposal-repair-session");
   });
 
   it("exposes only architect in confirmed no-book creation sessions", async () => {

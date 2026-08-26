@@ -29,16 +29,16 @@ export interface CreateCapabilityPiToolsOptions {
 
 export function createCapabilityPiTools(
   options: CreateCapabilityPiToolsOptions,
-): ReadonlyArray<AgentTool<TSchema, ActionResult>> {
+): ReadonlyArray<AgentTool<TSchema, unknown>> {
   return options.registry.forProfile(options.profile).flatMap((capability) => (
     capability.actions
       .filter((action) => options.includeAction?.(capability.id, action) ?? true)
-      .map((action): AgentTool<TSchema, ActionResult> => ({
+      .map((action): AgentTool<TSchema, unknown> => ({
       name: capabilityToolName(capability.id, action.id),
       label: action.title,
       description: action.description,
       parameters: action.parameters,
-      async execute(toolCallId, params, signal, onUpdate): Promise<AgentToolResult<ActionResult>> {
+      async execute(toolCallId, params, signal, onUpdate): Promise<AgentToolResult<unknown>> {
         if (signal?.aborted) throw signal.reason;
         const result = await options.executeAction(
           capability.id,
@@ -53,7 +53,11 @@ export function createCapabilityPiTools(
         }
         return {
           content: [{ type: "text", text: renderActionResultForAgent(result) }],
-          details: result,
+          // Studio renders domain-owned result cards (proposed_action, play
+          // scene, chapter revision, etc.). The harness ActionResult remains
+          // authoritative in the Episode ledger; Pi events expose its domain
+          // payload when one exists.
+          details: result.data ?? result,
         };
       },
       }))
@@ -73,6 +77,11 @@ export class CapabilityActionError extends Error {
 
 export function capabilityToolName(capabilityId: string, actionId: string): string {
   return `${capabilityId}__${actionId}`;
+}
+
+export function capabilityActionId(toolName: string): string {
+  const separator = toolName.indexOf("__");
+  return separator >= 0 ? toolName.slice(separator + 2) : toolName;
 }
 
 function renderActionResultForAgent(result: ActionResult): string {

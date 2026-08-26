@@ -255,6 +255,7 @@ describe("v2 harness contracts", () => {
             artifacts: [],
             observations: [],
             nextActions: [],
+            data: { kind: "inspection", topic: input.topic },
           });
         },
       })],
@@ -286,7 +287,7 @@ describe("v2 harness contracts", () => {
     await expect(tools[0]!.execute("call-1", { topic: "outline" }))
       .resolves.toMatchObject({
         content: [{ type: "text", text: "Inspected outline" }],
-        details: { status: "success", summary: "Inspected outline" },
+        details: { kind: "inspection", topic: "outline" },
       });
   });
 });

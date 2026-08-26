@@ -56,6 +56,14 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
     });
     const proposeBody = await propose.clone().json();
     expect(propose.status, JSON.stringify(proposeBody)).toBe(200);
+    expect(proposeBody.details?.toolExecutions?.[0]).toMatchObject({
+      tool: "propose_action",
+      status: "completed",
+      details: {
+        kind: "proposed_action",
+        action: "draft_structure",
+      },
+    });
 
     // Step 2: confirm the proposed action → executeConfirmedProductionAction runs draft_structure
     // stubChatCompletion returns STRUCTURE_JSON (4 nodes) when prompt mentions "骨架/nodes/结构"

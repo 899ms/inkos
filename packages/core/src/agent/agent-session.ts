@@ -23,6 +23,7 @@ import {
   confirmedCapabilityBinding,
   createBuiltInWorkProfileRegistry,
   createCapabilityPiTools,
+  capabilityActionId,
   createHarnessContextTransform,
   resolveSessionHarnessBinding,
   createProductionCapabilityRegistry,
@@ -381,7 +382,7 @@ function localAssistantStopStream(model: Model<Api>): AssistantMessageEventStrea
 
 export function isTerminalProductionToolName(toolName: unknown): boolean {
   if (typeof toolName !== "string") return false;
-  const actionName = toolName.includes("__") ? toolName.split("__").at(-1)! : toolName;
+  const actionName = capabilityActionId(toolName);
   return actionName === "propose_action"
     || actionName === "sub_agent"
     || actionName === "resync_chapter_state"
@@ -417,7 +418,17 @@ function hasUnansweredTerminalToolResult(messages: AgentMessage[]): boolean {
       continue;
     }
     if (role !== "toolResult") continue;
-    const toolName = (message as { toolName?: unknown }).toolName;
+    const toolResult = message as { toolName?: unknown; isError?: unknown };
+    const toolName = toolResult.toolName;
+    if (
+      typeof toolName === "string"
+      && capabilityActionId(toolName) === "propose_action"
+      && toolResult.isError === true
+    ) {
+      // A proposal has no production side effect. Let Pi repair malformed
+      // structured arguments instead of terminating on validation failure.
+      return false;
+    }
     if (isTerminalProductionToolName(toolName)) {
       return !assistantTextAfterTool;
     }

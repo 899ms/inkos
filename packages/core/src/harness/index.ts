@@ -48,6 +48,7 @@ export {
 export { CreativeEpisodeStore } from "./episode-store.js";
 export {
   createCapabilityPiTools,
+  capabilityActionId,
   capabilityToolName,
   CapabilityActionError,
   type CreateCapabilityPiToolsOptions,
