@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStudioServer } from "../api/server.js";
-import { createAndPersistBookSession, loadStoryGraph } from "@actalk/inkos-core";
+import { createAndPersistBookSession, createWorkManifest, loadStoryGraph, saveWorkManifest } from "@actalk/inkos-core";
 
 const INKOS_CONFIG = JSON.stringify({
   name: "test-project",
@@ -25,6 +25,12 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
     root = await mkdtemp(join(tmpdir(), "if-confirm-"));
     await writeFile(join(root, "inkos.json"), INKOS_CONFIG, "utf-8");
     await mkdir(join(root, "works", "p", "source"), { recursive: true });
+    await saveWorkManifest(root, createWorkManifest({
+      id: "p",
+      title: "Test Film",
+      profileId: "interactive-film",
+      language: "zh",
+    }));
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -48,7 +54,8 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
         sessionId,
       }),
     });
-    expect(propose.status).toBe(200);
+    const proposeBody = await propose.clone().json();
+    expect(propose.status, JSON.stringify(proposeBody)).toBe(200);
 
     // Step 2: confirm the proposed action → executeConfirmedProductionAction runs draft_structure
     // stubChatCompletion returns STRUCTURE_JSON (4 nodes) when prompt mentions "骨架/nodes/结构"

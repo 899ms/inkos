@@ -36,15 +36,18 @@ function alreadyProposed(
   context: { messages?: Array<{ role: string; content: unknown; toolName?: string }> },
 ): boolean {
   return (context.messages ?? []).some((m) => {
+    const isProposalTool = (name: unknown) => (
+      typeof name === "string" && (name === "workspace__propose_action" || name.endsWith("__propose_action"))
+    );
     // Agent format (non-openai-completions): role="toolResult" with toolName
-    if (m.role === "toolResult" && (m as { toolName?: string }).toolName === "propose_action") {
+    if (m.role === "toolResult" && isProposalTool((m as { toolName?: string }).toolName)) {
       return true;
     }
     // LLM format (openai-completions): assistant message with toolCall content
     if (m.role === "assistant" && Array.isArray(m.content)) {
       if (
         (m.content as Array<{ type: string; name?: string }>).some(
-          (c) => c.type === "toolCall" && c.name === "propose_action",
+          (c) => c.type === "toolCall" && isProposalTool(c.name),
         )
       ) {
         return true;
@@ -52,7 +55,7 @@ function alreadyProposed(
     }
     // LLM format (openai-completions folded): tool result folded into user message string
     if (m.role === "user" && typeof m.content === "string") {
-      if (/- propose_action \(/.test(m.content as string)) {
+      if (/- (?:workspace__)?propose_action \(/.test(m.content as string)) {
         return true;
       }
     }
@@ -81,7 +84,7 @@ export function stubAgentStream(model: Model<Api>, context: unknown): AssistantM
         {
           type: "toolCall" as const,
           id: "stub-draft",
-          name: "propose_action",
+          name: "workspace__propose_action",
           arguments: {
             action: "draft_structure",
             title: "搭建结构",

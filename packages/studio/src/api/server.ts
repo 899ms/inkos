@@ -4876,7 +4876,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const boundWork = candidateWorkId
         ? await loadWorkManifest(root, candidateWorkId).catch(() => null)
         : null;
-      if (candidateWorkId && !boundWork) {
+      if (candidateWorkId && !boundWork && sessionKind !== "play") {
         throw new ApiError(404, "WORK_NOT_FOUND", `Work not found: ${candidateWorkId}`);
       }
       const requestedProfileId = typeof reqProfileId === "string" && reqProfileId.trim()
