@@ -41,7 +41,11 @@ interface RevisionPayload {
   readonly dataUrl?: string;
 }
 
-export function WorkInspector({ workId, onBack }: { readonly workId: string; readonly onBack: () => void }) {
+export function WorkInspector({ workId, onBack, onChat }: {
+  readonly workId: string;
+  readonly onBack: () => void;
+  readonly onChat: (workId: string, profileId: string) => void;
+}) {
   const { data, loading, error, refetch } = useApi<WorkDetail>(`/works/${encodeURIComponent(workId)}`);
   const [selected, setSelected] = useState<RevisionPayload | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -93,6 +97,9 @@ export function WorkInspector({ workId, onBack }: { readonly workId: string; rea
           <span>{data.work.id}</span><span>·</span><span>{data.work.language}</span><span>·</span><span>{data.work.status}</span>
           <span>·</span><span>{data.work.artifacts.length} {tr("项生成物", "artifacts")}</span>
         </div>
+        <button type="button" onClick={() => onChat(data.work.id, data.work.profileId)} className="mt-6 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">
+          {tr("与 Agent 继续创作", "Continue with Agent")}
+        </button>
       </header>
 
       <section>

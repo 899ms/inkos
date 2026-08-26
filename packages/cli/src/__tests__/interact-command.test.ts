@@ -7,6 +7,7 @@ const {
   findProjectRootMock,
   loadConfigMock,
   runAgentSessionMock,
+  loadWorkManifestMock,
 } = vi.hoisted(() => ({
   buildPipelineConfigMock: vi.fn(() => ({})),
   createClientMock: vi.fn(() => ({
@@ -37,6 +38,7 @@ const {
     responseText: "Agent response.",
     messages: [{ role: "assistant", content: "Agent response." }],
   })),
+  loadWorkManifestMock: vi.fn(async () => ({ id: "script-work", profileId: "script" })),
 }));
 
 vi.mock("@actalk/inkos-core", async () => ({
@@ -44,6 +46,7 @@ vi.mock("@actalk/inkos-core", async () => ({
     constructor(_config: unknown) {}
   },
   runAgentSession: runAgentSessionMock,
+  loadWorkManifest: loadWorkManifestMock,
 }));
 
 vi.mock("../utils.js", () => ({
@@ -122,6 +125,22 @@ describe("interact command", () => {
         actionSource: "free-text",
       }),
       "why did it stop?",
+    );
+  });
+
+  it("binds arbitrary Works to their Pi profile", async () => {
+    const command = createInteractCommand({ readInput: async () => "" });
+    await command.parseAsync(["revise scene two", "--work", "script-work"], { from: "user" });
+
+    expect(loadWorkManifestMock).toHaveBeenCalledWith("/tmp/inkos-project", "script-work");
+    expect(runAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bookId: null,
+        sessionKind: "work",
+        profileId: "script",
+        workId: "script-work",
+      }),
+      "revise scene two",
     );
   });
 });

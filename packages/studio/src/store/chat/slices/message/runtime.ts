@@ -186,6 +186,8 @@ export function createSessionRuntime(input: {
   sessionId: string;
   bookId: string | null;
   sessionKind?: SessionRuntime["sessionKind"];
+  profileId?: string;
+  workId?: string | null;
   playMode?: SessionRuntime["playMode"];
   title: string | null;
   messages?: ReadonlyArray<Message>;
@@ -195,6 +197,8 @@ export function createSessionRuntime(input: {
     sessionId: input.sessionId,
     bookId: input.bookId,
     sessionKind: input.sessionKind,
+    profileId: input.profileId,
+    workId: input.workId,
     playMode: input.playMode,
     title: input.title,
     messages: input.messages ?? [],
@@ -442,7 +446,7 @@ export function updateSession(
 
 export function upsertSessionSummary(
   sessions: Record<string, SessionRuntime>,
-  summary: Pick<SessionSummary, "sessionId" | "bookId" | "sessionKind" | "playMode" | "title">,
+  summary: Pick<SessionSummary, "sessionId" | "bookId" | "sessionKind" | "profileId" | "workId" | "playMode" | "title">,
 ): Record<string, SessionRuntime> {
   const existing = sessions[summary.sessionId];
   return {
@@ -452,6 +456,8 @@ export function upsertSessionSummary(
           ...existing,
           bookId: summary.bookId,
           sessionKind: summary.sessionKind ?? existing.sessionKind,
+          profileId: summary.profileId ?? existing.profileId,
+          workId: summary.workId ?? existing.workId,
           playMode: summary.playMode ?? existing.playMode,
           title: summary.title,
         }

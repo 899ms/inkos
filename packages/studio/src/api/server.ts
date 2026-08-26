@@ -4777,6 +4777,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId: reqSessionId,
       clientRequestId: reqClientRequestId,
       sessionKind: reqSessionKind,
+      profileId: reqProfileId,
+      workId: reqWorkId,
       actionSource: reqActionSource,
       requestedIntent: reqRequestedIntent,
       actionPayload: reqActionPayload,
@@ -4792,6 +4794,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId?: string;
       clientRequestId?: unknown;
       sessionKind?: string;
+      profileId?: string;
+      workId?: string | null;
       actionSource?: string;
       requestedIntent?: string;
       actionPayload?: unknown;
@@ -4861,11 +4865,29 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         bookId: agentBookId,
         sessionId: bookSession.sessionId,
       });
-      const boundWork = surfaceBinding.workId
-        ? await loadWorkManifest(root, surfaceBinding.workId).catch(() => null)
+      const requestedWorkId = reqWorkId === null
+        ? null
+        : typeof reqWorkId === "string" && reqWorkId.trim()
+          ? normalizeApiBookId(reqWorkId, "workId")
+          : undefined;
+      const candidateWorkId = reqWorkId === null
+        ? null
+        : requestedWorkId ?? bookSession.workId ?? surfaceBinding.workId;
+      const boundWork = candidateWorkId
+        ? await loadWorkManifest(root, candidateWorkId).catch(() => null)
         : null;
-      const profileId = boundWork?.profileId ?? surfaceBinding.profileId;
-      const workId = boundWork?.id ?? surfaceBinding.workId;
+      if (candidateWorkId && !boundWork) {
+        throw new ApiError(404, "WORK_NOT_FOUND", `Work not found: ${candidateWorkId}`);
+      }
+      const requestedProfileId = typeof reqProfileId === "string" && reqProfileId.trim()
+        ? reqProfileId.trim()
+        : undefined;
+      if (boundWork && requestedProfileId && boundWork.profileId !== requestedProfileId) {
+        throw new ApiError(409, "WORK_PROFILE_MISMATCH", `Work ${boundWork.id} uses ${boundWork.profileId}, not ${requestedProfileId}`);
+      }
+      const profileId = boundWork?.profileId ?? requestedProfileId ?? bookSession.profileId ?? surfaceBinding.profileId;
+      const workId = boundWork?.id ?? candidateWorkId;
+      createBuiltInWorkProfileRegistry().require(profileId);
       if (
         bookSession.sessionKind !== sessionKind
         || (playMode && bookSession.playMode !== playMode)

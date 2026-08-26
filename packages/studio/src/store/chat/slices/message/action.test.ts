@@ -58,6 +58,39 @@ describe("chat message actions", () => {
     (globalThis as any).EventSource = originalEventSource;
   });
 
+  it("creates a session bound to a non-book Work profile", async () => {
+    const store = createTestStore();
+    fetchJson.mockResolvedValueOnce({
+      session: {
+        sessionId: "work-session",
+        bookId: null,
+        sessionKind: "work",
+        profileId: "script",
+        workId: "script-work",
+        title: null,
+      },
+    });
+
+    const sessionId = await store.getState().createSession(null, "work", undefined, {
+      profileId: "script",
+      workId: "script-work",
+    });
+
+    expect(sessionId).toBe("work-session");
+    expect(fetchJson).toHaveBeenCalledWith("/sessions", expect.objectContaining({
+      body: JSON.stringify({
+        bookId: null,
+        sessionKind: "work",
+        profileId: "script",
+        workId: "script-work",
+      }),
+    }));
+    expect(store.getState().sessions[sessionId]).toMatchObject({
+      profileId: "script",
+      workId: "script-work",
+    });
+  });
+
   it("aborts only the previous chat round when activating another session", async () => {
     const store = createTestStore();
     const previousId = store.getState().createDraftSession(null, "chat");

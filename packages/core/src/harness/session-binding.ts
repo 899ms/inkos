@@ -2,6 +2,7 @@ import type { SessionKind } from "../interaction/session.js";
 
 const PROFILE_ID_BY_SESSION_KIND: Readonly<Record<SessionKind, string>> = {
   chat: "workspace-default",
+  work: "workspace-default",
   "book-create": "longform-novel",
   book: "longform-novel",
   edit: "longform-novel",

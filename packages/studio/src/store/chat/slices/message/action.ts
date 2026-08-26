@@ -233,12 +233,12 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     }
   },
 
-  createSession: async (bookId, sessionKind, playMode) => {
+  createSession: async (bookId, sessionKind, playMode, binding) => {
     abortPreviousChatRound(null);
     const data = await fetchJson<SessionResponse>("/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bookId, sessionKind, playMode }),
+      body: JSON.stringify({ bookId, sessionKind, playMode, ...binding }),
     });
     const sessionId = data.session?.sessionId;
     if (!sessionId) {
@@ -250,6 +250,8 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         sessionId,
         bookId: data.session?.bookId ?? bookId ?? null,
         sessionKind: data.session?.sessionKind ?? sessionKind,
+        profileId: data.session?.profileId ?? binding?.profileId,
+        workId: data.session?.workId ?? binding?.workId,
         playMode: data.session?.playMode,
         title: data.session?.title ?? null,
       });
@@ -272,7 +274,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     return sessionId;
   },
 
-  createDraftSession: (bookId, sessionKind, playMode) => {
+  createDraftSession: (bookId, sessionKind, playMode, binding) => {
     abortPreviousChatRound(null);
     // 前端生成 sessionId（与后端 createBookSession 同格式），暂不持久化到磁盘，
     // 也暂不写入 sessionIdsByBook——侧边栏看不到这条 draft。
@@ -284,6 +286,8 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         sessionId,
         bookId,
         sessionKind,
+        profileId: binding?.profileId,
+        workId: binding?.workId,
         playMode,
         title: null,
         isDraft: true,
@@ -416,11 +420,15 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
                 sessionId: detailSessionId,
                 bookId: nextBookId,
                 sessionKind: detail.sessionKind,
+                profileId: detail.profileId,
+                workId: detail.workId,
                 playMode: detail.playMode,
                 title: detail.title ?? null,
               })),
               bookId: nextBookId,
               sessionKind: detail.sessionKind ?? runtime?.sessionKind,
+              profileId: detail.profileId ?? runtime?.profileId,
+              workId: detail.workId ?? runtime?.workId,
               playMode: detail.playMode ?? runtime?.playMode,
               title: detail.title ?? runtime?.title ?? null,
               messages: nextMessages,
@@ -474,6 +482,8 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       ?? session.sessionKind
       ?? (activeBookId ? "book" : "chat");
     const actionSource = options?.actionSource ?? "free-text";
+    const profileId = options?.profileId ?? session.profileId;
+    const workId = options?.workId ?? session.workId;
     const playMode = options?.playMode ?? session.playMode;
     // 确认式生产任务的发送轮不是"聊天轮"：请求会挂起到任务结束，
     // 期间用户仍可继续聊天，所以不置 isChatStreaming。
@@ -504,12 +514,12 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         await fetchJson<SessionResponse>("/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, bookId: session.bookId, sessionKind, playMode }),
+          body: JSON.stringify({ sessionId, bookId: session.bookId, sessionKind, playMode, profileId, workId }),
         });
         // 落盘成功：把 isDraft 翻成 false，同时把 sessionId 追加进 sessionIdsByBook
         // 让侧边栏现在才看到这条会话。
         set((state) => ({
-          sessions: updateSession(state.sessions, sessionId, () => ({ isDraft: false, sessionKind, playMode })),
+          sessions: updateSession(state.sessions, sessionId, () => ({ isDraft: false, sessionKind, profileId, workId, playMode })),
           sessionIdsByBook: {
             ...state.sessionIdsByBook,
             [bookKey(session.bookId)]: mergeSessionIds(
@@ -564,6 +574,8 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           instruction,
           activeBookId,
           sessionKind,
+          profileId,
+          workId,
           playMode,
           actionSource,
           requestedIntent: options?.requestedIntent,
@@ -583,7 +595,9 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       const responseToolExecutions = data.details?.toolExecutions ?? [];
       const responseBookId = data.session?.activeBookId ?? data.session?.bookId;
       const responseSessionKind = data.session?.sessionKind;
-      if (responseBookId || responseSessionKind || data.session?.title || data.session?.playMode) {
+      const responseProfileId = data.session?.profileId;
+      const responseWorkId = data.session?.workId;
+      if (responseBookId || responseSessionKind || responseProfileId || responseWorkId !== undefined || data.session?.title || data.session?.playMode) {
         set((state) => {
           const runtime = state.sessions[sessionId];
           if (!runtime) return {};
@@ -592,6 +606,8 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
             sessions: updateSession(state.sessions, sessionId, () => ({
               bookId: nextBookId,
               sessionKind: responseSessionKind ?? runtime.sessionKind,
+              profileId: responseProfileId ?? runtime.profileId,
+              workId: responseWorkId ?? runtime.workId,
               playMode: data.session?.playMode ?? runtime.playMode,
               title: data.session?.title ?? runtime.title,
             })),

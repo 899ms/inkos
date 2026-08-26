@@ -3472,6 +3472,57 @@ describe("createStudioServer daemon lifecycle", () => {
     );
   });
 
+  it("binds a generic Studio Work chat to its authoritative Pi profile", async () => {
+    const workDir = testWorkDirectory(root, "studio-script");
+    await mkdir(join(workDir, "source"), { recursive: true });
+    await writeFile(join(workDir, "source", "script.md"), "# Script\n");
+    const { createWorkManifest, saveWorkManifest, syncWorkSourceArtifacts } = await import("@actalk/inkos-core");
+    await saveWorkManifest(root, createWorkManifest({
+      id: "studio-script",
+      title: "Studio Script",
+      profileId: "script",
+      language: "en",
+    }));
+    await syncWorkSourceArtifacts({ projectRoot: root, workId: "studio-script" });
+    loadBookSessionMock.mockResolvedValue({
+      sessionId: "work-chat-session",
+      bookId: null,
+      sessionKind: "work",
+      profileId: "script",
+      workId: "studio-script",
+      title: null,
+      messages: [],
+      events: [],
+      draftRounds: [],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "Revise the second scene.",
+        sessionId: "work-chat-session",
+        sessionKind: "work",
+        profileId: "script",
+        workId: "studio-script",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(runAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bookId: null,
+        sessionKind: "work",
+        profileId: "script",
+        workId: "studio-script",
+      }),
+      "Revise the second scene.",
+    );
+  });
+
   it("stores uploaded attachments and forwards them to the agent session", async () => {
     const note = Buffer.from("# 参考资料\n主角必须保留第一人称。", "utf-8").toString("base64");
     const image = Buffer.from("fakepng", "utf-8").toString("base64");

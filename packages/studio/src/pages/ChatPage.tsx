@@ -81,7 +81,9 @@ interface Nav {
 
 export interface ChatPageProps {
   readonly activeBookId?: string;
-  readonly mode?: "book" | "book-create" | "project-chat" | "interactive-film-authoring";
+  readonly activeWorkId?: string;
+  readonly workProfileId?: string;
+  readonly mode?: "book" | "work" | "book-create" | "project-chat" | "interactive-film-authoring";
   readonly nav: Nav;
   readonly theme: Theme;
   readonly t: TFunction;
@@ -295,7 +297,7 @@ function SkillPickerPanel({
 
 // -- Component --
 
-export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse: _sse }: ChatPageProps) {
+export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse: _sse }: ChatPageProps) {
   // -- Store selectors --
   const messages = useChatStore(chatSelectors.activeMessages);
   const activeSession = useChatStore(chatSelectors.activeSession);
@@ -329,6 +331,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const hasBook = Boolean(activeBookId);
   const currentSessionKind: ChatSessionKind = activeSession?.sessionKind
     ?? (mode === "interactive-film-authoring" ? "interactive-film-authoring"
+      : mode === "work" ? "work"
       : mode === "book-create" ? "book-create"
       : activeBookId ? "book" : "chat");
   const playMode = activeSession?.playMode;
@@ -504,6 +507,16 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     let cancelled = false;
 
     void (async () => {
+      if (mode === "work" && activeWorkId && workProfileId) {
+        const state = useChatStore.getState();
+        const currentSession = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
+        if (currentSession?.workId === activeWorkId && currentSession.profileId === workProfileId) {
+          if (!currentSession.isDraft) await loadSessionDetail(currentSession.sessionId);
+          return;
+        }
+        await createSession(null, "work", undefined, { workId: activeWorkId, profileId: workProfileId });
+        return;
+      }
       if (!activeBookId && mode === "project-chat") {
         const state = useChatStore.getState();
         const currentSession = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
@@ -574,7 +587,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     return () => {
       cancelled = true;
     };
-  }, [activeBookId, activateSession, createSession, loadSessionDetail, loadSessionList, mode]);
+  }, [activeBookId, activeWorkId, activateSession, createSession, loadSessionDetail, loadSessionList, mode, workProfileId]);
 
   const addAttachedFiles = (files: FileList | File[]) => {
     const incoming = Array.from(files);
@@ -610,6 +623,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     await sendMessage(activeSessionId, text, {
       activeBookId,
       sessionKind: currentSessionKind,
+      profileId: activeSession?.profileId,
+      workId: activeSession?.workId,
       actionSource: "free-text",
       requestedSkills,
       attachments,
@@ -643,6 +658,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     void sendMessage(activeSessionId, command, {
       activeBookId,
       sessionKind: currentSessionKind,
+      profileId: activeSession?.profileId,
+      workId: activeSession?.workId,
       actionSource: "quick-action",
       requestedIntent,
     });
@@ -659,6 +676,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       await sendMessage(activeSessionId, details.instruction ?? "", {
         activeBookId,
         sessionKind: details.targetSessionKind,
+        profileId: activeSession?.profileId,
+        workId: activeSession?.workId,
         playMode: targetPlayMode,
         actionSource: "button",
         requestedIntent: details.action,

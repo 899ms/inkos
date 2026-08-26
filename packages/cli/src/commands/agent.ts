@@ -1,11 +1,12 @@
 import { Command } from "commander";
-import { PipelineRunner, runAgentSession } from "@actalk/inkos-core";
+import { loadWorkManifest, PipelineRunner, runAgentSession } from "@actalk/inkos-core";
 import { buildPipelineConfig, loadConfig, createClient, findProjectRoot, resolveBookId, resolveContext, log, logError } from "../utils.js";
 
 export const agentCommand = new Command("agent")
   .description("Natural language agent mode (LLM orchestrates via tool-use)")
   .argument("<instruction>", "Natural language instruction")
   .option("--book <bookId>", "Bind this request to an existing book")
+  .option("--work <workId>", "Bind this request to any existing creative Work")
   .option("--session <sessionId>", "Reuse an agent session id")
   .option("--context <text>", "Additional context (natural language)")
   .option("--context-file <path>", "Read additional context from file")
@@ -23,6 +24,8 @@ export const agentCommand = new Command("agent")
         : instruction;
 
       const bookId = opts.book ? await resolveBookId(opts.book, root) : null;
+      if (opts.book && opts.work) throw new Error("Use either --book or --work, not both.");
+      const work = opts.work ? await loadWorkManifest(root, String(opts.work).trim()) : null;
       const trimmed = fullInstruction.trim();
       const actionSource = trimmed.startsWith("/") ? "slash" : "free-text";
       const requestedIntent = bookId && trimmed === "/write"
@@ -30,7 +33,9 @@ export const agentCommand = new Command("agent")
         : !bookId && trimmed === "/create"
           ? "create_book"
           : undefined;
-      const sessionKind = bookId
+      const sessionKind = work
+        ? "work"
+        : bookId
         ? "book"
         : requestedIntent === "create_book"
           ? "book-create"
@@ -46,6 +51,7 @@ export const agentCommand = new Command("agent")
           sessionId,
           bookId,
           sessionKind,
+          ...(work ? { profileId: work.profileId, workId: work.id } : {}),
           actionSource,
           requestedIntent,
           language: config.language ?? "zh",

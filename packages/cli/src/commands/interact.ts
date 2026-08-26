@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import {
   PipelineRunner,
+  loadWorkManifest,
   runAgentSession,
 } from "@actalk/inkos-core";
 import { buildPipelineConfig, createClient, findProjectRoot, loadConfig } from "../utils.js";
@@ -51,6 +52,7 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
     .argument("[message...]", "Natural-language message")
     .option("--message <text>", "Explicit natural-language message")
     .option("--book <bookId>", "Bind a specific active book for this interaction")
+    .option("--work <workId>", "Bind any existing creative Work for this interaction")
     .option("--session <sessionId>", "Reuse an agent session id")
     .option("--json", "Emit structured JSON for external agents")
     .action(async (messageArgs: ReadonlyArray<string>, opts) => {
@@ -59,6 +61,10 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
       const config = await loadConfig({ requireApiKey: false, projectRoot });
       const client = createClient(config);
       const bookId = typeof opts.book === "string" && opts.book.trim() ? opts.book.trim() : null;
+      if (bookId && opts.work) throw new Error("Use either --book or --work, not both.");
+      const work = typeof opts.work === "string" && opts.work.trim()
+        ? await loadWorkManifest(projectRoot, opts.work.trim())
+        : null;
       const trimmed = input.trim();
       const actionSource = trimmed.startsWith("/") ? "slash" : "free-text";
       const requestedIntent = bookId && trimmed === "/write"
@@ -66,7 +72,9 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
         : !bookId && trimmed === "/create"
           ? "create_book"
           : undefined;
-      const sessionKind = bookId
+      const sessionKind = work
+        ? "work"
+        : bookId
         ? "book"
         : requestedIntent === "create_book"
           ? "book-create"
@@ -82,6 +90,7 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
         sessionId,
         bookId,
         sessionKind,
+        ...(work ? { profileId: work.profileId, workId: work.id } : {}),
         actionSource,
         requestedIntent,
         language: config.language ?? "zh",
@@ -97,6 +106,8 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
       const session = {
         sessionId,
         sessionKind,
+        profileId: result.profileId,
+        workId: result.workId,
         activeBookId: bookId ?? undefined,
       };
 

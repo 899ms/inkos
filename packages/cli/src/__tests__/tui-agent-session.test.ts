@@ -259,6 +259,44 @@ describe("tui agent session bridge", () => {
     expect(runAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  it("binds a Work with /use and routes later free text through that Pi profile", async () => {
+    await saveWorkManifest(projectRoot, createWorkManifest({
+      id: "tui-script",
+      title: "TUI Script",
+      profileId: "script",
+      language: "en",
+    }));
+    runAgentSessionMock.mockResolvedValue({
+      responseText: "I will revise the registered script artifact.",
+      messages: [{ role: "assistant", content: "I will revise the registered script artifact." }],
+      profileId: "script",
+      workId: "tui-script",
+    });
+    const { processTuiAgentInput } = await import("../tui/agent-input.js");
+    const selected = await processTuiAgentInput({
+      projectRoot,
+      input: "/use tui-script",
+      session: createProjectSession(projectRoot),
+    });
+    expect(selected.session).toMatchObject({
+      sessionKind: "work",
+      profileId: "script",
+      workId: "tui-script",
+    });
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+
+    await processTuiAgentInput({
+      projectRoot,
+      input: "Rewrite the second scene.",
+      session: selected.session,
+    });
+    expect(runAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "script", workId: "tui-script" }),
+      "Rewrite the second scene.",
+      expect.any(Array),
+    );
+  });
+
   it("persists a structured proposal and replays its payload and skills only after confirmation", async () => {
     runAgentSessionMock.mockResolvedValueOnce({
       responseText: "",

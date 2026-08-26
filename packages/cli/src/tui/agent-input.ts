@@ -33,6 +33,8 @@ interface TuiAgentRoute {
   readonly detachBook?: boolean;
   readonly clearPending?: boolean;
   readonly localResponse?: string;
+  readonly profileId?: string;
+  readonly workId?: string | null;
 }
 
 export async function processTuiAgentInput(params: {
@@ -54,22 +56,37 @@ export async function processTuiAgentInput(params: {
   const userTimestamp = Date.now();
   const currentBookId = params.activeBookId ?? params.session.activeBookId ?? null;
   const language = config.language === "en" ? "en" : "zh";
-  const localWorkResponse = await resolveLocalWorkCommand(params.projectRoot, params.input, language);
+  const useWork = params.input.trim().match(/^\/use\s+([^\s]+)$/i)?.[1];
+  const selectedWork = useWork ? await loadWorkManifest(params.projectRoot, useWork) : null;
+  const localWorkResponse = selectedWork
+    ? (language === "en"
+        ? `Using Work "${selectedWork.title}" (${selectedWork.id}) with profile ${selectedWork.profileId}.`
+        : `已切换到 Work「${selectedWork.title}」（${selectedWork.id}），Profile：${selectedWork.profileId}。`)
+    : await resolveLocalWorkCommand(params.projectRoot, params.input, language);
   const currentKind = params.session.sessionKind ?? (currentBookId ? "book" : "chat");
   const route = localWorkResponse
     ? {
         userMessage: params.input.trim(),
-        sessionKind: currentKind,
+        sessionKind: selectedWork ? "work" as const : currentKind,
         actionSource: "slash" as const,
         localResponse: localWorkResponse,
+        ...(selectedWork ? { profileId: selectedWork.profileId, workId: selectedWork.id, detachBook: true } : {}),
       }
     : resolveTuiAgentRoute(params.input, params.session, currentBookId, language);
   const resolvedBookId = route.detachBook ? null : currentBookId;
-  const harnessBinding = resolveSessionHarnessBinding({
+  const surfaceBinding = resolveSessionHarnessBinding({
     sessionKind: route.sessionKind,
     bookId: resolvedBookId,
     sessionId: params.session.sessionId,
   });
+  const harnessBinding = {
+    profileId: route.profileId ?? (route.sessionKind === params.session.sessionKind ? params.session.profileId : undefined) ?? surfaceBinding.profileId,
+    workId: route.workId !== undefined
+      ? route.workId
+      : route.sessionKind === params.session.sessionKind && params.session.workId !== undefined
+        ? params.session.workId
+        : surfaceBinding.workId,
+  };
   const initialMessages = params.session.messages
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message) => ({ role: message.role, content: message.content }));
