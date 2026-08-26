@@ -76,6 +76,7 @@ import {
   createBuiltInWorkProfileRegistry,
   executeExplicitCapabilityTool,
   createExportBookTool,
+  resolveSessionHarnessBinding,
   parseAgentSkillDocument,
   getBuiltinPrompt,
   listBuiltinPromptPacks,
@@ -4650,7 +4651,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.post("/api/v1/sessions", async (c) => {
-    const body = await c.req.json<{ bookId?: string | null; sessionId?: string; sessionKind?: string; playMode?: string }>().catch(() => ({}));
+    const body = await c.req.json<{
+      bookId?: string | null;
+      workId?: string | null;
+      profileId?: string;
+      sessionId?: string;
+      sessionKind?: string;
+      playMode?: string;
+    }>().catch(() => ({}));
     const bookId = normalizeApiBookId((body as { bookId?: unknown }).bookId, "bookId");
     const sessionKind = normalizeStudioSessionKind(
       (body as { sessionKind?: unknown }).sessionKind,
@@ -4660,12 +4668,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const sessionId = (body as { sessionId?: string }).sessionId;
     // sessionId 只允许 timestamp-random 格式；防止注入任意文件名
     const safeSessionId = sessionId && /^[0-9]+-[a-z0-9]+$/.test(sessionId) ? sessionId : undefined;
+    const resolvedSessionId = safeSessionId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const surfaceBinding = resolveSessionHarnessBinding({ sessionKind, bookId, sessionId: resolvedSessionId });
+    const requestedWorkId = (body as { workId?: unknown }).workId;
+    const workId = requestedWorkId === null
+      ? null
+      : typeof requestedWorkId === "string" && requestedWorkId.trim()
+        ? normalizeApiBookId(requestedWorkId, "workId")
+        : surfaceBinding.workId;
+    const boundWork = workId ? await loadWorkManifest(root, workId).catch(() => null) : null;
+    if (typeof requestedWorkId === "string" && requestedWorkId.trim() && !boundWork) {
+      return c.json({ error: `Work not found: ${requestedWorkId.trim()}` }, 404);
+    }
+    const requestedProfileId = (body as { profileId?: unknown }).profileId;
+    const profileId = boundWork?.profileId
+      ?? (typeof requestedProfileId === "string" && requestedProfileId.trim() ? requestedProfileId.trim() : surfaceBinding.profileId);
+    createBuiltInWorkProfileRegistry().require(profileId);
     const session = await createAndPersistBookSession(
       root,
       bookId,
-      safeSessionId,
+      resolvedSessionId,
       sessionKind,
-      ...(playMode ? [{ playMode }] as const : []),
+      { ...(playMode ? { playMode } : {}), profileId, workId },
     );
     // 客户端可以用同一个 sessionId 重新创建会话：移除删除标记，
     // 让新会话的生产任务可以正常持久化快照。
@@ -4686,7 +4710,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       existing.bookId,
       existing.sessionId,
       existing.sessionKind,
-      { playMode },
+      { playMode, ...(existing.profileId ? { profileId: existing.profileId } : {}), ...(existing.workId !== undefined ? { workId: existing.workId } : {}) },
     );
     return c.json({ session });
   });
@@ -4817,13 +4841,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         reqSessionKind,
         bookSession.sessionKind ?? (agentBookId ? "book" : "chat"),
       );
-      if (bookSession.sessionKind !== sessionKind || (playMode && bookSession.playMode !== playMode)) {
+      const surfaceBinding = resolveSessionHarnessBinding({
+        sessionKind,
+        bookId: agentBookId,
+        sessionId: bookSession.sessionId,
+      });
+      const boundWork = surfaceBinding.workId
+        ? await loadWorkManifest(root, surfaceBinding.workId).catch(() => null)
+        : null;
+      const profileId = boundWork?.profileId ?? surfaceBinding.profileId;
+      const workId = boundWork?.id ?? surfaceBinding.workId;
+      if (
+        bookSession.sessionKind !== sessionKind
+        || (playMode && bookSession.playMode !== playMode)
+        || bookSession.profileId !== profileId
+        || bookSession.workId !== workId
+      ) {
         const updatedSession = await createAndPersistBookSession(
           root,
           bookSession.bookId,
           bookSession.sessionId,
           sessionKind,
-          ...(playMode ? [{ playMode }] as const : []),
+          { ...(playMode ? { playMode } : {}), profileId, workId },
         );
         bookSession = updatedSession;
       }
@@ -5181,6 +5220,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           projectRoot: root,
           bookId: agentBookId,
           sessionKind,
+          profileId,
+          workId,
           playMode,
           actionSource,
           requestedIntent,

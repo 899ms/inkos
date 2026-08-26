@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -126,5 +126,33 @@ describe("explicit capability actions", () => {
     ));
     expect(focus?.revisions).toHaveLength(2);
     expect(focus?.currentRevisionId).toBe(focus?.revisions[1]?.id);
+  });
+
+  it("keeps deleted source history but removes its authoritative current revision", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-source-removal-"));
+    roots.push(root);
+    const work = createWorkManifest({
+      id: "removal-work",
+      title: "Removal Work",
+      profileId: "script",
+      language: "en",
+    });
+    await saveWorkManifest(root, work);
+    const sourceDir = join(workDirectory(root, work.id), "source");
+    await mkdir(sourceDir, { recursive: true });
+    const scriptPath = join(sourceDir, "script.md");
+    await writeFile(scriptPath, "# Draft\n");
+    const first = await syncWorkSourceArtifacts({ projectRoot: root, workId: work.id });
+    const original = first.artifacts.find((artifact) => (
+      artifact.revisions.some((revision) => revision.path === "source/script.md")
+    ));
+    expect(original?.currentRevisionId).toBeTruthy();
+
+    await unlink(scriptPath);
+    const second = await syncWorkSourceArtifacts({ projectRoot: root, workId: work.id });
+    const removed = second.artifacts.find((artifact) => artifact.id === original?.id);
+    expect(removed?.currentRevisionId).toBeNull();
+    expect(removed?.revisions).toEqual(original?.revisions);
+    expect(removed?.metadata).toMatchObject({ removedPath: "source/script.md" });
   });
 });

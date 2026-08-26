@@ -17,6 +17,8 @@ export const SessionCreatedEventSchema = BaseEventSchema.extend({
   type: z.literal("session_created"),
   bookId: z.string().nullable(),
   sessionKind: SessionKindSchema.optional(),
+  profileId: z.string().min(1).optional(),
+  workId: z.string().min(1).nullable().optional(),
   playMode: PlayModeSchema.optional(),
   title: z.string().nullable().default(null),
   createdAt: z.number().int().nonnegative(),
@@ -27,6 +29,8 @@ export const SessionMetadataUpdatedEventSchema = BaseEventSchema.extend({
   type: z.literal("session_metadata_updated"),
   bookId: z.string().nullable().optional(),
   sessionKind: SessionKindSchema.optional(),
+  profileId: z.string().min(1).optional(),
+  workId: z.string().min(1).nullable().optional(),
   playMode: PlayModeSchema.optional(),
   title: z.string().nullable().optional(),
   updatedAt: z.number().int().nonnegative(),
@@ -36,6 +40,8 @@ export const RequestStartedEventSchema = BaseEventSchema.extend({
   type: z.literal("request_started"),
   requestId: z.string().min(1),
   sessionKind: SessionKindSchema.optional(),
+  profileId: z.string().min(1).optional(),
+  workId: z.string().min(1).nullable().optional(),
   input: z.string(),
 });
 

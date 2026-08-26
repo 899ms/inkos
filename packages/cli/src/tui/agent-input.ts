@@ -8,6 +8,7 @@ import {
   runAgentSession,
   listWorkManifests,
   loadWorkManifest,
+  resolveSessionHarnessBinding,
   SessionKindSchema,
   type ActionPayload,
   type ActionSource,
@@ -64,6 +65,11 @@ export async function processTuiAgentInput(params: {
       }
     : resolveTuiAgentRoute(params.input, params.session, currentBookId, language);
   const resolvedBookId = route.detachBook ? null : currentBookId;
+  const harnessBinding = resolveSessionHarnessBinding({
+    sessionKind: route.sessionKind,
+    bookId: resolvedBookId,
+    sessionId: params.session.sessionId,
+  });
   const initialMessages = params.session.messages
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message) => ({ role: message.role, content: message.content }));
@@ -71,6 +77,8 @@ export async function processTuiAgentInput(params: {
   let nextSession = appendInteractionMessage(clearPendingDecision({
     ...params.session,
     sessionKind: route.sessionKind,
+    profileId: harnessBinding.profileId,
+    workId: harnessBinding.workId,
     ...(route.playMode ? { playMode: route.playMode } : {}),
     ...(route.detachBook ? { activeBookId: undefined } : resolvedBookId ? { activeBookId: resolvedBookId } : {}),
     currentExecution: {
@@ -111,6 +119,8 @@ export async function processTuiAgentInput(params: {
       sessionId: params.session.sessionId,
       bookId: resolvedBookId,
       sessionKind: route.sessionKind,
+      profileId: harnessBinding.profileId,
+      workId: harnessBinding.workId,
       actionSource: route.actionSource,
       ...(route.requestedIntent ? { requestedIntent: route.requestedIntent } : {}),
       ...(route.actionPayload ? { actionPayload: route.actionPayload } : {}),
@@ -142,6 +152,8 @@ export async function processTuiAgentInput(params: {
   const completedSession = {
     ...nextSession,
     sessionKind: route.sessionKind,
+    profileId: createdBookId ? "longform-novel" : result.profileId ?? harnessBinding.profileId,
+    workId: createdBookId ?? result.workId ?? harnessBinding.workId,
     ...(route.playMode ? { playMode: route.playMode } : {}),
     ...(activeBookId ? { activeBookId } : {}),
     ...(proposedAction ? { pendingProposedAction: proposedAction } : {}),

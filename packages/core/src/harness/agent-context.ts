@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import { compileContext, ContextSourceRegistry, type ContextFragment } from "./context-compiler.js";
 import type { WorkManifest, WorkProfile } from "./contracts.js";
-import { workDirectory } from "./work-store.js";
+import { loadWorkManifest, workDirectory } from "./work-store.js";
 
 const PROFILE_CONTEXT_FILES: Readonly<Record<string, ReadonlyArray<string>>> = {
   "longform-novel": [
@@ -66,12 +66,13 @@ export function createHarnessContextTransform(input: {
   });
 
   return async (messages, signal) => {
+    const currentWork = await loadWorkManifest(input.projectRoot, input.work!.id);
     const compiled = await compileContext({
       recipe: { id: `${input.profile.id}-agent`, sourceIds: ["work-current"] },
       sources,
       request: {
         projectRoot: input.projectRoot,
-        work: input.work,
+        work: currentWork,
         profile: input.profile,
         actionId: "agent-turn",
         intent: latestUserText(messages),

@@ -430,6 +430,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     createSingleToolCapabilityRegistry: actual.createSingleToolCapabilityRegistry,
     executeExplicitCapabilityTool: actual.executeExplicitCapabilityTool,
     createExportBookTool: actual.createExportBookTool,
+    resolveSessionHarnessBinding: actual.resolveSessionHarnessBinding,
     CreativeEpisodeStore: actual.CreativeEpisodeStore,
     CreativeHarnessRuntime: actual.CreativeHarnessRuntime,
     loadWorkManifest: actual.loadWorkManifest,
@@ -734,8 +735,28 @@ describe("createStudioServer daemon lifecycle", () => {
       createdAt: 1,
       updatedAt: 1,
     };
-    createAndPersistBookSessionMock.mockResolvedValue(defaultBookSession);
     loadBookSessionMock.mockResolvedValue(defaultBookSession);
+    createAndPersistBookSessionMock.mockImplementation(async (
+      _root: string,
+      bookId: string | null,
+      sessionId?: string,
+      sessionKind?: string,
+      options?: { playMode?: string; profileId?: string; workId?: string | null },
+    ) => {
+      const lastLoaded = loadBookSessionMock.mock.results.at(-1)?.value;
+      const existing = lastLoaded
+        ? await Promise.resolve(lastLoaded).catch(() => defaultBookSession)
+        : defaultBookSession;
+      return {
+        ...existing,
+        sessionId: sessionId ?? existing.sessionId,
+        bookId,
+        ...(sessionKind ? { sessionKind } : {}),
+        ...(options?.playMode ? { playMode: options.playMode } : {}),
+        ...(options?.profileId ? { profileId: options.profileId } : {}),
+        ...(options && "workId" in options ? { workId: options.workId } : {}),
+      };
+    });
     persistBookSessionMock.mockResolvedValue(undefined);
     appendBookSessionMessageMock.mockImplementation(
       (session: unknown, _msg: unknown) => session,
@@ -3261,10 +3282,48 @@ describe("createStudioServer daemon lifecycle", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(createAndPersistBookSessionMock).toHaveBeenCalledWith(root, "demo-book", undefined, "book");
+    expect(createAndPersistBookSessionMock).toHaveBeenCalledWith(
+      root,
+      "demo-book",
+      expect.stringMatching(/^[0-9]+-[a-z0-9]+$/),
+      "book",
+      { profileId: "longform-novel", workId: "demo-book" },
+    );
     await expect(response.json()).resolves.toMatchObject({
       session: { sessionId: "fresh-session", bookId: "demo-book", title: null },
     });
+  });
+
+  it("binds Studio sessions to the Work profile and rejects missing explicit Works", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "123456-workui",
+        sessionKind: "chat",
+        workId: "demo-book",
+        profileId: "translation",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(createAndPersistBookSessionMock).toHaveBeenLastCalledWith(
+      root,
+      null,
+      "123456-workui",
+      "chat",
+      { profileId: "longform-novel", workId: "demo-book" },
+    );
+
+    const missing = await app.request("http://localhost/api/v1/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionKind: "script", workId: "missing-work" }),
+    });
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toMatchObject({ error: "Work not found: missing-work" });
   });
 
   it("renames a session through PUT /api/v1/sessions/:sessionId", async () => {

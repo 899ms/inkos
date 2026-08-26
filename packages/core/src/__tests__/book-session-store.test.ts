@@ -165,6 +165,30 @@ describe("book-session-store", () => {
       expect(list.find((item) => item.sessionId === "123456-playmd")?.playMode).toBe("guided");
     });
 
+    it("persists authoritative Profile and Work identity alongside the UI surface", async () => {
+      const session = await createAndPersistBookSession(
+        tempDir,
+        null,
+        "123456-filmwk",
+        "interactive-film-authoring",
+        { profileId: "interactive-film", workId: "film-work" },
+      );
+
+      expect(session).toMatchObject({ profileId: "interactive-film", workId: "film-work" });
+      const loaded = await loadBookSession(tempDir, session.sessionId);
+      expect(loaded).toMatchObject({
+        sessionKind: "interactive-film-authoring",
+        profileId: "interactive-film",
+        workId: "film-work",
+      });
+      const events = await readTranscriptEvents(tempDir, session.sessionId);
+      expect(events[0]).toMatchObject({
+        type: "session_created",
+        profileId: "interactive-film",
+        workId: "film-work",
+      });
+    });
+
     it("does not duplicate session_created when explicit session creation races", async () => {
       await Promise.all([
         createAndPersistBookSession(tempDir, "book-a", "create-race"),

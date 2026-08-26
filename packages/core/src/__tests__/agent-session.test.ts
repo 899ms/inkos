@@ -339,6 +339,7 @@ describe("runAgentSession cache — bookId switch", () => {
     evictAgentCache("play-confirmed-session");
     evictAgentCache("skill-history-session");
     evictAgentCache("abort-session");
+    evictAgentCache("profile-work-session");
     await rm(projectRoot, { recursive: true, force: true });
     if (otherProjectRoot) await rm(otherProjectRoot, { recursive: true, force: true });
   });
@@ -718,6 +719,38 @@ describe("runAgentSession cache — bookId switch", () => {
     );
 
     expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(WORKSPACE_TOOL_NAMES);
+  });
+
+  it("uses explicit Work/Profile identity instead of the legacy session surface", async () => {
+    await saveWorkManifest(projectRoot, createWorkManifest({
+      id: "script-work",
+      title: "Script Work",
+      profileId: "script",
+      language: "en",
+    }));
+    const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
+    const result = await runAgentSession(
+      {
+        sessionId: "profile-work-session",
+        bookId: null,
+        sessionKind: "chat",
+        profileId: "script",
+        workId: "script-work",
+        language: "en",
+        pipeline: {} as any,
+        projectRoot,
+        model,
+      },
+      "Discuss the current script",
+    );
+
+    expect(result).toMatchObject({ profileId: "script", workId: "script-work" });
+    expect(agentInstances[0].state.systemPrompt).toContain("Profile: Script (script)");
+    expect(agentInstances[0].state.systemPrompt).toContain("Current work: Script Work");
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(WORKSPACE_TOOL_NAMES);
+    const started = (await readTranscriptEvents(projectRoot, "profile-work-session"))
+      .find((event) => event.type === "request_started");
+    expect(started).toMatchObject({ profileId: "script", workId: "script-work" });
   });
 
   it("exposes intent-selected skills only on free-text turns", async () => {

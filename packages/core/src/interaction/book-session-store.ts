@@ -67,6 +67,8 @@ async function appendSessionCreatedEvent(
       timestamp: session.createdAt,
       bookId: session.bookId,
       ...(session.sessionKind ? { sessionKind: session.sessionKind } : {}),
+      ...(session.profileId ? { profileId: session.profileId } : {}),
+      ...(session.workId !== undefined ? { workId: session.workId } : {}),
       ...(session.playMode ? { playMode: session.playMode } : {}),
       title: session.title,
       createdAt: session.createdAt,
@@ -81,6 +83,8 @@ async function appendSessionMetadataUpdatedEvent(
   metadata: {
     readonly bookId?: string | null;
     readonly sessionKind?: SessionKind;
+    readonly profileId?: string;
+    readonly workId?: string | null;
     readonly playMode?: PlayMode;
     readonly title?: string | null;
     readonly updatedAt: number;
@@ -95,6 +99,8 @@ async function appendSessionMetadataUpdatedEvent(
     updatedAt: metadata.updatedAt,
     ...("bookId" in metadata ? { bookId: metadata.bookId } : {}),
     ...(metadata.sessionKind ? { sessionKind: metadata.sessionKind } : {}),
+    ...(metadata.profileId ? { profileId: metadata.profileId } : {}),
+    ...(metadata.workId !== undefined ? { workId: metadata.workId } : {}),
     ...(metadata.playMode ? { playMode: metadata.playMode } : {}),
     ...("title" in metadata ? { title: metadata.title } : {}),
   }]);
@@ -117,6 +123,8 @@ export async function persistBookSession(
   await appendSessionMetadataUpdatedEvent(projectRoot, session.sessionId, {
     bookId: session.bookId,
     ...(session.sessionKind ? { sessionKind: session.sessionKind } : {}),
+    ...(session.profileId ? { profileId: session.profileId } : {}),
+    ...(session.workId !== undefined ? { workId: session.workId } : {}),
     ...(session.playMode ? { playMode: session.playMode } : {}),
     title: session.title,
     updatedAt: session.updatedAt,
@@ -127,6 +135,8 @@ export interface BookSessionSummary {
   readonly sessionId: string;
   readonly bookId: string | null;
   readonly sessionKind?: SessionKind;
+  readonly profileId?: string;
+  readonly workId?: string | null;
   readonly playMode?: PlayMode;
   readonly title: string | null;
   readonly messageCount: number;
@@ -165,6 +175,8 @@ export async function listBookSessions(
           sessionId: session.sessionId,
           bookId: session.bookId,
           sessionKind: session.sessionKind,
+          profileId: session.profileId,
+          workId: session.workId,
           playMode: session.playMode,
           title: session.title,
           messageCount: session.messages.length,
@@ -218,6 +230,8 @@ export async function migrateBookSession(
   await appendSessionMetadataUpdatedEvent(projectRoot, sessionId, {
     bookId: newBookId,
     sessionKind: "book",
+    profileId: "longform-novel",
+    workId: newBookId,
     updatedAt: Date.now(),
   });
   return loadBookSession(projectRoot, sessionId);
@@ -228,16 +242,23 @@ export async function createAndPersistBookSession(
   bookId: string | null,
   sessionId?: string,
   sessionKind?: SessionKind,
-  options?: { readonly playMode?: PlayMode },
+  options?: { readonly playMode?: PlayMode; readonly profileId?: string; readonly workId?: string | null },
 ): Promise<BookSession> {
   // 如果指定了 sessionId 且对应文件已存在，视为幂等操作直接返回（支持"用户发消息时才持久化 draft"流程）
   if (sessionId) {
     const existing = await loadBookSession(projectRoot, sessionId);
     if (existing) {
-      if ((sessionKind && existing.sessionKind !== sessionKind) || (options?.playMode && existing.playMode !== options.playMode)) {
+      if (
+        (sessionKind && existing.sessionKind !== sessionKind)
+        || (options?.playMode && existing.playMode !== options.playMode)
+        || (options?.profileId && existing.profileId !== options.profileId)
+        || (options && "workId" in options && existing.workId !== options.workId)
+      ) {
         await appendSessionMetadataUpdatedEvent(projectRoot, sessionId, {
           ...(sessionKind ? { sessionKind } : {}),
           ...(options?.playMode ? { playMode: options.playMode } : {}),
+          ...(options?.profileId ? { profileId: options.profileId } : {}),
+          ...(options && "workId" in options ? { workId: options.workId } : {}),
           updatedAt: Date.now(),
         });
         return await loadBookSession(projectRoot, sessionId) ?? existing;

@@ -110,6 +110,8 @@ export const InteractionSessionSchema = z.object({
   sessionId: z.string().min(1),
   projectRoot: z.string().min(1),
   sessionKind: SessionKindSchema.optional(),
+  profileId: z.string().min(1).optional(),
+  workId: z.string().min(1).nullable().optional(),
   playMode: PlayModeSchema.optional(),
   modelOverride: z.string().min(1).optional(),
   activeBookId: z.string().min(1).optional(),
@@ -132,6 +134,8 @@ export const BookSessionSchema = z.object({
   sessionId: z.string().min(1),
   bookId: z.string().refine(isSafeBookId, "Invalid bookId").nullable(),
   sessionKind: SessionKindSchema.optional(),
+  profileId: z.string().min(1).optional(),
+  workId: z.string().min(1).nullable().optional(),
   playMode: PlayModeSchema.optional(),
   title: z.string().nullable().default(null),
   messages: z.array(InteractionMessageSchema).default([]),
@@ -158,7 +162,7 @@ export function createBookSession(
   bookId: string | null,
   sessionId?: string,
   sessionKind?: SessionKind,
-  options?: { readonly playMode?: PlayMode },
+  options?: { readonly playMode?: PlayMode; readonly profileId?: string; readonly workId?: string | null },
 ): BookSession {
   const now = Date.now();
   const safeBookId = bookId === null ? null : assertSafeBookId(bookId);
@@ -166,6 +170,8 @@ export function createBookSession(
     sessionId: sessionId ?? `${now}-${Math.random().toString(36).slice(2, 8)}`,
     bookId: safeBookId,
     sessionKind,
+    ...(options?.profileId ? { profileId: options.profileId } : {}),
+    ...("workId" in (options ?? {}) ? { workId: options?.workId ?? null } : safeBookId ? { workId: safeBookId } : {}),
     ...(options?.playMode ? { playMode: options.playMode } : {}),
     title: null,
     messages: [],

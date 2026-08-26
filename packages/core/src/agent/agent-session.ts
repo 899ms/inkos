@@ -24,6 +24,7 @@ import {
   createBuiltInWorkProfileRegistry,
   createCapabilityPiTools,
   createHarnessContextTransform,
+  resolveSessionHarnessBinding,
   createProductionCapabilityRegistry,
   loadWorkManifest,
   type HarnessEpisodeHandle,
@@ -72,6 +73,10 @@ export interface AgentSessionConfig {
   bookId: string | null;
   /** Studio conversation surface. Used to narrow the visible tools. */
   sessionKind?: SessionKind;
+  /** Authoritative Work profile. Surface mapping is used only when omitted before a Work exists. */
+  profileId?: string;
+  /** Authoritative Work ID. Use null for a profile-scoped creation conversation with no Work yet. */
+  workId?: string | null;
   /** Play interaction mode chosen by the player at launch (guided = choice-only, open = free text). */
   playMode?: PlayMode;
   /** Where this turn came from. Button/slash turns can execute confirmed production actions. */
@@ -127,6 +132,10 @@ export interface AgentSessionResult {
   messages: AgentMessage[];
   /** Upstream model error surfaced by pi-agent-core, if the final assistant turn failed. */
   errorMessage?: string;
+  /** Profile that governed this turn. */
+  profileId: string;
+  /** Work bound to this turn, if any. */
+  workId: string | null;
 }
 
 export interface AgentSessionAttachment {
@@ -494,6 +503,8 @@ async function ensureSessionCreatedEvent(
   sessionId: string,
   bookId: string | null,
   sessionKind?: SessionKind,
+  profileId?: string,
+  workId?: string | null,
 ): Promise<void> {
   await appendTranscriptEvents(projectRoot, sessionId, ({ events, nextSeq }) => {
     if (events.some((event) => event.type === "session_created")) return [];
@@ -507,6 +518,8 @@ async function ensureSessionCreatedEvent(
       timestamp: now,
       bookId,
       ...(sessionKind ? { sessionKind } : {}),
+      ...(profileId ? { profileId } : {}),
+      ...(workId !== undefined ? { workId } : {}),
       title: null,
       createdAt: now,
       updatedAt: now,
@@ -739,33 +752,6 @@ function agentMessagesToPlain(
 }
 
 // ---------------------------------------------------------------------------
-const PROFILE_ID_BY_SESSION_KIND: Readonly<Record<SessionKind, string>> = {
-  chat: "workspace-default",
-  "book-create": "longform-novel",
-  book: "longform-novel",
-  edit: "longform-novel",
-  short: "short-fiction",
-  script: "script",
-  storyboard: "storyboard",
-  "interactive-film": "interactive-film",
-  "interactive-film-authoring": "interactive-film",
-  play: "interactive-world",
-};
-
-function surfaceProfileId(sessionKind: SessionKind): string {
-  return PROFILE_ID_BY_SESSION_KIND[sessionKind];
-}
-
-function surfaceWorkId(
-  sessionKind: SessionKind,
-  bookId: string | null,
-  sessionId: string,
-): string | null {
-  if (bookId) return bookId;
-  if (sessionKind === "play") return sessionId;
-  return null;
-}
-
 async function loadSurfaceWork(
   projectRoot: string,
   workId: string | null,
@@ -846,14 +832,21 @@ async function runAgentSessionUnlocked(
   const requestedModelIdentity = agentModelIdentity(model);
   const allowSystemFileRead = config.allowSystemFileRead ?? envFlagEnabled(process.env.INKOS_AGENT_ALLOW_SYSTEM_READ, false);
   const suppressProductionTools = config.suppressProductionTools ?? false;
-  const playWorldExists = sessionKind === "play"
-    ? Boolean(await new PlayStore(projectRoot).loadWorld(sessionId))
-    : false;
   const profiles = createBuiltInWorkProfileRegistry();
-  const workId = surfaceWorkId(sessionKind, bookId, sessionId);
+  const surfaceBinding = resolveSessionHarnessBinding({ sessionKind, bookId, sessionId });
+  const workId = config.workId === undefined
+    ? surfaceBinding.workId
+    : config.workId;
   const work = await loadSurfaceWork(projectRoot, workId);
-  const profileId = work?.profileId ?? surfaceProfileId(sessionKind);
+  if (work && config.profileId && work.profileId !== config.profileId) {
+    throw new Error(`Work "${work.id}" uses profile "${work.profileId}", not "${config.profileId}"`);
+  }
+  const profileId = work?.profileId ?? config.profileId ?? surfaceBinding.profileId;
   const profile = profiles.require(profileId);
+  const playWorldId = profileId === "interactive-world" ? (workId ?? sessionId) : null;
+  const playWorldExists = playWorldId
+    ? Boolean(await new PlayStore(projectRoot).loadWorld(playWorldId))
+    : false;
   const cacheKey = agentCacheKey(projectRoot, sessionId);
 
   // ----- Resolve or create Agent -----
@@ -961,7 +954,7 @@ async function runAgentSessionUnlocked(
       actionPayload,
       playMode,
       playWorldExists,
-      sameSessionProposal: sessionKind !== "chat",
+      sameSessionProposal: profileId !== "workspace-default",
       allowSystemFileRead,
       intentSkillTool,
       requestedSkillIds: () => [...turnSkills.keys()],
@@ -973,7 +966,7 @@ async function runAgentSessionUnlocked(
         return [];
       },
       profileSkills,
-      interactiveFilmAuthoring: sessionKind === "interactive-film-authoring",
+      interactiveFilmAuthoring: profileId === "interactive-film" && work !== null,
     });
     const episodeStore = new CreativeEpisodeStore(join(projectRoot, ".inkos", "harness.sqlite"));
     const harnessRuntime = new CreativeHarnessRuntime(projectRoot, capabilities, profiles, episodeStore);
@@ -1114,7 +1107,7 @@ async function runAgentSessionUnlocked(
 
   // ----- Prepare transcript persistence -----
   const requestId = randomUUID();
-  await ensureSessionCreatedEvent(projectRoot, sessionId, bookId, sessionKind);
+  await ensureSessionCreatedEvent(projectRoot, sessionId, bookId, sessionKind, cached.profileId, cached.workId);
   await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
     type: "request_started",
     version: 1,
@@ -1123,6 +1116,8 @@ async function runAgentSessionUnlocked(
     seq,
     timestamp: Date.now(),
     sessionKind,
+    profileId: cached.profileId,
+    workId: cached.workId,
     input: promptMessage,
   }));
   const episodeHandle = cached.harnessRuntime.startEpisode({
@@ -1265,6 +1260,8 @@ async function runAgentSessionUnlocked(
   return {
     responseText,
     messages: allMessages.slice(),
+    profileId: cached.profileId,
+    workId: cached.workId,
     ...(errorMessage ? { errorMessage } : {}),
   };
 }

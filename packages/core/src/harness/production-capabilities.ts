@@ -266,15 +266,18 @@ export function createProductionCapabilityRegistry(
       })];
   registerToolCapability(registry, "interactive-film", "Interactive film", interactiveFilmTools);
 
+  const interactiveWorldId = environment.work?.profileId === "interactive-world"
+    ? environment.work.id
+    : environment.sessionId;
   const interactiveWorldTools = environment.playWorldExists
     ? [
-        createPlayEditTool(environment.projectRoot, environment.sessionId, lang),
-        createPlayReviseTool(environment.pipeline, environment.projectRoot, environment.sessionId, {
+        createPlayEditTool(environment.projectRoot, interactiveWorldId, lang),
+        createPlayReviseTool(environment.pipeline, environment.projectRoot, interactiveWorldId, {
           language: lang,
           defaultSkills: environment.profileSkills?.("interactive-world"),
           activeSkills: environment.activeSkills,
         }),
-        createPlayStepTool(environment.pipeline, environment.projectRoot, environment.sessionId, {
+        createPlayStepTool(environment.pipeline, environment.projectRoot, interactiveWorldId, {
           language: lang,
           defaultSkills: environment.profileSkills?.("interactive-world"),
           activeSkills: environment.activeSkills,
@@ -283,7 +286,7 @@ export function createProductionCapabilityRegistry(
     : [createPlayStartTool(
         environment.pipeline,
         environment.projectRoot,
-        environment.sessionId,
+        interactiveWorldId,
         environment.playMode,
         {
           actionPayload: environment.actionPayload,
@@ -388,11 +391,14 @@ async function normalizeToolResult(
     for (const artifact of after.artifacts) {
       if (priorRevisions.get(artifact.id) === artifact.currentRevisionId) continue;
       const revision = artifact.revisions.find((candidate) => candidate.id === artifact.currentRevisionId);
+      const previousRevision = previous?.artifacts
+        .find((candidate) => candidate.id === artifact.id)
+        ?.revisions.find((candidate) => candidate.id === priorRevisions.get(artifact.id));
       artifacts.push({
         workId,
         artifactId: artifact.id,
         ...(artifact.currentRevisionId ? { revisionId: artifact.currentRevisionId } : {}),
-        ...(revision?.path ? { path: revision.path } : {}),
+        ...(revision?.path || previousRevision?.path ? { path: revision?.path ?? previousRevision!.path } : {}),
       });
     }
   }

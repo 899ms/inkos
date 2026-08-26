@@ -68,6 +68,7 @@ export async function syncWorkSourceArtifacts(input: {
   const root = workDirectory(input.projectRoot, input.workId);
   const sourceRoot = join(root, "source");
   const files = await listFiles(sourceRoot);
+  const presentWorkPaths = new Set(files.map((file) => toPosixPath(join("source", file))));
   const updatedAt = input.updatedAt ?? new Date().toISOString();
   const artifacts = [...manifest.artifacts];
 
@@ -122,6 +123,17 @@ export async function syncWorkSourceArtifacts(input: {
       revisions: prior
         ? existing.revisions.map((item) => item.id === prior.id ? { ...item, status: "accepted" } : item)
         : [...existing.revisions, revision],
+    });
+  }
+
+  for (let index = 0; index < artifacts.length; index += 1) {
+    const artifact = artifacts[index]!;
+    const current = artifact.revisions.find((revision) => revision.id === artifact.currentRevisionId);
+    if (!current?.path.startsWith("source/") || presentWorkPaths.has(current.path)) continue;
+    artifacts[index] = ArtifactManifestSchema.parse({
+      ...artifact,
+      currentRevisionId: null,
+      metadata: { ...artifact.metadata, removedAt: updatedAt, removedPath: current.path },
     });
   }
 

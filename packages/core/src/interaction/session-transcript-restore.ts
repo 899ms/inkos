@@ -840,6 +840,8 @@ export async function deriveBookSessionFromTranscript(
   const created = events.find((event) => event.type === "session_created");
   let bookId = created?.type === "session_created" ? created.bookId : null;
   let sessionKind = created?.type === "session_created" ? created.sessionKind : undefined;
+  let profileId = created?.type === "session_created" ? created.profileId : undefined;
+  let workId = created?.type === "session_created" ? created.workId : undefined;
   let playMode: PlayMode | undefined = created?.type === "session_created" ? created.playMode : undefined;
   let title = created?.type === "session_created" ? created.title : null;
   const createdAt = created?.type === "session_created"
@@ -860,6 +862,8 @@ export async function deriveBookSessionFromTranscript(
     if (event.type !== "session_metadata_updated") continue;
     if ("bookId" in event && event.bookId !== undefined) bookId = event.bookId;
     if ("sessionKind" in event && event.sessionKind !== undefined) sessionKind = event.sessionKind;
+    if ("profileId" in event && event.profileId !== undefined) profileId = event.profileId;
+    if ("workId" in event && event.workId !== undefined) workId = event.workId;
     if ("playMode" in event && event.playMode !== undefined) playMode = event.playMode;
     if ("title" in event && event.title !== undefined) title = event.title;
     updatedAt = Math.max(updatedAt, event.updatedAt);
@@ -875,6 +879,8 @@ export async function deriveBookSessionFromTranscript(
     sessionId,
     bookId,
     sessionKind,
+    profileId,
+    workId: workId ?? bookId,
     playMode,
     title,
     messages,

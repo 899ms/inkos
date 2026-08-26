@@ -8,6 +8,7 @@ import {
   createHarnessContextTransform,
   createWorkManifest,
   saveWorkManifest,
+  loadWorkManifest,
   workDirectory,
 } from "../harness/index.js";
 
@@ -47,6 +48,33 @@ describe("harness agent context", () => {
     expect(rendered).toContain("Interrogate the forged ledger.");
     expect(rendered).not.toContain("truncated");
     expect(rendered).not.toContain("未全文注入");
+  });
+
+  it("reloads the current Work manifest on every cached-agent turn", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-harness-context-refresh-"));
+    roots.push(root);
+    const profile = createBuiltInWorkProfileRegistry().require("longform-novel");
+    const work = createWorkManifest({
+      id: "refresh",
+      title: "Before",
+      profileId: profile.id,
+      language: "en",
+    });
+    await saveWorkManifest(root, work);
+    const transform = createHarnessContextTransform({
+      projectRoot: root,
+      work,
+      profile,
+      budgetTokens: 8_000,
+    });
+    const first = await transform([{ role: "user", content: "status", timestamp: 1 }] as never);
+    expect(JSON.stringify(first)).toContain('\\"title\\":\\"Before\\"');
+
+    const current = await loadWorkManifest(root, work.id);
+    await saveWorkManifest(root, { ...current, title: "After", updatedAt: new Date().toISOString() });
+    const second = await transform([{ role: "user", content: "status", timestamp: 2 }] as never);
+    expect(JSON.stringify(second)).toContain('\\"title\\":\\"After\\"');
+    expect(JSON.stringify(second)).not.toContain('\\"title\\":\\"Before\\"');
   });
 
   it("fails loudly when protected context alone exceeds its budget", async () => {

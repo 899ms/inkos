@@ -69,6 +69,7 @@ describe("BookSession", () => {
     it("creates session with bookId", () => {
       const session = createBookSession("my-book");
       expect(session.bookId).toBe("my-book");
+      expect(session.workId).toBe("my-book");
       expect(session.sessionId).toBeTruthy();
       expect(session.messages).toEqual([]);
       expect(session.createdAt).toBeGreaterThan(0);
@@ -78,6 +79,18 @@ describe("BookSession", () => {
     it("creates session with null bookId", () => {
       const session = createBookSession(null);
       expect(session.bookId).toBeNull();
+    });
+
+    it("stores profile and non-book Work identity independently from the UI surface", () => {
+      const session = createBookSession(null, "film-session", "interactive-film-authoring", {
+        profileId: "interactive-film",
+        workId: "film-work",
+      });
+      expect(session).toMatchObject({
+        sessionKind: "interactive-film-authoring",
+        profileId: "interactive-film",
+        workId: "film-work",
+      });
     });
 
     it("rejects unsafe bookId", () => {
