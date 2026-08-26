@@ -316,7 +316,7 @@ describe("applyPlayMutation", () => {
     expect(db.edges.get("edge-amulet")?.value).toMatchObject({ role: "holding" });
   });
 
-  it("rejects evidence status regressions", () => {
+  it("drops an invalid evidence regression without discarding the rest of the turn", () => {
     const db = new FakePlayDB();
     db.upsertEntity({ id: "receipt", type: "evidence", label: "住院收据" });
     db.upsertStateSlot({
@@ -328,12 +328,15 @@ describe("applyPlayMutation", () => {
       updatedEventId: "evt-old",
     });
 
-    expect(() => applyPlayMutation({
+    applyPlayMutation({
       db,
       mutation: {
         eventId: "evt-3",
         turn: 3,
         actionKind: "do",
+        entities: {
+          upsert: [{ id: "door", type: "location", label: "门廊" }],
+        },
         evidence: {
           transitions: [{
             entityId: "receipt",
@@ -342,8 +345,42 @@ describe("applyPlayMutation", () => {
         },
       },
       rawInput: "重新看收据",
-    })).toThrow(/regress/i);
+    });
 
-    expect(db.events).toHaveLength(0);
+    expect(db.events).toHaveLength(1);
+    expect(db.entities.has("door")).toBe(true);
+    expect(db.stateSlots.get("evidence:receipt:status")?.value).toEqual({ status: "verified" });
+  });
+
+  it("drops an evidence transition attached to an ordinary item", () => {
+    const db = new FakePlayDB();
+
+    applyPlayMutation({
+      db,
+      mutation: {
+        eventId: "evt-4",
+        turn: 4,
+        actionKind: "look",
+        summary: "玩家发现半片刻槽牌。",
+        entities: {
+          upsert: [
+            { id: "it_tal_plate", type: "item", label: "半片刻槽牌" },
+            { id: "old_uniform", type: "clue", label: "旧军服纹章" },
+          ],
+        },
+        evidence: {
+          transitions: [
+            { entityId: "it_tal_plate", to: "seen" },
+            { entityId: "old_uniform", to: "seen" },
+          ],
+        },
+      },
+      rawInput: "观察亡灵身上的标记",
+    });
+
+    expect(db.events).toHaveLength(1);
+    expect(db.entities.get("it_tal_plate")?.type).toBe("item");
+    expect(db.stateSlots.has("evidence:it_tal_plate:status")).toBe(false);
+    expect(db.stateSlots.get("evidence:old_uniform:status")?.value).toMatchObject({ status: "seen" });
   });
 });

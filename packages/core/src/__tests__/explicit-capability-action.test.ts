@@ -162,6 +162,42 @@ describe("explicit capability actions", () => {
     episodes.close();
   });
 
+  it("records a domain failure result as a failed action", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-explicit-domain-failure-"));
+    roots.push(root);
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: {
+        capabilityId: "interactive-world",
+        actionId: "play_step",
+        profileId: "interactive-world",
+      },
+      tool: {
+        name: "play_step",
+        label: "Advance world",
+        description: "Advance one world turn.",
+        parameters: Type.Object({ input: Type.String() }),
+        async execute() {
+          return {
+            content: [{ type: "text", text: "This turn did not advance." }],
+            details: { kind: "play_step_failed", error: "bad mutation" },
+          };
+        },
+      } as any,
+      parameters: { input: "continue" },
+      episodeId: "episode-domain-failure",
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      retry: { allowed: true },
+      data: { kind: "play_step_failed" },
+    });
+    const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+    expect(episodes.requireEpisode("episode-domain-failure").status).toBe("failed");
+    episodes.close();
+  });
+
   it("does not mutate or resync Work metadata for concurrent read actions", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-explicit-read-"));
     roots.push(root);

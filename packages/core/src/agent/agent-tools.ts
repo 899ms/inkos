@@ -2729,7 +2729,9 @@ export function createPlayStartTool(
 
 const PlayStepParams = Type.Object({
   input: Type.String({
-    description: "The player's next free-form action or chosen option.",
+    description:
+      "Copy the player's actual next action or chosen option here. Preserve its meaning and scope; " +
+      "do not invent the outcome, scene prose, discoveries, or extra actions for the player.",
   }),
 });
 
@@ -2964,7 +2966,8 @@ export function createPlayStepTool(
     name: "play_step",
     description:
       "Advance the current InkOS Play world by one player action. " +
-      "Use after play_start when the user keeps acting in the interactive scene.",
+      "Use after play_start when the user keeps acting in the interactive scene. " +
+      "Pass through what the player chose; the Play runtime, not this outer agent, resolves the outcome.",
     label: "Play Step",
     parameters: PlayStepParams,
     async execute(

@@ -53,7 +53,10 @@ const PLAYER_ENTITY_ID = "actor_player";
 const LEGACY_PLAYER_ENTITY_IDS = new Set(["player"]);
 
 export function applyPlayMutation(input: ApplyPlayMutationInput): ApplyPlayMutationResult {
-  const mutation = resolveEdgeEndpointLabels(input.db, canonicalizePlayerEntityIds(PlayMutationSchema.parse(input.mutation)));
+  const mutation = discardInvalidEvidenceTransitions(
+    input.db,
+    resolveEdgeEndpointLabels(input.db, canonicalizePlayerEntityIds(PlayMutationSchema.parse(input.mutation))),
+  );
   const event = PlayEventSchema.parse({
     id: mutation.eventId,
     turn: mutation.turn,
@@ -85,7 +88,10 @@ export interface SeedPlayGraphInput {
 }
 
 export function seedPlayGraph(input: SeedPlayGraphInput): void {
-  const mutation = resolveEdgeEndpointLabels(input.db, canonicalizePlayerEntityIds(PlayMutationSchema.parse(input.mutation)));
+  const mutation = discardInvalidEvidenceTransitions(
+    input.db,
+    resolveEdgeEndpointLabels(input.db, canonicalizePlayerEntityIds(PlayMutationSchema.parse(input.mutation))),
+  );
   validateMutation(input.db, mutation);
   const apply = () => {
     if (!mutation.blocked) applyGraphChanges(input.db, mutation);
@@ -184,6 +190,26 @@ function readExistingEntities(db: PlayReducerDB): ReadonlyArray<PlayEntity> {
   }
 }
 
+function discardInvalidEvidenceTransitions(
+  db: PlayReducerDB,
+  mutation: ParsedPlayMutation,
+): ParsedPlayMutation {
+  if (mutation.evidence.transitions.length === 0) return mutation;
+  const turnEntities = new Map(mutation.entities.upsert.map((entity) => [entity.id, entity]));
+  const transitions = mutation.evidence.transitions.filter((transition) => {
+    const entity = turnEntities.get(transition.entityId) ?? db.getEntity(transition.entityId);
+    if (!entity || (entity.type !== "evidence" && entity.type !== "clue")) return false;
+    const current = currentEvidenceStatus(db, transition.entityId);
+    if (transition.from && transition.from !== current) return false;
+    return evidenceRank(transition.to) >= evidenceRank(current);
+  });
+  if (transitions.length === mutation.evidence.transitions.length) return mutation;
+  return {
+    ...mutation,
+    evidence: { transitions },
+  };
+}
+
 function validateMutation(db: PlayReducerDB, mutation: ReturnType<typeof PlayMutationSchema.parse>): void {
   const upsertedEntityIds = new Set(mutation.entities.upsert.map((entity) => entity.id));
   const entityExists = (entityId: string): boolean => upsertedEntityIds.has(entityId) || db.getEntity(entityId) !== null;
@@ -197,24 +223,8 @@ function validateMutation(db: PlayReducerDB, mutation: ReturnType<typeof PlayMut
     }
   }
 
-  for (const transition of mutation.evidence.transitions) {
-    const entity = upsertedEntityIds.has(transition.entityId)
-      ? mutation.entities.upsert.find((candidate) => candidate.id === transition.entityId)
-      : db.getEntity(transition.entityId);
-    if (!entity) {
-      throw new Error(`Play mutation references missing entity in evidence transition: ${transition.entityId}`);
-    }
-    if (entity.type !== "evidence" && entity.type !== "clue") {
-      throw new Error(`Play evidence transition requires evidence or clue entity: ${transition.entityId}`);
-    }
-    const current = currentEvidenceStatus(db, transition.entityId);
-    if (transition.from && transition.from !== current) {
-      throw new Error(`Play evidence transition expected ${transition.from} but current status is ${current}`);
-    }
-    if (evidenceRank(transition.to) < evidenceRank(current)) {
-      throw new Error(`Play evidence transition cannot regress from ${current} to ${transition.to}`);
-    }
-  }
+  // Evidence transitions are normalized before validation. One malformed
+  // lifecycle update must not discard the rest of an otherwise valid turn.
 }
 
 function applyGraphChanges(db: PlayReducerDB, mutation: ReturnType<typeof PlayMutationSchema.parse>): void {
