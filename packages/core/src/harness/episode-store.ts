@@ -1,0 +1,173 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import {
+  HARNESS_VERSION,
+  CreativeEpisodeEventSchema,
+  CreativeEpisodeSchema,
+  EpisodeStatusSchema,
+  HarnessIdSchema,
+  type CreativeEpisode,
+  type CreativeEpisodeEvent,
+  type EpisodeStatus,
+} from "./contracts.js";
+
+export class CreativeEpisodeStore {
+  private readonly db: DatabaseSync;
+
+  constructor(path: string) {
+    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+    this.db = new DatabaseSync(path);
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA foreign_keys = ON");
+    this.migrate();
+  }
+
+  create(input: CreativeEpisode): CreativeEpisode {
+    const episode = CreativeEpisodeSchema.parse(input);
+    this.db.prepare(`
+      INSERT INTO creative_episodes (
+        episode_id, work_id, profile_id, status, started_at, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      episode.id,
+      episode.workId,
+      episode.profileId,
+      episode.status,
+      episode.startedAt,
+      episode.completedAt,
+    );
+    return episode;
+  }
+
+  append(
+    input: Omit<CreativeEpisodeEvent, "version" | "seq" | "timestamp">,
+    timestamp = new Date().toISOString(),
+  ): CreativeEpisodeEvent {
+    const episodeId = HarnessIdSchema.parse(input.episodeId);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const episode = this.db.prepare(
+        "SELECT episode_id FROM creative_episodes WHERE episode_id = ?",
+      ).get(episodeId);
+      if (!episode) throw new Error(`Unknown creative episode: ${episodeId}`);
+      const row = this.db.prepare(
+        "SELECT COALESCE(MAX(seq), -1) + 1 AS seq FROM creative_episode_events WHERE episode_id = ?",
+      ).get(episodeId) as unknown as { readonly seq: number };
+      const event = CreativeEpisodeEventSchema.parse({
+        version: HARNESS_VERSION,
+        ...input,
+        episodeId,
+        seq: row.seq,
+        timestamp,
+      });
+      this.db.prepare(`
+        INSERT INTO creative_episode_events (
+          episode_id, seq, timestamp, type, work_id,
+          capability_id, action_id, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        event.episodeId,
+        event.seq,
+        event.timestamp,
+        event.type,
+        event.workId,
+        event.capabilityId ?? null,
+        event.actionId ?? null,
+        JSON.stringify(event.payload),
+      );
+      this.db.exec("COMMIT");
+      return event;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  finish(
+    episodeId: string,
+    status: Exclude<EpisodeStatus, "running">,
+    completedAt = new Date().toISOString(),
+  ): CreativeEpisode {
+    const id = HarnessIdSchema.parse(episodeId);
+    EpisodeStatusSchema.parse(status);
+    const result = this.db.prepare(`
+      UPDATE creative_episodes
+      SET status = ?, completed_at = ?
+      WHERE episode_id = ? AND status = 'running'
+    `).run(status, completedAt, id);
+    if (Number(result.changes) !== 1) {
+      throw new Error(`Creative episode is missing or already terminal: ${id}`);
+    }
+    return this.requireEpisode(id);
+  }
+
+  getEpisode(episodeId: string): CreativeEpisode | undefined {
+    const id = HarnessIdSchema.parse(episodeId);
+    const row = this.db.prepare(`
+      SELECT episode_id AS id, work_id AS workId, profile_id AS profileId,
+             status, started_at AS startedAt, completed_at AS completedAt
+      FROM creative_episodes
+      WHERE episode_id = ?
+    `).get(id) as unknown as Record<string, unknown> | undefined;
+    return row ? CreativeEpisodeSchema.parse({ version: HARNESS_VERSION, ...row }) : undefined;
+  }
+
+  requireEpisode(episodeId: string): CreativeEpisode {
+    const episode = this.getEpisode(episodeId);
+    if (!episode) throw new Error(`Unknown creative episode: ${episodeId}`);
+    return episode;
+  }
+
+  listEvents(episodeId: string): CreativeEpisodeEvent[] {
+    const id = HarnessIdSchema.parse(episodeId);
+    const rows = this.db.prepare(`
+      SELECT episode_id AS episodeId, seq, timestamp, type, work_id AS workId,
+             capability_id AS capabilityId, action_id AS actionId, payload_json AS payloadJson
+      FROM creative_episode_events
+      WHERE episode_id = ?
+      ORDER BY seq ASC
+    `).all(id) as unknown as ReadonlyArray<Record<string, unknown> & { readonly payloadJson: string }>;
+    return rows.map(({ payloadJson, ...row }) => CreativeEpisodeEventSchema.parse({
+      version: HARNESS_VERSION,
+      ...row,
+      payload: JSON.parse(payloadJson),
+    }));
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  private migrate(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS creative_episodes (
+        episode_id TEXT PRIMARY KEY,
+        work_id TEXT,
+        profile_id TEXT,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS creative_episode_events (
+        episode_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        timestamp TEXT NOT NULL,
+        type TEXT NOT NULL,
+        work_id TEXT,
+        capability_id TEXT,
+        action_id TEXT,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (episode_id, seq),
+        FOREIGN KEY (episode_id) REFERENCES creative_episodes(episode_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_creative_episode_events_type
+        ON creative_episode_events(type);
+      CREATE INDEX IF NOT EXISTS idx_creative_episodes_work
+        ON creative_episodes(work_id, started_at);
+    `);
+  }
+}
+

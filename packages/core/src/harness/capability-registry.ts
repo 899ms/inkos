@@ -1,0 +1,99 @@
+import type { z } from "zod";
+import {
+  ActionResultSchema,
+  HarnessIdSchema,
+  type ActionResult,
+  type ActionRisk,
+  type CreativeEpisodeEvent,
+  type WorkManifest,
+  type WorkProfile,
+} from "./contracts.js";
+
+export interface CapabilityExecutionContext {
+  readonly projectRoot: string;
+  readonly episodeId: string;
+  readonly work: WorkManifest | null;
+  readonly profile: WorkProfile;
+  readonly signal?: AbortSignal;
+  readonly appendEvent?: (event: Omit<CreativeEpisodeEvent, "version" | "seq" | "timestamp">) => Promise<void>;
+}
+
+export interface CapabilityAction {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly risk: ActionRisk;
+  readonly contextRecipeId?: string;
+  readonly defaultSkillIds?: ReadonlyArray<string>;
+  readonly inputSchema: z.ZodTypeAny;
+  execute(context: CapabilityExecutionContext, input: unknown): Promise<ActionResult>;
+}
+
+export interface Capability {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly actions: ReadonlyArray<CapabilityAction>;
+}
+
+export interface ResolvedCapabilityAction {
+  readonly capability: Capability;
+  readonly action: CapabilityAction;
+}
+
+export class CapabilityRegistry {
+  private readonly capabilities = new Map<string, Capability>();
+
+  register(capability: Capability): void {
+    const id = HarnessIdSchema.parse(capability.id);
+    if (this.capabilities.has(id)) {
+      throw new Error(`Capability already registered: ${id}`);
+    }
+    const actionIds = new Set<string>();
+    for (const action of capability.actions) {
+      const actionId = HarnessIdSchema.parse(action.id);
+      if (actionIds.has(actionId)) {
+        throw new Error(`Duplicate action "${actionId}" in capability "${id}"`);
+      }
+      actionIds.add(actionId);
+    }
+    this.capabilities.set(id, capability);
+  }
+
+  get(id: string): Capability | undefined {
+    return this.capabilities.get(id);
+  }
+
+  list(): ReadonlyArray<Capability> {
+    return [...this.capabilities.values()].sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  forProfile(profile: WorkProfile): ReadonlyArray<Capability> {
+    return profile.capabilityIds.map((id) => {
+      const capability = this.capabilities.get(id);
+      if (!capability) throw new Error(`Profile "${profile.id}" requires unknown capability "${id}"`);
+      return capability;
+    });
+  }
+
+  resolve(capabilityId: string, actionId: string): ResolvedCapabilityAction {
+    const capability = this.capabilities.get(capabilityId);
+    if (!capability) throw new Error(`Unknown capability: ${capabilityId}`);
+    const action = capability.actions.find((candidate) => candidate.id === actionId);
+    if (!action) throw new Error(`Unknown action: ${capabilityId}.${actionId}`);
+    return { capability, action };
+  }
+
+  async invoke(
+    capabilityId: string,
+    actionId: string,
+    context: CapabilityExecutionContext,
+    rawInput: unknown,
+  ): Promise<ActionResult> {
+    const { action } = this.resolve(capabilityId, actionId);
+    if (context.signal?.aborted) throw context.signal.reason;
+    const input = action.inputSchema.parse(rawInput);
+    return ActionResultSchema.parse(await action.execute(context, input));
+  }
+}
+
