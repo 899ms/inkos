@@ -169,8 +169,8 @@ vi.mock("@mariozechner/pi-ai", async () => {
               {
                 type: "toolCall",
                 id: "tool-1",
-                name: "longform__read",
-                arguments: { path: "book-a/source/story/story_bible.md" },
+                name: "workspace__read",
+                arguments: { path: "works/book-a/source/story/story_bible.md" },
               },
             ], timestamp)
         : prompt === "raw chapter"
@@ -294,7 +294,6 @@ const WORKSPACE_TOOL_NAMES = [
 const LONGFORM_TOOL_NAMES = [
   ...WORKSPACE_TOOL_NAMES,
   "longform__sub_agent",
-  "longform__read",
   "longform__write_truth_file",
   "longform__rename_entity",
   "longform__patch_chapter_text",
@@ -316,7 +315,6 @@ const LONGFORM_READ_TOOL_NAMES = [
   "workspace__research_web",
   "workspace__retrieve_material",
   "workspace__use_skill",
-  "longform__read",
   "longform__get_narrative_forecast",
   "longform__grep",
   "longform__ls",
@@ -651,7 +649,8 @@ describe("runAgentSession cache — bookId switch", () => {
   it("disables system file read by default for the session read tool", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
-    const outsidePath = join(projectRoot, "outside.md");
+    otherProjectRoot = await mkdtemp(join(tmpdir(), "inkos-agent-outside-"));
+    const outsidePath = join(otherProjectRoot, "outside.md");
     await writeFile(outsidePath, "outside content", "utf-8");
 
     await runAgentSession(
@@ -659,7 +658,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "longform__read");
+    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "workspace__read");
     const result = await readTool.execute("tool-read-default-session", { path: outsidePath });
 
     expect(result.content[0]?.type).toBe("text");
@@ -672,7 +671,8 @@ describe("runAgentSession cache — bookId switch", () => {
   it("can explicitly enable system file read for the session read tool", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
-    const outsidePath = join(projectRoot, "outside.md");
+    otherProjectRoot = await mkdtemp(join(tmpdir(), "inkos-agent-outside-"));
+    const outsidePath = join(otherProjectRoot, "outside.md");
     await writeFile(outsidePath, "outside content", "utf-8");
 
     await runAgentSession(
@@ -688,7 +688,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "longform__read");
+    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "workspace__read");
     const result = await readTool.execute("tool-read-enabled-session", { path: outsidePath });
 
     expect(result.content[0]?.type).toBe("text");
@@ -700,7 +700,8 @@ describe("runAgentSession cache — bookId switch", () => {
   it("can explicitly disable system file read for the session read tool", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
-    const outsidePath = join(projectRoot, "outside.md");
+    otherProjectRoot = await mkdtemp(join(tmpdir(), "inkos-agent-outside-"));
+    const outsidePath = join(otherProjectRoot, "outside.md");
     await writeFile(outsidePath, "outside content", "utf-8");
 
     await runAgentSession(
@@ -716,7 +717,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "longform__read");
+    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "workspace__read");
     const result = await readTool.execute("tool-read-disabled-session", { path: outsidePath });
 
     expect(result.content[0]?.type).toBe("text");

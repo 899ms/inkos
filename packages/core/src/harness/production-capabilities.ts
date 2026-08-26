@@ -175,7 +175,10 @@ export function createProductionCapabilityRegistry(
   });
   const workspaceTools: ProductionAgentTool[] = [
     proposalTool,
-    createReadTool(environment.projectRoot, { scope: "project" }),
+    createReadTool(environment.projectRoot, {
+      scope: "project",
+      allowSystemPaths: environment.allowSystemFileRead,
+    }),
     createResearchWebTool(environment.projectRoot),
     createIngestMaterialTool(environment.projectRoot),
     createRetrieveMaterialTool(environment.projectRoot),
@@ -194,7 +197,6 @@ export function createProductionCapabilityRegistry(
           activeSkills: environment.activeSkills,
           workerSkills: environment.workerSkills,
         }),
-        createReadTool(environment.projectRoot, { allowSystemPaths: environment.allowSystemFileRead }),
         createWriteTruthFileTool(environment.projectRoot, environment.work.id),
         createRenameEntityTool(environment.projectRoot, environment.work.id),
         createPatchChapterTextTool(environment.projectRoot, environment.work.id),
@@ -359,17 +361,18 @@ function toolBackedAction(
   tool: ProductionAgentTool,
   forceConfirmation: boolean,
 ) {
+  const risk = toolRisk(tool.name);
   return defineCapabilityAction({
     id: tool.name,
     title: tool.label || tool.name,
     description: tool.description || tool.name,
-    risk: toolRisk(tool.name),
+    risk,
     requiresConfirmation: forceConfirmation || CONFIRMED_CREATION_TOOLS.has(tool.name),
     parameters: tool.parameters ?? Type.Any(),
     async execute(context: CapabilityExecutionContext, input: unknown): Promise<ActionResult> {
       const before = await loadKnownWork(context.projectRoot, context.work?.id);
       const result = await tool.execute(context.episodeId, input, context.signal, context.onUpdate);
-      return normalizeToolResult(context, result, before);
+      return normalizeToolResult(context, result, before, risk !== "read");
     },
   });
 }
@@ -384,6 +387,7 @@ async function normalizeToolResult(
   context: CapabilityExecutionContext,
   result: AgentToolResult<unknown>,
   before: WorkManifest | null,
+  syncArtifacts: boolean,
 ): Promise<ActionResult> {
   const content = result.content
     .filter((item): item is Extract<typeof item, { type: "text" }> => item.type === "text")
@@ -392,7 +396,7 @@ async function normalizeToolResult(
     .trim();
   const details = result.details;
   const workIds = new Set<string>();
-  if (context.work) workIds.add(context.work.id);
+  if (syncArtifacts && context.work) workIds.add(context.work.id);
   collectWorkIds(details, workIds);
   const artifacts: ActionArtifactRef[] = [];
   for (const workId of workIds) {

@@ -15,6 +15,7 @@ import {
   workDirectory,
 } from "../harness/index.js";
 import { StateManager } from "../state/manager.js";
+import { createReadTool } from "../agent/agent-tools.js";
 
 describe("explicit capability actions", () => {
   const roots: string[] = [];
@@ -159,6 +160,34 @@ describe("explicit capability actions", () => {
     const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
     expect(episodes.requireEpisode("episode-incomplete").status).toBe("failed");
     episodes.close();
+  });
+
+  it("does not mutate or resync Work metadata for concurrent read actions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-explicit-read-"));
+    roots.push(root);
+    const work = createWorkManifest({
+      id: "read-work",
+      title: "Read Work",
+      profileId: "longform-novel",
+      language: "en",
+    });
+    await saveWorkManifest(root, work);
+    await mkdir(join(workDirectory(root, work.id), "source"), { recursive: true });
+    await writeFile(join(workDirectory(root, work.id), "source", "note.md"), "Stable note.\n");
+    const runRead = (episodeId: string) => executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "workspace", actionId: "read", profileId: "workspace-default" },
+      tool: createReadTool(root, { scope: "project" }),
+      parameters: { path: "works/read-work/source/note.md" },
+      workId: work.id,
+      episodeId,
+    });
+
+    const [first, second] = await Promise.all([runRead("episode-read-1"), runRead("episode-read-2")]);
+
+    expect(first.content).toContain("Stable note.");
+    expect(second.content).toContain("Stable note.");
+    expect(await loadWorkManifest(root, work.id)).toEqual(work);
   });
 
   it("keeps deleted source history but removes its authoritative current revision", async () => {
