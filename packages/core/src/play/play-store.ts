@@ -5,8 +5,9 @@ import { z } from "zod";
 import { PlayEventSchema, type PlayEvent } from "../models/play.js";
 import type { PlayGraphSnapshot } from "./play-file-db.js";
 import type { PlayGraphDB } from "./play-db-factory.js";
-
-const WORLDS_DIR = "worlds";
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { createInitialWorkManifestWrite, syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { listWorkManifests, loadWorkManifest, workDirectory } from "../harness/work-store.js";
 
 const PlayTranscriptTurnSchema = z.object({
   role: z.enum(["user", "assistant", "system", "tool"]),
@@ -57,7 +58,7 @@ export class PlayStore {
   constructor(private readonly projectRoot: string) {}
 
   worldDir(worldId: string): string {
-    return join(this.projectRoot, WORLDS_DIR, assertSafeSegment(worldId));
+    return join(workDirectory(this.projectRoot, assertSafeSegment(worldId)), "source");
   }
 
   runDir(worldId: string, runId: string): string {
@@ -68,6 +69,36 @@ export class PlayStore {
     await mkdir(this.worldDir(worldId), { recursive: true });
   }
 
+  async ensureWorldDefinition(worldId: string): Promise<PlayWorld> {
+    const existing = await this.loadWorld(worldId);
+    if (existing) return existing;
+    try {
+      const work = await loadWorkManifest(this.projectRoot, worldId);
+      const now = new Date().toISOString();
+      const world = PlayWorldSchema.parse({
+        id: worldId,
+        title: work.title,
+        premise: "",
+        mode: "open",
+        language: work.language === "en" ? "en" : "zh",
+        createdAt: work.createdAt,
+        updatedAt: now,
+      });
+      await commitAtomicFileSet({
+        rootDir: this.projectRoot,
+        writes: [{
+          relativePath: join("works", worldId, "source", "world.json"),
+          content: `${JSON.stringify(world, null, 2)}\n`,
+        }],
+      });
+      await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: worldId, updatedAt: now });
+      return world;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return this.createWorld({ id: worldId, title: worldId, premise: "", mode: "open", language: "zh" });
+    }
+  }
+
   async createWorld(input: PlayWorldInput): Promise<PlayWorld> {
     const now = new Date().toISOString();
     const world = PlayWorldSchema.parse({
@@ -76,12 +107,20 @@ export class PlayStore {
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? now,
     });
-    await this.ensureWorld(world.id);
-    await writeFile(
-      join(this.worldDir(world.id), "world.json"),
-      `${JSON.stringify(world, null, 2)}\n`,
-      "utf-8",
-    );
+    const worldWrite = {
+      relativePath: join("works", world.id, "source", "world.json"),
+      content: `${JSON.stringify(world, null, 2)}\n`,
+    };
+    const work = createInitialWorkManifestWrite({
+      workId: world.id,
+      title: world.title,
+      profileId: "interactive-world",
+      language: world.language,
+      writes: [worldWrite],
+      createdAt: world.createdAt,
+      metadata: { mode: world.mode },
+    });
+    await commitAtomicFileSet({ rootDir: this.projectRoot, writes: [worldWrite, work.write] });
     return world;
   }
 
@@ -103,12 +142,14 @@ export class PlayStore {
       createdAt: current.createdAt,
       updatedAt: new Date().toISOString(),
     });
-    await this.ensureWorld(world.id);
-    await writeFile(
-      join(this.worldDir(world.id), "world.json"),
-      `${JSON.stringify(world, null, 2)}\n`,
-      "utf-8",
-    );
+    await commitAtomicFileSet({
+      rootDir: this.projectRoot,
+      writes: [{
+        relativePath: join("works", world.id, "source", "world.json"),
+        content: `${JSON.stringify(world, null, 2)}\n`,
+      }],
+    });
+    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: world.id, updatedAt: world.updatedAt });
     return world;
   }
 
@@ -123,27 +164,17 @@ export class PlayStore {
   }
 
   async listWorlds(): Promise<PlayWorld[]> {
-    const worldsRoot = join(this.projectRoot, WORLDS_DIR);
-    let entries: string[];
-    try {
-      entries = await readdir(worldsRoot);
-    } catch {
-      return [];
-    }
-
     const worlds: PlayWorld[] = [];
-    for (const entry of entries.sort()) {
-      if (!isSafeSegment(entry)) continue;
-      const entryStat = await stat(join(worldsRoot, entry)).catch(() => null);
-      if (!entryStat?.isDirectory()) continue;
-      const world = await this.loadWorld(entry);
+    for (const work of await listWorkManifests(this.projectRoot, "interactive-world")) {
+      const world = await this.loadWorld(work.id);
       worlds.push(world ?? PlayWorldSchema.parse({
-        id: entry,
-        title: entry,
+        id: work.id,
+        title: work.title,
         premise: "",
         mode: "open",
-        createdAt: entryStat.birthtime.toISOString(),
-        updatedAt: entryStat.mtime.toISOString(),
+        language: work.language === "en" ? "en" : "zh",
+        createdAt: work.createdAt,
+        updatedAt: work.updatedAt,
       }));
     }
     return worlds.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));

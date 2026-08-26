@@ -4784,7 +4784,7 @@ describe("createStudioServer daemon lifecycle", () => {
         },
       }),
     );
-    const world = JSON.parse(await readFile(join(root, "worlds", "play-session-1", "world.json"), "utf-8")) as { title: string; mode: string };
+    const world = JSON.parse(await readFile(join(root, "works", "play-session-1", "source", "world.json"), "utf-8")) as { title: string; mode: string };
     expect(world).toMatchObject({
       title: "旧档案馆之夜",
       mode: "open",
@@ -4835,7 +4835,7 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(response.status, JSON.stringify(body)).toBe(200);
     expect(body.response).toBe("");
     expect(body.details?.toolExecutions?.[0]?.result).toContain("主演栏里有个名字叫");
-    await expect(readFile(join(root, "worlds", "play-session-truncated", "runs", "main", "projections", "scene.md"), "utf-8"))
+    await expect(readFile(join(root, "works", "play-session-truncated", "source", "runs", "main", "projections", "scene.md"), "utf-8"))
       .resolves.toContain("主演栏里有个名字叫");
   });
 
@@ -6363,7 +6363,7 @@ describe("createStudioServer daemon lifecycle", () => {
   it("loads an existing Play run transcript for Studio refresh", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
-    const runDir = join(root, "worlds", "betrayal-car", "runs", "run-1");
+    const runDir = join(root, "works", "betrayal-car", "source", "runs", "run-1");
     await mkdir(join(runDir, "state"), { recursive: true });
     await writeFile(
       join(runDir, "transcript.jsonl"),
@@ -6421,8 +6421,8 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("exposes ready Play scene images from the manifest without requiring direct file probing", async () => {
-    await mkdir(join(root, "worlds", "img-world", "runs", "run-1", "images"), { recursive: true });
-    await writeFile(join(root, "worlds", "img-world", "runs", "run-1", "images", "manifest.json"), JSON.stringify({
+    await mkdir(join(root, "works", "img-world", "source", "runs", "run-1", "images"), { recursive: true });
+    await writeFile(join(root, "works", "img-world", "source", "runs", "run-1", "images", "manifest.json"), JSON.stringify({
       "scene-turn-0": { status: "ready", file: "scene-turn-0.png" },
       "scene-turn-3": { status: "ready", file: "scene-turn-3.png" },
       "scene-turn-4": { status: "failed", error: "provider unavailable" },
@@ -6462,8 +6462,8 @@ describe("createStudioServer daemon lifecycle", () => {
 
   it("returns Play image generation failures as non-fatal manifest status instead of a network error", async () => {
     generatePlayImageMock.mockResolvedValueOnce({ status: "failed", error: "provider unavailable" });
-    await mkdir(join(root, "worlds", "img-world", "runs", "run-1", "projections"), { recursive: true });
-    await writeFile(join(root, "worlds", "img-world", "runs", "run-1", "projections", "scene.md"), "雨夜里，侦探站在冷库门口。", "utf-8");
+    await mkdir(join(root, "works", "img-world", "source", "runs", "run-1", "projections"), { recursive: true });
+    await writeFile(join(root, "works", "img-world", "source", "runs", "run-1", "projections", "scene.md"), "雨夜里，侦探站在冷库门口。", "utf-8");
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
 

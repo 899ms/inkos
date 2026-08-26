@@ -649,7 +649,7 @@ describe("agent deterministic writing tools", () => {
     });
 
     expect(seededScene).toContain("主演栏里有个名字叫");
-    await expect(readFile(join(root, "worlds", "play-session-truncated", "runs", "main", "projections", "scene.md"), "utf-8"))
+    await expect(readFile(join(root, "works", "play-session-truncated", "source", "runs", "main", "projections", "scene.md"), "utf-8"))
       .resolves.toContain("主演栏里有个名字叫");
   });
 
@@ -1565,7 +1565,7 @@ describe("agent deterministic writing tools", () => {
     const world = await store.loadWorld("play-edit-session");
     expect(world?.worldContract).toContain("室友会自主行动");
     expect(world?.visualContract).toContain("物件情绪重量");
-    const stateJson = JSON.parse(await readFile(join(root, "worlds", "play-edit-session", "runs", "main", "state", "current.json"), "utf-8"));
+    const stateJson = JSON.parse(await readFile(join(root, "works", "play-edit-session", "source", "runs", "main", "state", "current.json"), "utf-8"));
     expect(stateJson.worldContract).toContain("室友会自主行动");
     expect(stateJson.visualContract).toContain("物件情绪重量");
     const db = createPlayDB(store.runDir("play-edit-session", "main"));
@@ -1618,7 +1618,7 @@ describe("agent deterministic writing tools", () => {
     const world = await store.loadWorld("play-contract-replace");
     expect(world?.worldContract).toContain("普通差错 / 需要复核 / 涉及追责 / 需要主任签字");
     expect(world?.worldContract).not.toContain("可能追责 / 不能公开");
-    const stateJson = JSON.parse(await readFile(join(root, "worlds", "play-contract-replace", "runs", "main", "state", "current.json"), "utf-8"));
+    const stateJson = JSON.parse(await readFile(join(root, "works", "play-contract-replace", "source", "runs", "main", "state", "current.json"), "utf-8"));
     expect(stateJson.turn).toBe(0);
     expect(stateJson.worldContract).toContain("普通差错 / 需要复核 / 涉及追责 / 需要主任签字");
     expect(stateJson.worldContract).not.toContain("可能追责 / 不能公开");

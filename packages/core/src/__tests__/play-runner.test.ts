@@ -184,7 +184,7 @@ describe("PlayRunner", () => {
     expect(renderInput?.stateBrief).toContain("anchor: 仍在停车场刚上车的片刻");
     expect(db.stateSlots.get("evidence:nav-stats:status")?.value).toMatchObject({ status: "seen" });
 
-    const runDir = join(root, "worlds", "betrayal-car", "runs", "run-1");
+    const runDir = join(root, "works", "betrayal-car", "source", "runs", "run-1");
     await expect(readFile(join(runDir, "events.jsonl"), "utf-8"))
       .resolves.toContain("\"id\":\"evt-1\"");
     await expect(readFile(join(runDir, "events.jsonl"), "utf-8"))
@@ -233,7 +233,7 @@ describe("PlayRunner", () => {
     expect(db.events).toHaveLength(0);
     expect(db.entities.has("ticket")).toBe(false);
 
-    const runDir = join(root, "worlds", "rollback-world", "runs", "main");
+    const runDir = join(root, "works", "rollback-world", "source", "runs", "main");
     await expect(readFile(join(runDir, "events.jsonl"), "utf-8")).resolves.toBe("");
     await expect(readFile(join(runDir, "transcript.jsonl"), "utf-8")).resolves.toBe("");
     await expect(readFile(join(runDir, "status.json"), "utf-8"))
@@ -274,7 +274,7 @@ describe("PlayRunner", () => {
 
     expect(db.events).toHaveLength(0);
     expect(db.entities.has("evidence_seal")).toBe(false);
-    const runDir = join(root, "worlds", "render-failure", "runs", "main");
+    const runDir = join(root, "works", "render-failure", "source", "runs", "main");
     await expect(readFile(join(runDir, "events.jsonl"), "utf-8")).rejects.toThrow();
     await expect(readFile(join(runDir, "projections", "scene.md"), "utf-8")).rejects.toThrow();
     await expect(readFile(join(runDir, "transcript.jsonl"), "utf-8")).rejects.toThrow();
@@ -337,10 +337,10 @@ describe("PlayRunner", () => {
     expect([...db.edges.values()].some((edge) => edge.value?.role === "holding")).toBe(true);
     expect(db.stateSlots.get("slot_callback_timer")?.value).toBe(15);
     expect(db.events).toHaveLength(0);
-    await expect(readFile(join(root, "worlds", "opening-seed", "runs", "main", "events.jsonl"), "utf-8"))
+    await expect(readFile(join(root, "works", "opening-seed", "source", "runs", "main", "events.jsonl"), "utf-8"))
       .rejects
       .toThrow();
-    await expect(readFile(join(root, "worlds", "opening-seed", "runs", "main", "projections", "state.md"), "utf-8"))
+    await expect(readFile(join(root, "works", "opening-seed", "source", "runs", "main", "projections", "state.md"), "utf-8"))
       .resolves
       .toContain("无名婴儿照片");
   });
@@ -503,7 +503,7 @@ describe("PlayRunner", () => {
     });
 
     await expect(runner.step("我看墙上的钟")).rejects.toThrow(/missing entity/);
-    await expect(readFile(join(root, "worlds", "bad-turn", "runs", "run-1", "transcript.jsonl"), "utf-8"))
+    await expect(readFile(join(root, "works", "bad-turn", "source", "runs", "run-1", "transcript.jsonl"), "utf-8"))
       .resolves
       .toBe("");
   });
@@ -633,7 +633,7 @@ describe("PlayRunner", () => {
     await runner.step("我不碰铜匣，先屏住呼吸。");
 
     expect(db.events[0]?.outcomeSummary).toBe("你屏住呼吸，默默数着门外那人的呼吸节奏。");
-    await expect(readFile(join(root, "worlds", "summary-dedupe", "runs", "main", "events.jsonl"), "utf-8"))
+    await expect(readFile(join(root, "works", "summary-dedupe", "source", "runs", "main", "events.jsonl"), "utf-8"))
       .resolves
       .not
       .toContain("；你屏住呼吸");
@@ -707,7 +707,7 @@ describe("PlayRunner", () => {
     expect(reconcile).toHaveBeenCalledWith(expect.objectContaining({ sceneText }));
     expect(db.entities.get("item_black_usb")?.label).toBe("黑色U盘");
     expect([...db.edges.values()].some((edge) => edge.toId === "item_black_usb" && edge.value?.role === "holding")).toBe(true);
-    await expect(readFile(join(root, "worlds", "renderer-noun", "runs", "run-1", "projections", "state.md"), "utf-8"))
+    await expect(readFile(join(root, "works", "renderer-noun", "source", "runs", "run-1", "projections", "state.md"), "utf-8"))
       .resolves
       .toContain("黑色U盘");
   });
@@ -765,7 +765,7 @@ describe("PlayRunner", () => {
 
     await runner.step("我数白帆船下一次进灯光边缘的间隔");
 
-    const state = await readFile(join(root, "worlds", "dedupe-projection", "runs", "run-1", "projections", "state.md"), "utf-8");
+    const state = await readFile(join(root, "works", "dedupe-projection", "source", "runs", "run-1", "projections", "state.md"), "utf-8");
     expect(state.match(/actor_white_sailboat/g)?.length).toBe(1);
     expect(state).toContain("正按灯光旋转周期规律绕行");
     expect(state).not.toContain("一艘没有航灯、没有登记的白帆船。");
@@ -838,7 +838,7 @@ describe("PlayRunner", () => {
     expect(db.entities.has("evidence_ticket_a")).toBe(false);
     expect(db.entities.has("evidence_ticket_b")).toBe(true);
 
-    const runDir = join(root, "worlds", "regenerate-turn", "runs", "main");
+    const runDir = join(root, "works", "regenerate-turn", "source", "runs", "main");
     await expect(readFile(join(runDir, "events.jsonl"), "utf-8"))
       .resolves
       .toContain("记录版本B的车票发现");
@@ -898,6 +898,6 @@ describe("PlayRunner", () => {
     // Windows 上句柄未释放会让 play.db 无法删除；这里至少保证重复 close 不抛异常。
     runner.close();
 
-    await expect(rm(join(root, "worlds", "close-self-db"), { recursive: true })).resolves.toBeUndefined();
+    await expect(rm(join(root, "works", "close-self-db"), { recursive: true })).resolves.toBeUndefined();
   });
 });

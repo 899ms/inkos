@@ -25,6 +25,7 @@ import {
   writeProductionRunSnapshot,
   type ProductionObservation,
 } from "../production/harness.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 export interface PlayActionInterpreterLike {
   readonly interpret: (input: {
@@ -155,6 +156,7 @@ export class PlayRunner {
     readonly sceneText: string;
     readonly suggestedActions?: readonly string[];
   }): Promise<PlayOpeningSeedResult | null> {
+    await this.store.ensureWorldDefinition(this.options.worldId);
     await this.store.ensureRun(this.options.worldId, this.options.runId);
     const existing = readGraphSnapshot(this.db);
     if (isOpeningGraphReady(existing)) {
@@ -225,6 +227,7 @@ export class PlayRunner {
       );
     }
     await this.store.writeProjection(this.options.worldId, this.options.runId, "projections/state.md", renderStateBrief({ action, mutation: finalMutation }));
+    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId });
     return { mutation: finalMutation };
   }
 
@@ -232,6 +235,7 @@ export class PlayRunner {
     const rawInput = input.trim();
     if (!rawInput) throw new Error("Play input is empty.");
 
+    await this.store.ensureWorldDefinition(this.options.worldId);
     await this.store.ensureRun(this.options.worldId, this.options.runId);
     const turn = (await this.store.readEvents(this.options.worldId, this.options.runId)).length + 1;
     await this.writeRunStatus(turn, "running", []);
@@ -248,10 +252,12 @@ export class PlayRunner {
           }]
         : [];
       await this.writeRunStatus(turn, "complete", observations);
+      await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId });
       return result;
     } catch (error) {
       const cancelled = this.options.ctx?.signal?.aborted === true;
       await this.writeRunStatus(turn, cancelled ? "cancelled" : "failed", [], error).catch(() => undefined);
+      await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId }).catch(() => undefined);
       throw error;
     }
   }
@@ -380,7 +386,7 @@ export class PlayRunner {
     observations: ReadonlyArray<ProductionObservation>,
     error?: unknown,
   ): Promise<void> {
-    const runDir = join("worlds", this.options.worldId, "runs", this.options.runId);
+    const runDir = join("works", this.options.worldId, "source", "runs", this.options.runId);
     await writeProductionRunSnapshot({
       rootDir: this.options.projectRoot,
       runPath: join(runDir, "status.json"),
@@ -466,6 +472,7 @@ export class PlayRunner {
       throw new Error(`Play variant not found: turn ${input.turn} / ${input.variantId}`);
     }
     await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, snapshot, db);
+    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId });
     return {
       turn: input.turn,
       variantId: input.variantId,
