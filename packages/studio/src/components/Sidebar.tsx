@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApi } from "../hooks/use-api";
-import type { SSEMessage } from "../hooks/use-sse";
+import { useNewSSEMessages, type SSEMessage } from "../hooks/use-sse";
 import { applyBookCollectionEvent, shouldRefetchBookCollections, shouldRefetchDaemonStatus } from "../hooks/use-book-activity";
 import type { TFunction } from "../hooks/use-i18n";
 import { tr } from "../lib/app-language";
@@ -135,9 +135,7 @@ export function Sidebar({ nav, activePage, sse, t }: {
     [activeSessionId, sessionIdsByBook, sessions],
   );
 
-  useEffect(() => {
-    const recent = sse.messages.at(-1);
-    if (!recent) return;
+  useNewSSEMessages(sse.messages, (recent) => {
     if (shouldRefetchBookCollections(recent)) {
       let appliedIncrementally = false;
       mutateBooks((current) => {
@@ -154,7 +152,7 @@ export function Sidebar({ nav, activePage, sse, t }: {
     if (shouldRefetchDaemonStatus(recent)) {
       refetchDaemon();
     }
-  }, [mutateBooks, refetchBooks, refetchDaemon, sse.messages]);
+  });
 
   // bookDataVersion 变化（外部数据信号）时才重拉当前已展开书的 session 列表；
   // 展开/折叠本身不触发请求（展开由 toggleBook 驱动，已带"首次加载"判断）。

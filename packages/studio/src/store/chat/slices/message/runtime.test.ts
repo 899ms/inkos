@@ -294,6 +294,23 @@ describe("mergeTaskExecution", () => {
   });
 });
 
+describe("mergeToolExecution identity", () => {
+  it("keeps one visible card when the same execution id raced into two messages", () => {
+    const duplicate = exec({ id: "task-1", tool: "longform__sub_agent", agent: "architect" });
+    const messages: Message[] = [
+      { role: "assistant", content: "", timestamp: 1, toolExecutions: [duplicate], parts: [{ type: "tool", execution: duplicate }] },
+      { role: "assistant", content: "done", timestamp: 2, toolExecutions: [duplicate], parts: [{ type: "tool", execution: duplicate }, { type: "text", content: "done" }] },
+    ];
+
+    const merged = mergeTaskExecution(messages, { ...duplicate, status: "completed" });
+    const visible = merged.flatMap((message) => message.toolExecutions ?? [])
+      .filter((execution) => execution.id === "task-1");
+
+    expect(visible).toHaveLength(1);
+    expect(visible[0]).toMatchObject({ tool: "sub_agent", label: "建书" });
+  });
+});
+
 describe("hasInFlightExecution", () => {
   it("finds an execution that is still running in the session messages", () => {
     const running = exec({ id: "task-1", tool: "short_fiction_run", status: "running", startedAt: 10 });

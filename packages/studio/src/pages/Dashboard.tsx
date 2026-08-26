@@ -1,7 +1,7 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useServiceStore } from "../store/service";
-import type { SSEMessage } from "../hooks/use-sse";
+import { useNewSSEMessages, type SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
@@ -147,13 +147,12 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
   const logEvents = sse.messages.filter((m) => m.event === "log").slice(-8);
   const progressEvent = sse.messages.filter((m) => m.event === "llm:progress").slice(-1)[0];
 
-  useEffect(() => {
-    const recent = sse.messages.at(-1);
-    if (!recent) return;
+  useNewSSEMessages(sse.messages, (recent) => {
     if (shouldRefetchBookCollections(recent)) {
       refetch();
+      worksQuery.refetch();
     }
-  }, [refetch, sse.messages]);
+  });
 
   if (loading || worksQuery.loading) return (
     <div className="flex flex-col items-center justify-center py-32 space-y-4">

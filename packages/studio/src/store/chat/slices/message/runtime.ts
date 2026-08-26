@@ -262,6 +262,15 @@ export function mergeToolExecution(
     ) ?? false;
     if (!hasDirectExecution && !hasPartExecution) return message;
 
+    if (found) {
+      return {
+        ...message,
+        toolExecutions: message.toolExecutions?.filter((item) => item.id !== execution.id),
+        parts: message.parts?.filter((part) => (
+          part.type !== "tool" || part.execution.id !== execution.id
+        )),
+      };
+    }
     found = true;
     const toolExecutions = hasDirectExecution
       ? message.toolExecutions?.map((item) => item.id === execution.id ? execution : item)
