@@ -56,7 +56,7 @@ async function readVersion(): Promise<string> {
 
 async function resolveProjectRoot(cwd: string): Promise<string> {
   // If CWD is a book directory (contains book.json), walk up to the actual project root.
-  // Structure: <projectRoot>/books/<bookId>/book.json
+  // Structure: <projectRoot>/works/<bookId>/source/book.json
   try {
     await access(join(cwd, "book.json"));
     const parent = dirname(cwd);

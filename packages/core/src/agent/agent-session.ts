@@ -93,7 +93,7 @@ export interface AgentSessionConfig {
   language: string;
   /** PipelineRunner for sub-agent tool delegation. */
   pipeline: PipelineRunner;
-  /** Project root directory (books/ lives under this). */
+  /** Project root directory (all creative Works live under works/). */
   projectRoot: string;
   /** pi-ai Model to use, or provider+modelId to resolve via getModel. */
   model: Model<Api> | { provider: string; modelId: string };

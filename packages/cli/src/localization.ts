@@ -84,8 +84,8 @@ export function formatBookCreateCreated(language: CliLanguage, bookId: string): 
 
 export function formatBookCreateLocation(language: CliLanguage, bookId: string): string {
   return localize(language, {
-    zh: `  位置：books/${bookId}/`,
-    en: `  Location: books/${bookId}/`,
+    zh: `  位置：works/${bookId}/source/`,
+    en: `  Location: works/${bookId}/source/`,
   });
 }
 

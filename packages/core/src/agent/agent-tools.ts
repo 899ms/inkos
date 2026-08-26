@@ -272,7 +272,7 @@ const ProposeActionParams = Type.Object({
       description: "Optional confirmed reference notes or constraints.",
     })),
     storyId: Type.Optional(Type.String({
-      description: "Optional confirmed output id under shorts/.",
+      description: "Optional confirmed Work id for the generated short fiction.",
     })),
     language: Type.Optional(Type.Union([
       Type.Literal("zh"),
@@ -1998,7 +1998,7 @@ const ShortFictionRunParams = Type.Object({
     description: "Optional user-provided reference notes or constraints. Do not paste copyrighted source text unless the user explicitly provided it.",
   })),
   storyId: Type.Optional(Type.String({
-    description: "Optional output id under shorts/. Leave empty to derive from the generated title.",
+    description: "Optional short-fiction Work id. Leave empty to derive it from the generated title.",
   })),
   chapters: Type.Optional(Type.Number({
     description: "Target complete short chapter count, 12-18. Default 12.",
