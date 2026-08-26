@@ -41,6 +41,10 @@ export {
   type ResolvedCapabilityAction,
 } from "./capability-registry.js";
 export { WorkProfileRegistry } from "./profile-registry.js";
+export {
+  builtInWorkProfiles,
+  createBuiltInWorkProfileRegistry,
+} from "./builtin-profiles.js";
 export { CreativeEpisodeStore } from "./episode-store.js";
 export {
   createCapabilityPiTools,
@@ -49,6 +53,13 @@ export {
   type CapabilityAuthorizationResult,
   type CreateCapabilityPiToolsOptions,
 } from "./pi-tools.js";
+export {
+  CreativeHarnessRuntime,
+  ActionConfirmationRequiredError,
+  isActionAuthorized,
+  type ActionRequestSource,
+  type HarnessEpisodeHandle,
+} from "./runtime.js";
 export {
   WORKS_DIRECTORY,
   WORK_MANIFEST_FILE,

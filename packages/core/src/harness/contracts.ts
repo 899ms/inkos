@@ -148,7 +148,7 @@ export type EpisodeStatus = z.infer<typeof EpisodeStatusSchema>;
 export const CreativeEpisodeSchema = z.object({
   version: z.literal(HARNESS_VERSION),
   id: HarnessIdSchema,
-  workId: HarnessIdSchema.nullable().default(null),
+  workId: WorkResourceIdSchema.nullable().default(null),
   profileId: HarnessIdSchema.nullable().default(null),
   status: EpisodeStatusSchema,
   startedAt: z.string().min(1),
@@ -162,7 +162,7 @@ export const CreativeEpisodeEventSchema = z.object({
   seq: z.number().int().nonnegative(),
   timestamp: z.string().min(1),
   type: HarnessIdSchema,
-  workId: HarnessIdSchema.nullable().default(null),
+  workId: WorkResourceIdSchema.nullable().default(null),
   capabilityId: HarnessIdSchema.optional(),
   actionId: HarnessIdSchema.optional(),
   payload: z.record(z.string(), z.unknown()).default({}),

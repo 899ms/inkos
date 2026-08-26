@@ -128,9 +128,11 @@ export class CreativeEpisodeStore {
       WHERE episode_id = ?
       ORDER BY seq ASC
     `).all(id) as unknown as ReadonlyArray<Record<string, unknown> & { readonly payloadJson: string }>;
-    return rows.map(({ payloadJson, ...row }) => CreativeEpisodeEventSchema.parse({
+    return rows.map(({ payloadJson, capabilityId, actionId, ...row }) => CreativeEpisodeEventSchema.parse({
       version: HARNESS_VERSION,
       ...row,
+      ...(typeof capabilityId === "string" ? { capabilityId } : {}),
+      ...(typeof actionId === "string" ? { actionId } : {}),
       payload: JSON.parse(payloadJson),
     }));
   }
@@ -170,4 +172,3 @@ export class CreativeEpisodeStore {
     `);
   }
 }
-
