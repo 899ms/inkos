@@ -34,6 +34,7 @@ export {
 } from "./contracts.js";
 export {
   CapabilityRegistry,
+  defineCapabilityAction,
   type Capability,
   type CapabilityAction,
   type CapabilityExecutionContext,
@@ -41,6 +42,13 @@ export {
 } from "./capability-registry.js";
 export { WorkProfileRegistry } from "./profile-registry.js";
 export { CreativeEpisodeStore } from "./episode-store.js";
+export {
+  createCapabilityPiTools,
+  capabilityToolName,
+  CapabilityActionError,
+  type CapabilityAuthorizationResult,
+  type CreateCapabilityPiToolsOptions,
+} from "./pi-tools.js";
 export {
   WORKS_DIRECTORY,
   WORK_MANIFEST_FILE,

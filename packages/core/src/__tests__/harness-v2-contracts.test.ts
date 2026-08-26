@@ -2,11 +2,13 @@ import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { z } from "zod";
+import { Type } from "@sinclair/typebox";
 import {
   ActionResultSchema,
   ArtifactManifestSchema,
   CapabilityRegistry,
+  createCapabilityPiTools,
+  defineCapabilityAction,
   CreativeEpisodeStore,
   WorkProfileRegistry,
   WorkProfileSchema,
@@ -74,14 +76,14 @@ describe("v2 harness contracts", () => {
       id: "longform",
       title: "Long-form writing",
       description: "Plan and write long works.",
-      actions: [{
+      actions: [defineCapabilityAction({
         id: "draft",
         title: "Draft",
         description: "Draft an artifact revision.",
         risk: "recoverable-write",
-        inputSchema: z.object({ instruction: z.string().min(1) }).strict(),
+        parameters: Type.Object({ instruction: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
         async execute(_context, input) {
-          const { instruction } = input as { instruction: string };
+          const { instruction } = input;
           return ActionResultSchema.parse({
             status: "success",
             summary: `Drafted: ${instruction}`,
@@ -90,7 +92,7 @@ describe("v2 harness contracts", () => {
             observations: [],
           });
         },
-      }],
+      })],
     };
     registry.register(capability);
     const profile = WorkProfileSchema.parse({
@@ -126,7 +128,7 @@ describe("v2 harness contracts", () => {
       title: "Read",
       description: "Read.",
       risk: "read" as const,
-      inputSchema: z.object({}),
+      parameters: Type.Object({}, { additionalProperties: false }),
       async execute() {
         return ActionResultSchema.parse({ status: "success", summary: "ok" });
       },
@@ -232,5 +234,53 @@ describe("v2 harness contracts", () => {
     }));
     expect(profiles.require("custom-radio-drama").capabilityIds).toEqual(["adaptation", "single-pass"]);
     expect(() => profiles.register(profiles.require("custom-radio-drama"))).toThrow(/already registered/);
+  });
+
+  it("adapts registered capability actions directly into Pi tools", async () => {
+    const registry = new CapabilityRegistry();
+    registry.register({
+      id: "workspace",
+      title: "Workspace",
+      description: "Workspace actions.",
+      actions: [defineCapabilityAction({
+        id: "inspect",
+        title: "Inspect",
+        description: "Inspect the active work.",
+        risk: "read",
+        parameters: Type.Object({ topic: Type.String() }, { additionalProperties: false }),
+        async execute(_context, input) {
+          return ActionResultSchema.parse({
+            status: "success",
+            summary: `Inspected ${input.topic}`,
+            artifacts: [],
+            observations: [],
+            nextActions: [],
+          });
+        },
+      })],
+    });
+    const profile = WorkProfileSchema.parse({
+      version: 2,
+      id: "workspace-default",
+      title: "Workspace",
+      capabilityIds: ["workspace"],
+    });
+    const tools = createCapabilityPiTools({
+      registry,
+      profile,
+      createContext: () => ({
+        projectRoot: "/tmp/demo",
+        episodeId: "episode-1",
+        work: null,
+        profile,
+      }),
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["workspace__inspect"]);
+    await expect(tools[0]!.execute("call-1", { topic: "outline" }))
+      .resolves.toMatchObject({
+        content: [{ type: "text", text: "Inspected outline" }],
+        details: { status: "success", summary: "Inspected outline" },
+      });
   });
 });

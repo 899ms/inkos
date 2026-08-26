@@ -1,4 +1,5 @@
-import type { z } from "zod";
+import type { Static, TSchema } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import {
   ActionResultSchema,
   HarnessIdSchema,
@@ -18,15 +19,21 @@ export interface CapabilityExecutionContext {
   readonly appendEvent?: (event: Omit<CreativeEpisodeEvent, "version" | "seq" | "timestamp">) => Promise<void>;
 }
 
-export interface CapabilityAction {
+export interface CapabilityAction<TParameters extends TSchema = TSchema> {
   readonly id: string;
   readonly title: string;
   readonly description: string;
   readonly risk: ActionRisk;
   readonly contextRecipeId?: string;
   readonly defaultSkillIds?: ReadonlyArray<string>;
-  readonly inputSchema: z.ZodTypeAny;
-  execute(context: CapabilityExecutionContext, input: unknown): Promise<ActionResult>;
+  readonly parameters: TParameters;
+  execute(context: CapabilityExecutionContext, input: Static<TParameters>): Promise<ActionResult>;
+}
+
+export function defineCapabilityAction<TParameters extends TSchema>(
+  action: CapabilityAction<TParameters>,
+): CapabilityAction<TParameters> {
+  return action;
 }
 
 export interface Capability {
@@ -92,8 +99,7 @@ export class CapabilityRegistry {
   ): Promise<ActionResult> {
     const { action } = this.resolve(capabilityId, actionId);
     if (context.signal?.aborted) throw context.signal.reason;
-    const input = action.inputSchema.parse(rawInput);
+    const input = Value.Decode(action.parameters, rawInput);
     return ActionResultSchema.parse(await action.execute(context, input));
   }
 }
-
