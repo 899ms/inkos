@@ -61,6 +61,22 @@ export {
   type HarnessEpisodeHandle,
 } from "./runtime.js";
 export {
+  ContextSourceRegistry,
+  compileContext,
+  ProtectedContextOverflowError,
+  ContextCompilationRequiredError,
+  type ContextProtection,
+  type ContextFragment,
+  type ContextRecipe,
+  type ContextLoadRequest,
+  type ContextSourceProvider,
+  type SemanticContextCompileRequest,
+  type SemanticContextCompileResult,
+  type SemanticContextCompiler,
+  type CompiledContextTrace,
+  type CompiledContext,
+} from "./context-compiler.js";
+export {
   WORKS_DIRECTORY,
   WORK_MANIFEST_FILE,
   workDirectory,
