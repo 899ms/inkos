@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { AgentContext } from "../agents/base.js";
 import {
   SHORT_FICTION_DEFAULT_CHAPTERS,
@@ -114,6 +114,7 @@ export interface ShortFictionCoverOptions {
 
 export interface ShortFictionCoverResult {
   readonly title: string;
+  readonly workId: string;
   readonly outputDir: string;
   readonly coverPromptPath: string;
   readonly coverImagePath: string;
@@ -530,7 +531,11 @@ export async function generateShortFictionCover(
     throw new Error("title is required for cover generation.");
   }
 
-  const outputDir = normalizeCoverOutputDir(options.outputDir ?? join("covers", safeSegment(title)));
+  const workId = options.outputDir
+    ? safeSegment(basename(projectPath(options.outputDir).replace(/\/+$/u, "")))
+    : `cover-${safeSegment(slugify(title))}`;
+  const outputDir = join("works", workId, "source");
+  await ensureVisualWork(options.projectRoot, workId, title, options.language ?? "zh");
   const salesPackage: ShortFictionSalesPackage = {
     title,
     intro: options.intro?.trim() ?? "",
@@ -555,9 +560,11 @@ export async function generateShortFictionCover(
     coverApiKeyEnv: options.coverApiKeyEnv,
     signal: options.signal,
   });
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId });
 
   return {
     title,
+    workId,
     outputDir: projectPath(outputDir),
     coverPromptPath: projectPath(promptPath),
     coverImagePath: artifact.coverImagePath,
@@ -1156,13 +1163,6 @@ function shortWorkBaseDir(storyId: string): string {
   return join("works", safeSegment(storyId), "source");
 }
 
-function normalizeCoverOutputDir(value: string): string {
-  const trimmed = value.trim() || "covers";
-  const normalized = projectPath(trimmed).replace(/^\/+/u, "").replace(/\/+$/u, "") || "covers";
-  safeChildPath("/", normalized);
-  return normalized;
-}
-
 async function ensureShortWork(
   root: string,
   storyId: string,
@@ -1179,6 +1179,29 @@ async function ensureShortWork(
     id: storyId,
     title,
     profileId: "short-fiction",
+    language,
+  }));
+}
+
+async function ensureVisualWork(
+  root: string,
+  workId: string,
+  title: string,
+  language: ShortFictionLanguage,
+): Promise<void> {
+  try {
+    const existing = await loadWorkManifest(root, workId);
+    if (existing.profileId !== "visual-asset") {
+      throw new Error(`Work "${workId}" already uses profile "${existing.profileId}".`);
+    }
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await saveWorkManifest(root, createWorkManifest({
+    id: workId,
+    title,
+    profileId: "visual-asset",
     language,
   }));
 }

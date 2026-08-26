@@ -22,6 +22,9 @@ export function createReplaceWorkArtifactTool(
     parameters: ReplaceWorkArtifactParams,
     async execute(_toolCallId, params: Static<typeof ReplaceWorkArtifactParams>) {
       const work = await loadWorkManifest(projectRoot, workId);
+      if (!["short-fiction", "script", "storyboard", "translation", "visual-asset"].includes(work.profileId)) {
+        throw new Error(`Work profile "${work.profileId}" requires a domain-specific edit action.`);
+      }
       const artifact = work.artifacts.find((candidate) => candidate.revisions.some((revision) => (
         revision.id === candidate.currentRevisionId && revision.path === params.path
       )));

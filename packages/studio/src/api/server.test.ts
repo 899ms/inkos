@@ -326,6 +326,9 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     computeAnalytics: vi.fn(() => ({})),
     isSafeBookId: actual.isSafeBookId,
     safeChildPath: actual.safeChildPath,
+    createWorkManifest: actual.createWorkManifest,
+    saveWorkManifest: actual.saveWorkManifest,
+    syncWorkSourceArtifacts: actual.syncWorkSourceArtifacts,
     normalizePlatformOrOther: actual.normalizePlatformOrOther,
     defaultChapterLength: actual.defaultChapterLength,
     inferLanguage: actual.inferLanguage,
@@ -431,6 +434,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     executeExplicitCapabilityTool: actual.executeExplicitCapabilityTool,
     createExportBookTool: actual.createExportBookTool,
     createTranslationExportTool: actual.createTranslationExportTool,
+    createReplaceWorkArtifactTool: actual.createReplaceWorkArtifactTool,
     createTranslationRunTool: (
       pipeline: InstanceType<typeof MockPipelineRunner>,
       projectRoot: string,
@@ -2639,19 +2643,19 @@ describe("createStudioServer daemon lifecycle", () => {
   it("serves generated project cover images without exposing arbitrary files", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
-    const imagePath = join(root, "shorts", "demo", "final", "cover.png");
-    await mkdir(join(root, "shorts", "demo", "final"), { recursive: true });
+    const imagePath = join(root, "works", "demo", "source", "cover.png");
+    await mkdir(join(root, "works", "demo", "source"), { recursive: true });
     await writeFile(imagePath, Buffer.from("fake-png"));
-    await writeFile(join(root, "shorts", "demo", "final", "cover.txt"), "nope", "utf-8");
+    await writeFile(join(root, "works", "demo", "source", "cover.txt"), "nope", "utf-8");
     await mkdir(join(root, "books", "demo"), { recursive: true });
     await writeFile(join(root, "books", "demo", "cover.png"), Buffer.from("private-book-image"));
 
-    const ok = await app.request("http://localhost/api/v1/project/files/shorts/demo/final/cover.png");
+    const ok = await app.request("http://localhost/api/v1/project/files/works/demo/source/cover.png");
     expect(ok.status).toBe(200);
     expect(ok.headers.get("content-type")).toContain("image/png");
     expect(Buffer.from(await ok.arrayBuffer()).toString("utf-8")).toBe("fake-png");
 
-    const unsupported = await app.request("http://localhost/api/v1/project/files/shorts/demo/final/cover.txt");
+    const unsupported = await app.request("http://localhost/api/v1/project/files/works/demo/source/cover.txt");
     expect(unsupported.status).toBe(415);
 
     const unsupportedRoot = await app.request("http://localhost/api/v1/project/files/books/demo/cover.png");
@@ -2668,6 +2672,14 @@ describe("createStudioServer daemon lifecycle", () => {
     await mkdir(artifactDir, { recursive: true });
     await writeFile(join(artifactDir, "script.md"), "# 初稿\n\n第一幕", "utf-8");
     await writeFile(join(artifactDir, "cover.png"), Buffer.from("not-text"));
+    const { createWorkManifest, saveWorkManifest, syncWorkSourceArtifacts } = await import("@actalk/inkos-core");
+    await saveWorkManifest(root, createWorkManifest({
+      id: "demo",
+      title: "Demo Script",
+      profileId: "script",
+      language: "zh",
+    }));
+    await syncWorkSourceArtifacts({ projectRoot: root, workId: "demo" });
 
     const ok = await app.request("http://localhost/api/v1/project/artifacts/works/demo/source/script.md");
     expect(ok.status).toBe(200);
@@ -2685,6 +2697,8 @@ describe("createStudioServer daemon lifecycle", () => {
     });
     expect(save.status).toBe(200);
     expect(await readFile(join(artifactDir, "script.md"), "utf-8")).toBe("# 修订\n\n第二幕");
+    const savedPayload = await save.json() as { action?: { artifacts?: unknown[] } };
+    expect(savedPayload.action?.artifacts).toHaveLength(1);
 
     const unsupported = await app.request("http://localhost/api/v1/project/artifacts/works/demo/source/cover.png");
     expect(unsupported.status).toBe(415);
@@ -5509,8 +5523,8 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("does not bypass the agent for edit-shaped questions", async () => {
-    await mkdir(join(root, "covers", "demo"), { recursive: true });
-    await writeFile(join(root, "covers", "demo", "cover-prompt.md"), "标题字太小。\n", "utf-8");
+    await mkdir(join(root, "works", "cover-demo", "source"), { recursive: true });
+    await writeFile(join(root, "works", "cover-demo", "source", "cover-prompt.md"), "标题字太小。\n", "utf-8");
 
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -5519,7 +5533,7 @@ describe("createStudioServer daemon lifecycle", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        instruction: "可以把 covers/demo/cover-prompt.md 里的「标题字太小」改成「标题字压到最大」吗？",
+        instruction: "可以把 works/cover-demo/source/cover-prompt.md 里的「标题字太小」改成「标题字压到最大」吗？",
         sessionId: "agent-session-1",
       }),
     });
@@ -5528,7 +5542,7 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(response.json()).resolves.toMatchObject({
       response: "Agent response.",
     });
-    await expect(readFile(join(root, "covers", "demo", "cover-prompt.md"), "utf-8"))
+    await expect(readFile(join(root, "works", "cover-demo", "source", "cover-prompt.md"), "utf-8"))
       .resolves.toBe("标题字太小。\n");
     expect(runAgentSessionMock).toHaveBeenCalledOnce();
     expect(appendManualSessionMessagesMock).not.toHaveBeenCalled();

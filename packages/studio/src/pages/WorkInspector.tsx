@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowLeft, Clock3, FileText, GitCommitHorizontal, Loader2 } from "lucide-react";
+import { ArrowLeft, Clock3, FileText, GitCommitHorizontal, Loader2, Pencil, Save, X } from "lucide-react";
 import { fetchJson, useApi } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
 
@@ -42,9 +42,11 @@ interface RevisionPayload {
 }
 
 export function WorkInspector({ workId, onBack }: { readonly workId: string; readonly onBack: () => void }) {
-  const { data, loading, error } = useApi<WorkDetail>(`/works/${encodeURIComponent(workId)}`);
+  const { data, loading, error, refetch } = useApi<WorkDetail>(`/works/${encodeURIComponent(workId)}`);
   const [selected, setSelected] = useState<RevisionPayload | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
   const currentRevisions = useMemo(() => data?.work.artifacts.map((artifact) => ({
     artifact,
     revision: artifact.revisions.find((revision) => revision.id === artifact.currentRevisionId),
@@ -53,12 +55,27 @@ export function WorkInspector({ workId, onBack }: { readonly workId: string; rea
   const openRevision = async (artifact: Artifact, revision: Revision) => {
     setPreviewLoading(true);
     try {
-      setSelected(await fetchJson<RevisionPayload>(
+      const payload = await fetchJson<RevisionPayload>(
         `/works/${encodeURIComponent(workId)}/artifacts/${encodeURIComponent(artifact.id)}/revisions/${encodeURIComponent(revision.id)}`,
-      ));
+      );
+      setSelected(payload);
+      setDraft(payload.content ?? "");
+      setEditing(false);
     } finally {
       setPreviewLoading(false);
     }
+  };
+
+  const saveRevision = async () => {
+    if (selected?.content === undefined || editing === false) return;
+    await fetchJson(`/project/artifacts/${encodeURIComponent(`works/${workId}/${selected.revision.path}`).replaceAll("%2F", "/")}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: draft }),
+    });
+    setSelected(null);
+    setEditing(false);
+    await refetch();
   };
 
   if (loading) return <div className="flex min-h-[50vh] items-center justify-center"><Loader2 className="animate-spin text-primary" /></div>;
@@ -120,8 +137,22 @@ export function WorkInspector({ workId, onBack }: { readonly workId: string; rea
               <img src={selected.dataUrl} alt={selected.revision.path} className="h-auto w-full rounded-xl" />
             ) : (
               <>
-                <div className="mb-5 break-all text-sm font-medium text-muted-foreground">{selected?.revision.path}</div>
-                <pre className="whitespace-pre-wrap break-words font-sans text-base leading-8">{selected?.content}</pre>
+                <div className="mb-5 flex items-start justify-between gap-4">
+                  <div className="break-all text-sm font-medium text-muted-foreground">{selected?.revision.path}</div>
+                  <div className="flex shrink-0 gap-2">
+                    {editing ? (
+                      <button type="button" onClick={() => void saveRevision()} className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"><Save size={15} />{tr("保存新版本", "Save revision")}</button>
+                    ) : (
+                      <button type="button" onClick={() => setEditing(true)} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm"><Pencil size={15} />{tr("编辑", "Edit")}</button>
+                    )}
+                    <button type="button" onClick={() => setSelected(null)} className="rounded-lg border border-border p-2"><X size={16} /></button>
+                  </div>
+                </div>
+                {editing ? (
+                  <textarea value={draft} onChange={(event) => setDraft(event.target.value)} className="min-h-[calc(100vh-130px)] w-full resize-none rounded-xl border border-border bg-secondary/20 p-4 font-mono text-sm leading-7 outline-none focus:border-primary" />
+                ) : (
+                  <pre className="whitespace-pre-wrap break-words font-sans text-base leading-8">{selected?.content}</pre>
+                )}
               </>
             )}
           </aside>

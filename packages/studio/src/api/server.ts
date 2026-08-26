@@ -96,6 +96,7 @@ import {
   createTranslationCreateTool,
   createTranslationRunTool,
   createTranslationExportTool,
+  createReplaceWorkArtifactTool,
   createFanficBookTool,
   createContinuationImportTool,
   createSpinoffBookTool,
@@ -454,7 +455,7 @@ function resolveProjectImageFile(root: string, rawPath: string): { readonly reso
   ) {
     throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Invalid project file path");
   }
-  if (!relPath.startsWith("works/") && !relPath.startsWith("shorts/") && !relPath.startsWith("covers/")) {
+  if (!relPath.startsWith("works/")) {
     throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Only generated work images can be previewed");
   }
 
@@ -495,7 +496,7 @@ function normalizeProjectGeneratedPath(root: string, rawPath: string, code: stri
     throw new ApiError(400, code, "Invalid project artifact path");
   }
 
-  const allowedRoots = ["works/", "shorts/", "covers/"];
+  const allowedRoots = ["works/"];
   if (!allowedRoots.some((prefix) => relPath.startsWith(prefix))) {
     throw new ApiError(400, code, "Only generated writing artifacts can be opened");
   }
@@ -4261,13 +4262,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       throw new ApiError(400, "INVALID_PROJECT_ARTIFACT_BODY", "content must be a string");
     }
 
-    await mkdir(dirname(file.resolved), { recursive: true });
-    await writeFile(file.resolved, content, "utf-8");
+    const [rootName, workId, ...workPathParts] = file.relPath.split("/");
+    if (rootName !== "works" || !workId || workPathParts.length === 0) {
+      throw new ApiError(400, "INVALID_PROJECT_ARTIFACT_PATH", "Artifact must belong to a Work");
+    }
+    const work = await loadWorkManifest(root, workId).catch(() => null);
+    if (!work) throw new ApiError(404, "WORK_NOT_FOUND", `Work not found: ${workId}`);
+    const path = workPathParts.join("/");
+    const artifact = work.artifacts.find((candidate) => candidate.revisions.some((revision) => (
+      revision.id === candidate.currentRevisionId && revision.path === path
+    )));
+    if (!artifact) throw new ApiError(409, "ARTIFACT_NOT_REGISTERED", `Current artifact is not registered: ${path}`);
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "workspace", actionId: "replace_work_artifact", profileId: work.profileId },
+      tool: createReplaceWorkArtifactTool(root, workId),
+      workId,
+      parameters: { path, content, expectedRevisionId: artifact.currentRevisionId ?? undefined },
+    });
     return c.json({
       ok: true,
       path: file.relPath,
       contentType: file.contentType,
       size: Buffer.byteLength(content, "utf-8"),
+      action: result,
     });
   });
 

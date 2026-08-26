@@ -13,6 +13,7 @@ import {
   validateShortFictionDraftForFinal,
 } from "../agents/short-fiction.js";
 import { saveSecrets } from "../llm/secrets.js";
+import { loadWorkManifest } from "../harness/work-store.js";
 import {
   extractGeminiImageBase64,
   extractImagesGenerationImage,
@@ -313,12 +314,19 @@ describe("public short-fiction chain", () => {
         signal: controller.signal,
       });
 
-      expect(result.coverPromptPath).toBe("covers/demo/cover-prompt.md");
-      expect(result.coverImagePath).toBe("covers/demo/cover.png");
-      await expect(readFile(join(root, "covers", "demo", "cover-prompt.md"), "utf-8"))
+      expect(result.workId).toBe("demo");
+      expect(result.coverPromptPath).toBe("works/demo/source/cover-prompt.md");
+      expect(result.coverImagePath).toBe("works/demo/source/cover.png");
+      await expect(readFile(join(root, "works", "demo", "source", "cover-prompt.md"), "utf-8"))
         .resolves.toContain("离婚协议他递了三年");
-      await expect(readFile(join(root, "covers", "demo", "cover.png")))
+      await expect(readFile(join(root, "works", "demo", "source", "cover.png")))
         .resolves.toEqual(Buffer.from("fake"));
+      await expect(loadWorkManifest(root, "demo")).resolves.toMatchObject({
+        profileId: "visual-asset",
+        artifacts: expect.arrayContaining([
+          expect.objectContaining({ kind: "image" }),
+        ]),
+      });
       expect(fetchMock).toHaveBeenCalledWith(
         "https://images.example.test/v1/images/generations",
         expect.objectContaining({
