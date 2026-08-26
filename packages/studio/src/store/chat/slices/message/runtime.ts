@@ -354,6 +354,12 @@ export function updateToolPartById(
       (part) => part.type === "tool" && part.execution.id === executionId,
     ) ?? false;
     if (!hasPart) return message;
+    if (found) {
+      const parts = (message.parts ?? []).filter((part) => (
+        part.type !== "tool" || part.execution.id !== executionId
+      ));
+      return { ...message, ...deriveFlat(parts), parts };
+    }
     found = true;
     const parts = (message.parts ?? []).map((part) => (
       part.type === "tool" && part.execution.id === executionId

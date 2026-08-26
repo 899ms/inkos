@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message, ToolExecution } from "../../types";
-import { createSessionRuntime, deriveResolvedProposals, deserializeMessages, extractErrorMessage, extractToolError, hasInFlightExecution, markRunningToolsFailed, mergeTaskExecution, withToolExecutions } from "./runtime";
+import { createSessionRuntime, deriveResolvedProposals, deserializeMessages, extractErrorMessage, extractToolError, hasInFlightExecution, markRunningToolsFailed, mergeTaskExecution, updateToolPartById, withToolExecutions } from "./runtime";
 
 function exec(overrides: Partial<ToolExecution> & { id: string; tool: string }): ToolExecution {
   const { id, tool, ...rest } = overrides;
@@ -308,6 +308,23 @@ describe("mergeToolExecution identity", () => {
 
     expect(visible).toHaveLength(1);
     expect(visible[0]).toMatchObject({ tool: "sub_agent", label: "建书" });
+  });
+
+  it("deduplicates an execution while applying its terminal SSE update", () => {
+    const duplicate = exec({ id: "task-2", tool: "sub_agent", agent: "writer", status: "running" });
+    const messages: Message[] = [
+      { role: "assistant", content: "", timestamp: 1, parts: [{ type: "tool", execution: duplicate }] },
+      { role: "assistant", content: "done", timestamp: 2, parts: [{ type: "tool", execution: duplicate }, { type: "text", content: "done" }] },
+    ];
+
+    const updated = updateToolPartById(messages, "task-2", (execution) => ({
+      ...execution,
+      status: "completed",
+    }));
+    const visible = (updated ?? []).flatMap((message) => message.parts ?? [])
+      .filter((part) => part.type === "tool" && part.execution.id === "task-2");
+
+    expect(visible).toHaveLength(1);
   });
 });
 
