@@ -34,7 +34,7 @@ describe("film authoring LLM tools language switch", () => {
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "if-en-"));
-    await mkdir(join(root, "interactive-films", "p"), { recursive: true });
+    await mkdir(join(root, "works", "p", "source"), { recursive: true });
     await saveStoryGraph(root, "p", StoryGraphSchema.parse({
       schemaVersion: 1, projectId: "p", title: "T", variables: [],
       nodes: [{ id: "n1", type: "branch", choices: [] }, { id: "e", type: "ending", choices: [] }],

@@ -130,7 +130,6 @@ export const ScriptCreateActionPayloadSchema = z.object({
   episodeCount: z.number().int().min(1).optional(),
   episodeDuration: z.string().min(1).optional(),
   projectId: z.string().min(1).optional(),
-  outDir: z.string().min(1).optional(),
 }).strict();
 
 export const StoryboardCreateActionPayloadSchema = z.object({
@@ -144,7 +143,6 @@ export const StoryboardCreateActionPayloadSchema = z.object({
   granularity: z.string().min(1).optional(),
   maxShots: z.number().int().min(1).optional(),
   projectId: z.string().min(1).optional(),
-  outDir: z.string().min(1).optional(),
 }).strict();
 
 export const InteractiveFilmCreateActionPayloadSchema = z.object({
@@ -159,7 +157,6 @@ export const InteractiveFilmCreateActionPayloadSchema = z.object({
   budget: z.string().min(1).optional(),
   referenceMode: z.string().min(1).optional(),
   projectId: z.string().min(1).optional(),
-  outDir: z.string().min(1).optional(),
 }).strict();
 
 export const TranslationCreateActionPayloadSchema = z.object({

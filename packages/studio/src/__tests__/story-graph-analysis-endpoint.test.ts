@@ -7,7 +7,7 @@ import { saveStoryGraph, StoryGraphSchema } from "@actalk/inkos-core";
 
 describe("GET /api/v1/projects/:id/story-graph/analysis", () => {
   let root: string;
-  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-an-")); await mkdir(join(root, "interactive-films", "p"), { recursive: true }); });
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-an-")); await mkdir(join(root, "works", "p", "source"), { recursive: true }); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
   it("returns report + arcs + distribution", async () => {

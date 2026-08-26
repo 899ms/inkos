@@ -25,6 +25,7 @@ import {
 } from "../agents/script-storyboard.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath } from "../utils/posix-path.js";
+import { createInitialWorkManifestWrite, syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 export interface ScriptCreationRunOptions {
   readonly projectRoot: string;
@@ -40,7 +41,6 @@ export interface ScriptCreationRunOptions {
   readonly episodeDuration?: string;
   readonly language?: "zh" | "en";
   readonly projectId?: string;
-  readonly outDir?: string;
   readonly onProgress?: (message: string) => void;
 }
 
@@ -59,7 +59,6 @@ export interface StoryboardCreationRunOptions {
   readonly maxShots?: number;
   readonly language?: "zh" | "en";
   readonly projectId?: string;
-  readonly outDir?: string;
   readonly onProgress?: (message: string) => void;
 }
 
@@ -79,7 +78,6 @@ export interface InteractiveFilmCreationRunOptions {
   readonly referenceMode?: string;
   readonly language?: "zh" | "en";
   readonly projectId?: string;
-  readonly outDir?: string;
   readonly onProgress?: (message: string) => void;
 }
 
@@ -153,7 +151,7 @@ export async function runScriptCreation(
   options: ScriptCreationRunOptions,
 ): Promise<ScriptCreationRunResult> {
   const projectId = safeSegment(options.projectId ?? slugify(options.title));
-  const baseDir = resolveProjectBaseDir(options.outDir ?? "dramas", projectId);
+  const baseDir = relPath("works", projectId, "source");
   const sourceText = await resolveSourceText(options.projectRoot, options.sourceText, options.sourcePath);
   const input: ScriptCreationInput = {
     title: options.title,
@@ -177,9 +175,16 @@ export async function runScriptCreation(
     textArtifact(join(baseDir, "script-spec.md"), spec),
     textArtifact(join(baseDir, "script.md"), script),
   ];
+  const work = createInitialWorkManifestWrite({
+    workId: projectId,
+    title: options.title,
+    profileId: "script",
+    language: options.language ?? "zh",
+    writes: artifacts,
+  });
   await commitProductionArtifacts({
     rootDir: options.projectRoot,
-    artifacts,
+    artifacts: [...artifacts, work.write],
     runPath: join(baseDir, "status.json"),
     run: createProductionRunSnapshot({
       kind: "script",
@@ -191,6 +196,7 @@ export async function runScriptCreation(
     }),
     validate: () => assertNonEmptyArtifacts(artifacts),
   });
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId });
 
   return {
     projectId,
@@ -222,7 +228,7 @@ export async function runInteractiveFilmCreation(
   options: InteractiveFilmCreationRunOptions,
 ): Promise<InteractiveFilmCreationRunResult> {
   const projectId = safeSegment(options.projectId ?? slugify(options.title));
-  const baseDir = resolveProjectBaseDir(options.outDir ?? "interactive-films", projectId);
+  const baseDir = relPath("works", projectId, "source");
   const sourceText = await resolveSourceText(options.projectRoot, options.sourceText, options.sourcePath);
   const input: InteractiveFilmCreationInput = {
     title: options.title,
@@ -269,7 +275,7 @@ export async function runInteractiveFilmCreation(
     "Storyboard",
   ], packageMarkdown);
   const imagePrompts = extractStoryboardImagePrompts(storyboard);
-  const storyGraphPath = relPath("interactive-films", projectId, "story-graph.json");
+  const storyGraphPath = relPath(baseDir, "story-graph.json");
 
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "source"));
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "generated"));
@@ -305,9 +311,16 @@ export async function runInteractiveFilmCreation(
     textArtifact(join(baseDir, "assets.json"), JSON.stringify(assetsManifest, null, 2)),
     textArtifact(storyGraphPath, JSON.stringify(graph, null, 2)),
   ];
+  const work = createInitialWorkManifestWrite({
+    workId: projectId,
+    title: options.title,
+    profileId: "interactive-film",
+    language: options.language ?? "zh",
+    writes: artifacts,
+  });
   await commitProductionArtifacts({
     rootDir: options.projectRoot,
-    artifacts,
+    artifacts: [...artifacts, work.write],
     runPath: join(baseDir, "status.json"),
     run: createProductionRunSnapshot({
       kind: "interactive-film",
@@ -319,6 +332,7 @@ export async function runInteractiveFilmCreation(
     }),
     validate: () => assertNonEmptyArtifacts(artifacts),
   });
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId });
 
   return {
     projectId,
@@ -339,7 +353,7 @@ export async function runStoryboardCreation(
   options: StoryboardCreationRunOptions,
 ): Promise<StoryboardCreationRunResult> {
   const projectId = safeSegment(options.projectId ?? slugify(options.title));
-  const baseDir = resolveProjectBaseDir(options.outDir ?? "storyboards", projectId);
+  const baseDir = relPath("works", projectId, "source");
   const sourceText = await resolveSourceText(options.projectRoot, options.sourceText, options.sourcePath);
   const input: StoryboardCreationInput = {
     title: options.title,
@@ -402,9 +416,16 @@ export async function runStoryboardCreation(
     textArtifact(join(baseDir, "image-prompts.md"), imagePrompts),
     textArtifact(join(baseDir, "assets.json"), JSON.stringify(assetsManifest, null, 2)),
   ];
+  const work = createInitialWorkManifestWrite({
+    workId: projectId,
+    title: options.title,
+    profileId: "storyboard",
+    language: options.language ?? "zh",
+    writes: artifacts,
+  });
   await commitProductionArtifacts({
     rootDir: options.projectRoot,
-    artifacts,
+    artifacts: [...artifacts, work.write],
     runPath: join(baseDir, "status.json"),
     run: createProductionRunSnapshot({
       kind: "storyboard",
@@ -416,6 +437,7 @@ export async function runStoryboardCreation(
     }),
     validate: () => assertNonEmptyArtifacts(artifacts),
   });
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId });
 
   return {
     projectId,
@@ -645,19 +667,6 @@ function mergeRequirements(
     instruction.trim(),
     requirements?.trim() ? `\n${extraLabel}\n${requirements.trim()}` : "",
   ].filter(Boolean).join("\n");
-}
-
-function normalizeOutputDir(value: string): string {
-  const text = value.trim().replace(/^\/+|\/+$/g, "");
-  if (!text || text.includes("..") || text.includes("\0")) {
-    throw new Error(`Invalid output directory: ${JSON.stringify(value)}`);
-  }
-  return text;
-}
-
-function resolveProjectBaseDir(outDir: string, projectId: string): string {
-  const outputDir = normalizeOutputDir(outDir);
-  return basename(outputDir) === projectId ? outputDir : relPath(outputDir, projectId);
 }
 
 // Project-relative path for results and manifests: always "/" separators.

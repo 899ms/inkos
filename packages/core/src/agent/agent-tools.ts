@@ -340,7 +340,6 @@ const ProposeActionParams = Type.Object({
     episodeCount: Type.Optional(Type.Number({ description: "Optional target episode/segment count." })),
     episodeDuration: Type.Optional(Type.String({ description: "Optional per-episode/per-segment duration." })),
     projectId: Type.Optional(Type.String({ description: "Optional output id under dramas/." })),
-    outDir: Type.Optional(Type.String({ description: "Optional project-relative output directory. Default dramas/." })),
   }, { description: "Structured execution args for action=script_create." })),
   storyboardCreate: Type.Optional(Type.Object({
     title: Type.String({ description: "Confirmed storyboard project title." }),
@@ -353,7 +352,6 @@ const ProposeActionParams = Type.Object({
     granularity: Type.Optional(Type.String({ description: "Confirmed storyboard granularity." })),
     maxShots: Type.Optional(Type.Number({ description: "Optional max shot count." })),
     projectId: Type.Optional(Type.String({ description: "Optional output id under storyboards/." })),
-    outDir: Type.Optional(Type.String({ description: "Optional project-relative output directory. Default storyboards/." })),
   }, { description: "Structured execution args for action=storyboard_create." })),
   interactiveFilmCreate: Type.Optional(Type.Object({
     title: Type.String({ description: "Confirmed interactive-film project title." }),
@@ -367,7 +365,6 @@ const ProposeActionParams = Type.Object({
     budget: Type.Optional(Type.String({ description: "Optional budget or production constraints." })),
     referenceMode: Type.Optional(Type.String({ description: "Optional reference mode, e.g. 盛世天下-style multi-ending interactive drama." })),
     projectId: Type.Optional(Type.String({ description: "Optional output id under interactive-films/." })),
-    outDir: Type.Optional(Type.String({ description: "Optional project-relative output directory. Default interactive-films/." })),
   }, { description: "Structured execution args for action=interactive_film_create." })),
   translationCreate: Type.Optional(Type.Object({
     filePath: Type.String({ description: "Project-relative EPUB/PDF/TXT/Markdown source file path to translate." }),
@@ -2243,9 +2240,6 @@ const ScriptCreateParams = Type.Object({
   projectId: Type.Optional(Type.String({
     description: "Optional output id under dramas/.",
   })),
-  outDir: Type.Optional(Type.String({
-    description: "Optional project-relative output directory. Default dramas/.",
-  })),
 });
 
 type ScriptCreateParamsType = Static<typeof ScriptCreateParams>;
@@ -2288,7 +2282,6 @@ export function createScriptCreationTool(
         episodeDuration: payload?.episodeDuration ?? params.episodeDuration,
         language: options.language,
         projectId: payload?.projectId ?? params.projectId,
-        outDir: payload?.outDir ?? params.outDir,
         onProgress: progress,
       }));
 
@@ -2338,9 +2331,6 @@ const StoryboardCreateParams = Type.Object({
   projectId: Type.Optional(Type.String({
     description: "Optional output id under storyboards/.",
   })),
-  outDir: Type.Optional(Type.String({
-    description: "Optional project-relative output directory. Default storyboards/.",
-  })),
 });
 
 type StoryboardCreateParamsType = Static<typeof StoryboardCreateParams>;
@@ -2384,7 +2374,6 @@ export function createStoryboardCreationTool(
         maxShots: payload?.maxShots ?? params.maxShots,
         language: options.language,
         projectId: payload?.projectId ?? params.projectId,
-        outDir: payload?.outDir ?? params.outDir,
         onProgress: progress,
       }));
 
@@ -2439,9 +2428,6 @@ const InteractiveFilmCreateParams = Type.Object({
   projectId: Type.Optional(Type.String({
     description: "Optional output id under interactive-films/.",
   })),
-  outDir: Type.Optional(Type.String({
-    description: "Optional project-relative output directory. Default interactive-films/.",
-  })),
 });
 
 type InteractiveFilmCreateParamsType = Static<typeof InteractiveFilmCreateParams>;
@@ -2458,7 +2444,7 @@ export function createInteractiveFilmCreationTool(
     name: "interactive_film_create",
     description:
       "Create an interactive film/game script package with story tree, variables/flags, endings, script, storyboard, and image prompts. " +
-      "Writes human-readable Markdown files under interactive-films/.",
+      "Writes human-readable artifacts into an interactive-film Work.",
     label: "Interactive Film Creation",
     parameters: InteractiveFilmCreateParams,
     async execute(
@@ -2486,7 +2472,6 @@ export function createInteractiveFilmCreationTool(
         referenceMode: payload?.referenceMode ?? params.referenceMode,
         language: options.language,
         projectId: payload?.projectId ?? params.projectId,
-        outDir: payload?.outDir ?? params.outDir,
         onProgress: progress,
       }));
 

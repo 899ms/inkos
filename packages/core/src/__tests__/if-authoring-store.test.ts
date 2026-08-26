@@ -38,7 +38,7 @@ describe("authoring-store", () => {
     // snapshot 1 captured the state before the 2nd apply (storyCore v1)
     const reverted = await revertToSnapshot({ projectRoot: root, projectId: "p", rev: 1 });
     expect(reverted.worldAnchor?.storyCore).toBe("v1");
-    const snaps = await readdir(join(root, "interactive-films", "p", "snapshots"));
+    const snaps = await readdir(join(root, "works", "p", "source", "snapshots"));
     expect(snaps.length).toBeGreaterThanOrEqual(1);
   });
 

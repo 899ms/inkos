@@ -1,9 +1,10 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { StoryGraphSchema, type StoryGraph } from "./graph-schema.js";
+import { workDirectory } from "../harness/work-store.js";
 
 export function storyGraphPath(projectRoot: string, projectId: string): string {
-  return join(projectRoot, "interactive-films", projectId, "story-graph.json");
+  return join(workDirectory(projectRoot, projectId), "source", "story-graph.json");
 }
 
 export async function loadStoryGraph(

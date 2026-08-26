@@ -18,6 +18,7 @@ import { StoryNodeContentToolSchema, StoryStructureToolSchema } from "../interac
 import { writeCharacterFacts } from "../interactive-film/memory-link.js";
 import { MemoryDB } from "../state/memory-db.js";
 import { join } from "node:path";
+import { workDirectory } from "../harness/work-store.js";
 import { generateNodeImage, defaultNodeImageDeps, type NodeImageDeps } from "../interactive-film/node-image.js";
 import { appendPromptPackGuidance } from "../prompts/prompt-pack.js";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
@@ -154,7 +155,7 @@ export function createUpsertCharactersTool(projectRoot: string, projectId: strin
           : undefined,
       }));
       const { rev } = await applyGraphDelta({ projectRoot, projectId, delta: buildUpsertCharactersDelta(chars) });
-      const db = new MemoryDB(join(projectRoot, "interactive-films", projectId));
+      const db = new MemoryDB(join(workDirectory(projectRoot, projectId), "source"));
       try {
         writeCharacterFacts(db, chars, rev);
       } finally {

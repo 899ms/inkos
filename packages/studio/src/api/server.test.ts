@@ -434,6 +434,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     writeTranslationExport: actual.writeTranslationExport,
     translationProjectDir: actual.translationProjectDir,
     listWorkManifests: actual.listWorkManifests,
+    storyGraphPath: actual.storyGraphPath,
+    workDirectory: actual.workDirectory,
   };
 });
 
@@ -2624,21 +2626,21 @@ describe("createStudioServer daemon lifecycle", () => {
   it("reads and writes generated text artifacts without exposing arbitrary files", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
-    const artifactDir = join(root, "interactive-films", "demo");
+    const artifactDir = join(root, "works", "demo", "source");
     await mkdir(artifactDir, { recursive: true });
     await writeFile(join(artifactDir, "script.md"), "# 初稿\n\n第一幕", "utf-8");
     await writeFile(join(artifactDir, "cover.png"), Buffer.from("not-text"));
 
-    const ok = await app.request("http://localhost/api/v1/project/artifacts/interactive-films/demo/script.md");
+    const ok = await app.request("http://localhost/api/v1/project/artifacts/works/demo/source/script.md");
     expect(ok.status).toBe(200);
     expect(ok.headers.get("content-type")).toContain("application/json");
     expect(await ok.json()).toMatchObject({
-      path: "interactive-films/demo/script.md",
+      path: "works/demo/source/script.md",
       content: "# 初稿\n\n第一幕",
       contentType: "text/markdown; charset=utf-8",
     });
 
-    const save = await app.request("http://localhost/api/v1/project/artifacts/interactive-films/demo/script.md", {
+    const save = await app.request("http://localhost/api/v1/project/artifacts/works/demo/source/script.md", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: "# 修订\n\n第二幕" }),
@@ -2646,13 +2648,13 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(save.status).toBe(200);
     expect(await readFile(join(artifactDir, "script.md"), "utf-8")).toBe("# 修订\n\n第二幕");
 
-    const unsupported = await app.request("http://localhost/api/v1/project/artifacts/interactive-films/demo/cover.png");
+    const unsupported = await app.request("http://localhost/api/v1/project/artifacts/works/demo/source/cover.png");
     expect(unsupported.status).toBe(415);
 
     const unsupportedRoot = await app.request("http://localhost/api/v1/project/artifacts/books/demo/story_bible.md");
     expect(unsupportedRoot.status).toBe(400);
 
-    const traversal = await app.request("http://localhost/api/v1/project/artifacts/interactive-films/%2e%2e/inkos.json");
+    const traversal = await app.request("http://localhost/api/v1/project/artifacts/works/%2e%2e/inkos.json");
     expect([400, 404]).toContain(traversal.status);
   });
 

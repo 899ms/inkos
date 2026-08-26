@@ -324,13 +324,13 @@ function buildInteractiveFilmPrompt(isZh: boolean, confirmed: boolean): string {
     return isZh
       ? `你是 InkOS 互动影游创作助手。用户已经点击确认创建互动影游。
 
-唯一动作：立即调用 interactive_film_create，写入 interactive-films/ 下的互动规格、剧情树、变量旗标、互动剧本、分镜、图像提示词和图片资产 manifest。
+唯一动作：立即调用 interactive_film_create，写入当前互动影游 Work 的互动规格、剧情树、变量旗标、互动剧本、分镜、图像提示词和图片资产 manifest。
 不要先输出正文、解释或流程说明；不要启动 Play 世界，不要创建普通剧本或普通分镜。
 
 ${commonOutputRules(true)}`
       : `You are the InkOS interactive-film creation assistant. The user has confirmed interactive-film creation.
 
-Only action: immediately call interactive_film_create to write interactive spec, story tree, variables/flags, interactive script, storyboard, image prompts, and asset manifest under interactive-films/.
+Only action: immediately call interactive_film_create to write the interactive spec, story tree, variables/flags, interactive script, storyboard, image prompts, and asset manifest into the current interactive-film Work.
 Do not write the content, explanation, or workflow notes first; do not start a Play world or create a plain script/storyboard instead.
 
 ${commonOutputRules(false)}`;

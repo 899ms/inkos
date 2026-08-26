@@ -40,24 +40,24 @@ describe("generateNodeImage", () => {
     const maliciousId = "../../../../../escape";
     const node = StoryNodeSchema.parse({ id: maliciousId, type: "start", sceneDesc: "x", choices: [] });
     const { assetRef } = await generateNodeImage({ projectRoot: root, projectId: "p", node, deps: stub });
-    expect(assetRef).toBe("interactive-films/p/assets/nodes/..%2F..%2F..%2F..%2F..%2Fescape.png");
+    expect(assetRef).toBe("works/p/source/assets/nodes/..%2F..%2F..%2F..%2F..%2Fescape.png");
     expect(await readFile(join(root, assetRef))).toEqual(PNG);
   });
 
   it("stores images for slash-containing node ids under the node asset directory", async () => {
     const node = StoryNodeSchema.parse({ id: "../../leak", type: "start", sceneDesc: "x", choices: [] });
     const { assetRef } = await generateNodeImage({ projectRoot: root, projectId: "p", node, deps: stub });
-    expect(assetRef).toMatch(/^interactive-films\/p\/assets\/nodes\//);
+    expect(assetRef).toMatch(/^works\/p\/source\/assets\/nodes\//);
     expect(assetRef).not.toContain("../");
     expect(await readFile(join(root, assetRef))).toEqual(PNG);
-    await expect(access(join(root, "interactive-films", "p", "assets", "leak.png"))).rejects.toThrow();
+    await expect(access(join(root, "works", "p", "source", "assets", "leak.png"))).rejects.toThrow();
   });
 
   it("buildSetImageRefDelta produces a node upsert preserving other fields", () => {
     const node = StoryNodeSchema.parse({ id: "s", type: "branch", title: "T", choices: [{ id: "c", text: "x", targetNodeId: "e" }] });
-    const d = buildSetImageRefDelta(node, "p1", "interactive-films/p/assets/nodes/s.png");
+    const d = buildSetImageRefDelta(node, "p1", "works/p/source/assets/nodes/s.png");
     const up = StoryGraphDeltaSchema.parse(d).nodes?.upsert?.[0];
     expect(up?.choices?.[0].targetNodeId).toBe("e"); // preserved
-    expect(up?.imageSlot).toEqual({ prompt: "p1", assetRef: "interactive-films/p/assets/nodes/s.png" });
+    expect(up?.imageSlot).toEqual({ prompt: "p1", assetRef: "works/p/source/assets/nodes/s.png" });
   });
 });

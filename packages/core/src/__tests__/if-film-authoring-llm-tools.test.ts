@@ -28,7 +28,7 @@ describe("fill_node tool (stubbed LLM)", () => {
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "if-llm-"));
-    await mkdir(join(root, "interactive-films", "p"), { recursive: true });
+    await mkdir(join(root, "works", "p", "source"), { recursive: true });
     await saveStoryGraph(root, "p", StoryGraphSchema.parse({ schemaVersion: 1, projectId: "p", title: "T", variables: [], nodes: [{ id: "n1", type: "branch", choices: [] }, { id: "e", type: "ending", choices: [] }], endings: [] }));
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
@@ -67,7 +67,7 @@ describe("revise_node tool (stubbed LLM)", () => {
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "if-llm-rv-"));
-    await mkdir(join(root, "interactive-films", "p"), { recursive: true });
+    await mkdir(join(root, "works", "p", "source"), { recursive: true });
     await saveStoryGraph(root, "p", StoryGraphSchema.parse({
       schemaVersion: 1, projectId: "p", title: "T", variables: [],
       nodes: [

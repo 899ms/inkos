@@ -26,7 +26,7 @@ function filmDeps(overrides: Partial<FilmLLMDeps> = {}): FilmLLMDeps {
 
 describe("confirm-class authoring tools", () => {
   let root: string;
-  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-cf-")); await mkdir(join(root, "interactive-films", "p"), { recursive: true }); });
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-cf-")); await mkdir(join(root, "works", "p", "source"), { recursive: true }); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
   it("draft_structure (stubbed LLM) creates the node skeleton", async () => {
@@ -66,7 +66,7 @@ describe("connect_choice tool", () => {
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "if-cc-"));
-    await mkdir(join(root, "interactive-films", "p"), { recursive: true });
+    await mkdir(join(root, "works", "p", "source"), { recursive: true });
     await saveStoryGraph(root, "p", StoryGraphSchema.parse({
       schemaVersion: 1, projectId: "p", title: "T", variables: [],
       nodes: [

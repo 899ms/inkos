@@ -11,13 +11,13 @@ describe("export endpoints", () => {
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "if-exp-"));
-    const dir = join(root, "interactive-films", "p", "assets", "nodes");
+    const dir = join(root, "works", "p", "source", "assets", "nodes");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "s.png"), PNG);
     await saveStoryGraph(root, "p", StoryGraphSchema.parse({
       schemaVersion: 1, projectId: "p", title: "T", variables: [],
       nodes: [
-        { id: "s", type: "start", title: "开场", imageSlot: { prompt: "x", assetRef: "interactive-films/p/assets/nodes/s.png" }, choices: [{ id: "c", text: "go", targetNodeId: "e" }] },
+        { id: "s", type: "start", title: "开场", imageSlot: { prompt: "x", assetRef: "works/p/source/assets/nodes/s.png" }, choices: [{ id: "c", text: "go", targetNodeId: "e" }] },
         { id: "e", type: "ending", title: "结局", choices: [] },
       ],
       endings: [{ id: "g1", nodeId: "e", title: "好", type: "good" }],
@@ -49,13 +49,13 @@ describe("export endpoints", () => {
   });
   it("exports projects with non-ascii ids without invalid response headers", async () => {
     const id = "测试项目";
-    const dir = join(root, "interactive-films", id, "assets", "nodes");
+    const dir = join(root, "works", id, "source", "assets", "nodes");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "s.png"), PNG);
     await saveStoryGraph(root, id, StoryGraphSchema.parse({
       schemaVersion: 1, projectId: id, title: "中文项目", variables: [],
       nodes: [
-        { id: "s", type: "start", title: "开场", imageSlot: { prompt: "x", assetRef: `interactive-films/${id}/assets/nodes/s.png` }, choices: [{ id: "c", text: "go", targetNodeId: "e" }] },
+        { id: "s", type: "start", title: "开场", imageSlot: { prompt: "x", assetRef: `works/${id}/source/assets/nodes/s.png` }, choices: [{ id: "c", text: "go", targetNodeId: "e" }] },
         { id: "e", type: "ending", title: "结局", choices: [] },
       ],
       endings: [{ id: "g1", nodeId: "e", title: "好", type: "good" }],

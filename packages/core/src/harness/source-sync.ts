@@ -10,6 +10,53 @@ import {
   type WorkManifest,
 } from "./contracts.js";
 import { loadWorkManifest, saveWorkManifest, workDirectory } from "./work-store.js";
+import { createWorkManifest } from "./work-store.js";
+import { createAcceptedArtifact } from "./artifact-revisions.js";
+import type { AtomicFileWrite } from "../utils/atomic-file-set.js";
+
+export function createInitialWorkManifestWrite(input: {
+  readonly workId: string;
+  readonly title: string;
+  readonly profileId: string;
+  readonly language: string;
+  readonly writes: ReadonlyArray<AtomicFileWrite>;
+  readonly createdAt?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+}): { readonly manifest: WorkManifest; readonly write: AtomicFileWrite } {
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  const workRoot = join("works", input.workId);
+  const work = createWorkManifest({
+    id: input.workId,
+    title: input.title,
+    profileId: input.profileId,
+    language: input.language,
+    now: createdAt,
+    metadata: input.metadata,
+  });
+  const artifacts = input.writes.map((write) => {
+    const workPath = toPosixPath(relative(workRoot, write.relativePath));
+    if (workPath === ".." || workPath.startsWith("../")) {
+      throw new Error(`Initial work artifact is outside ${workRoot}: ${write.relativePath}`);
+    }
+    return createAcceptedArtifact({
+      artifactId: artifactIdFor(workPath),
+      artifactKind: artifactKindFor(workPath),
+      path: workPath,
+      content: write.content,
+      contentType: contentTypeFor(workPath),
+      createdAt,
+      metadata: { sourcePath: toPosixPath(write.relativePath) },
+    });
+  });
+  const manifest = WorkManifestSchema.parse({ ...work, artifacts });
+  return {
+    manifest,
+    write: {
+      relativePath: join(workRoot, "work.json"),
+      content: `${JSON.stringify(manifest, null, 2)}\n`,
+    },
+  };
+}
 
 export async function syncWorkSourceArtifacts(input: {
   readonly projectRoot: string;
@@ -115,6 +162,11 @@ function artifactKindFor(path: string): string {
   if (path.endsWith("status.json")) return "run-status";
   if (path.endsWith("glossary.json")) return "glossary";
   if (path.endsWith("review-report.md")) return "review";
+  if (path.endsWith("script.md")) return "script";
+  if (path.endsWith("storyboard.md")) return "storyboard";
+  if (path.endsWith("image-prompts.md")) return "image-prompt";
+  if (path.endsWith("assets.json")) return "asset-manifest";
+  if (path.endsWith("story-graph.json")) return "story-graph";
   if (path.includes(`${join("translated", "")}`)) return "translation-chapter";
   if (path.includes(`${join("source", "")}`)) return "source-chapter";
   if (/\.(?:png|jpe?g|webp|gif)$/iu.test(path)) return "image";
@@ -131,4 +183,3 @@ function contentTypeFor(path: string): string {
   if (extension === ".webp") return "image/webp";
   return "application/octet-stream";
 }
-

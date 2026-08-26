@@ -117,6 +117,8 @@ import {
   filmLLMDepsFromClient,
   applyGraphDelta,
   loadStoryGraph,
+  storyGraphPath,
+  workDirectory,
   reviewStoryGraph,
   exportInk,
   buildPlayableHtml,
@@ -448,8 +450,8 @@ function resolveProjectImageFile(root: string, rawPath: string): { readonly reso
   ) {
     throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Invalid project file path");
   }
-  if (!relPath.startsWith("shorts/") && !relPath.startsWith("covers/") && !relPath.startsWith("interactive-films/")) {
-    throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Only generated shorts/, covers/, interactive-films/ images can be previewed");
+  if (!relPath.startsWith("works/") && !relPath.startsWith("shorts/") && !relPath.startsWith("covers/")) {
+    throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Only generated work images can be previewed");
   }
 
   const ext = relPath.split(".").pop()?.toLowerCase() ?? "";
@@ -489,7 +491,7 @@ function normalizeProjectGeneratedPath(root: string, rawPath: string, code: stri
     throw new ApiError(400, code, "Invalid project artifact path");
   }
 
-  const allowedRoots = ["dramas/", "storyboards/", "interactive-films/", "shorts/", "covers/"];
+  const allowedRoots = ["works/", "shorts/", "covers/"];
   if (!allowedRoots.some((prefix) => relPath.startsWith(prefix))) {
     throw new ApiError(400, code, "Only generated writing artifacts can be opened");
   }
@@ -6334,20 +6336,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.get("/api/v1/interactive-films", async (c) => {
-    const filmsDir = join(root, "interactive-films");
-    let entries: string[] = [];
-    try {
-      const dirents = await readdir(filmsDir, { withFileTypes: true });
-      entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
     const films: Array<{ projectId: string; title: string }> = [];
-    for (const projectId of entries) {
-      if (!isSafeBookId(projectId)) continue;
+    for (const work of await listWorkManifests(root, "interactive-film")) {
       try {
-        const graph = await loadStoryGraph(root, projectId);
-        if (graph) films.push({ projectId, title: graph.title || projectId });
+        const graph = await loadStoryGraph(root, work.id);
+        if (graph) films.push({ projectId: work.id, title: graph.title || work.title });
       } catch { /* skip dirs without valid story-graph */ }
     }
     films.sort((a, b) => a.title.localeCompare(b.title, "zh"));
@@ -6507,7 +6500,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `invalid project id: ${id}` } }, 400);
     }
-    const graphPath = join(root, "interactive-films", id, "story-graph.json");
+    const graphPath = storyGraphPath(root, id);
     try {
       const raw = await readFile(graphPath, "utf-8");
       return c.json(JSON.parse(raw));
@@ -6524,7 +6517,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `invalid project id: ${id}` } }, 400);
     }
-    const projectDir = join(root, "interactive-films", id);
+    const projectDir = join(workDirectory(root, id), "source");
     try {
       await access(projectDir);
       const archive = gzipSync(await buildTarArchive(projectDir, id));

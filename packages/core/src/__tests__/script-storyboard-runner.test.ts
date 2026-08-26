@@ -111,11 +111,11 @@ describe("storyboard creation runner", () => {
       aspectRatio: "9:16",
     });
 
-    expect(result.assetsManifestPath).toBe("storyboards/cold-ledger/assets.json");
-    expect(result.assetsDir).toBe("storyboards/cold-ledger/assets");
-    expect((await stat(join(root, "storyboards/cold-ledger/assets/source"))).isDirectory()).toBe(true);
-    expect((await stat(join(root, "storyboards/cold-ledger/assets/generated"))).isDirectory()).toBe(true);
-    expect((await stat(join(root, "storyboards/cold-ledger/assets/selected"))).isDirectory()).toBe(true);
+    expect(result.assetsManifestPath).toBe("works/cold-ledger/source/assets.json");
+    expect(result.assetsDir).toBe("works/cold-ledger/source/assets");
+    expect((await stat(join(root, "works/cold-ledger/source/assets/source"))).isDirectory()).toBe(true);
+    expect((await stat(join(root, "works/cold-ledger/source/assets/generated"))).isDirectory()).toBe(true);
+    expect((await stat(join(root, "works/cold-ledger/source/assets/selected"))).isDirectory()).toBe(true);
 
     const manifest = JSON.parse(
       await readFile(join(root, result.assetsManifestPath), "utf-8"),
@@ -213,7 +213,7 @@ describe("storyboard creation runner", () => {
     expect(script).toContain("便利店。暴雨。");
     expect(script).toContain("监控时间轴被店长远程覆盖");
     expect(script.match(/陌生人推门。/gu)).toHaveLength(1);
-    const status = JSON.parse(await readFile(join(root, "dramas/missing-on-camera/status.json"), "utf-8"));
+    const status = JSON.parse(await readFile(join(root, "works/missing-on-camera/source/status.json"), "utf-8"));
     expect(status.status).toBe("complete");
   });
 
@@ -242,7 +242,7 @@ describe("storyboard creation runner", () => {
       instruction: "写完整剧本。",
       projectId: "duplicate-script",
     })).rejects.toThrow("且仅返回一份");
-    await expect(access(join(root, "dramas/duplicate-script/status.json"))).rejects.toThrow();
+    await expect(access(join(root, "works/duplicate-script/source/status.json"))).rejects.toThrow();
   });
 
   it("does not publish a completed run when the model returns another confirmation instead of a script", async () => {
@@ -268,10 +268,10 @@ describe("storyboard creation runner", () => {
       projectId: "third-knock",
     })).rejects.toThrow("且仅返回一份 `## 人物`");
 
-    await expect(stat(join(root, "dramas/third-knock/script.md"))).rejects.toMatchObject({
+    await expect(stat(join(root, "works/third-knock/source/script.md"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    await expect(stat(join(root, "dramas/third-knock/status.json"))).rejects.toMatchObject({
+    await expect(stat(join(root, "works/third-knock/source/status.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -467,14 +467,13 @@ describe("storyboard creation runner", () => {
       title: "盛世账页",
       instruction: "做一个盛世天下式多结局互动影游。",
       projectId: "shengshi-ledger",
-      outDir: "interactive-films/shengshi-ledger",
       budget: "5000元",
       referenceMode: "盛世天下式多走向",
     });
 
-    expect(result.baseDir).toBe("interactive-films/shengshi-ledger");
+    expect(result.baseDir).toBe("works/shengshi-ledger/source");
     expect(result).toMatchObject({
-      storyGraphPath: "interactive-films/shengshi-ledger/story-graph.json",
+      storyGraphPath: "works/shengshi-ledger/source/story-graph.json",
     });
     await expect(readFile(join(root, result.specPath), "utf-8")).resolves.toContain("互动影游创作规格");
     await expect(readFile(join(root, result.storyTreePath), "utf-8")).resolves.toContain("N1 入宫查账");

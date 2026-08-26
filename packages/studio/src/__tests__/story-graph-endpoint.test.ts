@@ -46,8 +46,8 @@ describe("GET /api/v1/projects/:id/story-graph", () => {
 
   it("exports an interactive-film project package", async () => {
     await saveStoryGraph(root, "demo", graph);
-    await mkdir(join(root, "interactive-films", "demo"), { recursive: true });
-    await writeFile(join(root, "interactive-films", "demo", "script.md"), "# Script\n", "utf-8");
+    await mkdir(join(root, "works", "demo", "source"), { recursive: true });
+    await writeFile(join(root, "works", "demo", "source", "script.md"), "# Script\n", "utf-8");
     const app = createStudioServer({} as never, root);
 
     const res = await app.request("/api/v1/projects/demo/export");

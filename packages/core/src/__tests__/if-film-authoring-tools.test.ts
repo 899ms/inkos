@@ -21,7 +21,7 @@ const sqliteIt = hasNodeSqlite ? it : it.skip;
 
 describe("direct-write authoring tools", () => {
   let root: string;
-  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-tools-")); await mkdir(join(root, "interactive-films", "p"), { recursive: true }); });
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-tools-")); await mkdir(join(root, "works", "p", "source"), { recursive: true }); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
   it("set_world_anchor applies a delta and persists worldAnchor", async () => {
@@ -66,7 +66,7 @@ describe("direct-write authoring tools", () => {
 
   sqliteIt("upsert_characters persists character in graph and writes facts to MemoryDB", async () => {
     // MemoryDB needs the story sub-directory to exist for the sqlite file.
-    await mkdir(join(root, "interactive-films", "p", "story"), { recursive: true });
+    await mkdir(join(root, "works", "p", "source", "story"), { recursive: true });
 
     const tool = createUpsertCharactersTool(root, "p");
     await tool.execute("call-4", {
@@ -86,7 +86,7 @@ describe("direct-write authoring tools", () => {
     expect(char?.name).toBe("阿梅");
 
     // Assert fact written to MemoryDB.
-    const db = new MemoryDB(join(root, "interactive-films", "p"));
+    const db = new MemoryDB(join(root, "works", "p", "source"));
     try {
       const facts = db.getFactsForCharacters(["阿梅"]);
       expect(facts.length).toBeGreaterThan(0);

@@ -97,4 +97,4 @@ export {
   type LegacyMigrationCandidate,
   type LegacyMigrationReport,
 } from "./legacy-migration.js";
-export { syncWorkSourceArtifacts } from "./source-sync.js";
+export { syncWorkSourceArtifacts, createInitialWorkManifestWrite } from "./source-sync.js";

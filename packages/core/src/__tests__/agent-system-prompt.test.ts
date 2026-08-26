@@ -354,7 +354,7 @@ describe("buildAgentSystemPrompt", () => {
         requestedIntent: "interactive_film_create",
       });
       expect(prompt).toContain("interactive_film_create");
-      expect(prompt).toContain("interactive-films/");
+      expect(prompt).toContain("互动影游 Work");
       expect(prompt).not.toContain("propose_action");
       expect(prompt).not.toContain("script_create：");
       expect(prompt).not.toContain("storyboard_create：");
