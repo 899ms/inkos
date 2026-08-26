@@ -22,35 +22,35 @@ const PROFILE_INPUTS = [
   {
     id: "short-fiction",
     title: "Short fiction",
-    capabilityIds: ["workspace", "single-pass", "adaptation", "visual"],
+    capabilityIds: ["workspace", "short-fiction", "adaptation", "visual"],
     requiredSkillIds: ["inkos-short-writing"],
     artifactKinds: ["outline", "manuscript", "sales-package", "cover"],
   },
   {
     id: "script",
     title: "Script",
-    capabilityIds: ["workspace", "single-pass", "adaptation", "visual"],
+    capabilityIds: ["workspace", "script", "adaptation", "visual"],
     requiredSkillIds: ["inkos-script-writing"],
     artifactKinds: ["script-spec", "script"],
   },
   {
     id: "storyboard",
     title: "Storyboard",
-    capabilityIds: ["workspace", "adaptation", "visual"],
+    capabilityIds: ["workspace", "storyboard", "adaptation", "visual"],
     requiredSkillIds: ["inkos-storyboard"],
     artifactKinds: ["storyboard-spec", "storyboard", "image-prompt", "image"],
   },
   {
     id: "interactive-film",
     title: "Interactive film",
-    capabilityIds: ["workspace", "interactive", "adaptation", "visual"],
+    capabilityIds: ["workspace", "interactive-film", "adaptation", "visual"],
     requiredSkillIds: ["inkos-interactive-film"],
     artifactKinds: ["story-graph", "flags", "script", "storyboard", "image"],
   },
   {
     id: "interactive-world",
     title: "Interactive world",
-    capabilityIds: ["workspace", "interactive", "visual"],
+    capabilityIds: ["workspace", "interactive-world", "visual"],
     requiredSkillIds: ["inkos-play-world"],
     artifactKinds: ["world-contract", "world-state", "scene", "event", "image"],
   },
@@ -79,6 +79,11 @@ export function builtInWorkProfiles(): ReadonlyArray<WorkProfile> {
     contextRecipes: {},
     hardGates: "hardGates" in input ? input.hardGates : ["artifact-integrity", "user-constraints"],
     softCriteria: "softCriteria" in input ? input.softCriteria : [],
+    confirmation: {
+      inferredMutation: "execute",
+      explicitRecoverableMutation: "execute",
+      destructiveMutation: "confirm",
+    },
   }));
 }
 

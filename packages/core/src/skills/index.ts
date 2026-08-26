@@ -15,13 +15,10 @@ export {
 } from "./builtin-loader.js";
 export { createSkillRegistry, type CreateSkillRegistryOptions } from "./registry.js";
 export {
-  PRODUCTION_SKILL_IDS,
-  NON_LONG_PRODUCTION_CAPABILITIES,
   activatedSkillIds,
   mergeActivatedSkillGuidance,
-  resolveProductionSkillActivations,
-  type ProductionSkillCapability,
-} from "./production-bindings.js";
+  resolveProfileSkillActivations,
+} from "./activations.js";
 export {
   AgentSkillSchema,
   type AgentSkill,

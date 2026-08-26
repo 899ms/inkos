@@ -288,7 +288,7 @@ function expireSkillToolResult(message: AgentMessage): AgentMessage {
     !message
     || typeof message !== "object"
     || (message as { role?: unknown }).role !== "toolResult"
-    || (message as { toolName?: unknown }).toolName !== "use_skill"
+    || !isUseSkillToolName((message as { toolName?: unknown }).toolName)
   ) {
     return message;
   }
@@ -312,8 +312,12 @@ export function assistantInvokesSkill(message: AgentMessage): boolean {
     part
     && typeof part === "object"
     && (part as { type?: unknown }).type === "toolCall"
-    && (part as { name?: unknown }).name === "use_skill"
+    && isUseSkillToolName((part as { name?: unknown }).name)
   ));
+}
+
+function isUseSkillToolName(value: unknown): boolean {
+  return typeof value === "string" && (value === "use_skill" || value.endsWith("__use_skill"));
 }
 
 export function sanitizeSkillTurnMessage(

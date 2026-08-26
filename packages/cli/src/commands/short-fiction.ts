@@ -12,9 +12,10 @@ import {
   SHORT_FICTION_MIN_CHAPTERS,
   SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
   activatedSkillIds,
+  createBuiltInWorkProfileRegistry,
   createLLMClient,
   loadAvailableAgentSkills,
-  resolveProductionSkillActivations,
+  resolveProfileSkillActivations,
   runShortFictionProduction,
   type LLMConfig,
   type Logger,
@@ -76,7 +77,10 @@ shortCommand
       const reference = opts.reference ? await readReference(root, opts.reference) : undefined;
       const models = resolveShortRunModels(opts);
       const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
-      const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "shortWriting");
+      const activatedSkills = resolveProfileSkillActivations(
+        configuredSkills.skills,
+        createBuiltInWorkProfileRegistry().require("short-fiction"),
+      );
 
       const plannerRuntime = await createShortRuntime(root, {
         llmBaseUrl: opts.llmBaseUrl,

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { getModel, getEnvApiKey, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
@@ -15,46 +16,20 @@ import type {
   UserMessage,
 } from "@mariozechner/pi-ai";
 import type { PipelineRunner } from "../pipeline/runner.js";
-import { buildAgentSystemPrompt } from "./agent-system-prompt.js";
 import {
-  createPatchChapterTextTool,
-  createReplaceChapterTextTool,
-  createResyncChapterStateTool,
-  createDeleteLatestChapterTool,
-  createRenameEntityTool,
-  createSubAgentTool,
-  createReadTool,
-  createGrepTool,
-  createLsTool,
-  createWriteTruthFileTool,
-  createShortFictionRunTool,
-  createGenerateCoverTool,
-  createPlayEditTool,
-  createPlayReviseTool,
-  createPlayStartTool,
-  createPlayStepTool,
-  createProposeActionTool,
-  createScriptCreationTool,
-  createStoryboardCreationTool,
-  createInteractiveFilmCreationTool,
-  createTranslationCreateTool,
-  createFanficBookTool,
-  createContinuationImportTool,
-  createSpinoffBookTool,
-  createImitationBookTool,
-  createResearchWebTool,
-  createIngestMaterialTool,
-  createRetrieveMaterialTool,
-  createManageBookReferenceTool,
-  createImportChaptersTool,
-} from "./agent-tools.js";
-import { createFilmAuthoringTools, filmLLMDepsFromClient } from "./film-authoring-tools.js";
-import {
-  createNarrativeForecastCreateTool,
-  createNarrativeForecastGetTool,
-  createNarrativeForecastSelectTool,
-} from "./forecast-tools.js";
-import { createBookContextTransform, createInteractiveFilmContextTransform } from "./context-transform.js";
+  CreativeEpisodeStore,
+  CreativeHarnessRuntime,
+  buildHarnessSystemPrompt,
+  confirmedCapabilityBinding,
+  createBuiltInWorkProfileRegistry,
+  createCapabilityPiTools,
+  createHarnessContextTransform,
+  createProductionCapabilityRegistry,
+  loadWorkManifest,
+  type HarnessEpisodeHandle,
+  type WorkManifest,
+  type WorkProfile,
+} from "../harness/index.js";
 import {
   appendTranscriptEvents,
   readTranscriptEvents,
@@ -72,9 +47,7 @@ import type { ContextCompressionCallback } from "../models/context-compression.j
 import {
   createSkillRegistry,
   loadAvailableAgentSkills,
-  mergeActivatedSkillGuidance,
-  resolveProductionSkillActivations,
-  type ProductionSkillCapability,
+  resolveProfileSkillActivations,
 } from "../skills/index.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { PlayStore } from "../play/play-store.js";
@@ -179,11 +152,16 @@ interface CachedAgent {
   projectRoot: string;
   bookId: string | null;
   sessionKind: SessionKind;
+  profileId: string;
+  workId: string | null;
   actionSource: NonNullable<AgentSessionConfig["actionSource"]>;
   requestedIntent: AgentSessionConfig["requestedIntent"];
   actionPayloadKey: string;
   skillResolutionKey: string;
   turnSkills: Map<string, ActivatedSkillGuidance>;
+  harnessRuntime: CreativeHarnessRuntime;
+  episodeStore: CreativeEpisodeStore;
+  currentEpisode: HarnessEpisodeHandle | null;
   playWorldExists: boolean;
   language: string;
   modelIdentity: string;
@@ -198,6 +176,21 @@ interface CachedAgent {
 
 const agentCache = new Map<string, CachedAgent>();
 const agentSessionQueues = new Map<string, Promise<void>>();
+
+function removeCachedAgent(key: string, cancelRunningEpisode = false): boolean {
+  const entry = agentCache.get(key);
+  if (!entry) return false;
+  if (cancelRunningEpisode && entry.currentEpisode) {
+    try {
+      entry.harnessRuntime.finishEpisode(entry.currentEpisode, "cancelled");
+    } catch {
+      // The episode may already be terminal; cache eviction must still finish.
+    }
+    entry.currentEpisode = null;
+  }
+  entry.episodeStore.close();
+  return agentCache.delete(key);
+}
 
 /** TTL for cached agents: 5 minutes. */
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -220,7 +213,7 @@ function ensureCleanupTimer(): void {
     const now = Date.now();
     for (const [id, entry] of agentCache) {
       if (now - entry.lastActive > CACHE_TTL_MS) {
-        agentCache.delete(id);
+        removeCachedAgent(id);
       }
     }
     // Stop the timer when nothing left to watch.
@@ -378,26 +371,28 @@ function localAssistantStopStream(model: Model<Api>): AssistantMessageEventStrea
 }
 
 export function isTerminalProductionToolName(toolName: unknown): boolean {
-  return toolName === "propose_action"
-    || toolName === "sub_agent"
-    || toolName === "resync_chapter_state"
-    || toolName === "short_fiction_run"
-    || toolName === "script_create"
-    || toolName === "storyboard_create"
-    || toolName === "interactive_film_create"
-    || toolName === "translation_create"
-    || toolName === "fanfic_create"
-    || toolName === "continuation_import"
-    || toolName === "spinoff_create"
-    || toolName === "imitation_create"
-    || toolName === "generate_cover"
-    || toolName === "play_start"
-    || toolName === "play_edit"
-    || toolName === "play_revise"
-    || toolName === "play_step"
-    || toolName === "create_narrative_forecast"
-    || toolName === "get_narrative_forecast"
-    || toolName === "select_narrative_branch";
+  if (typeof toolName !== "string") return false;
+  const actionName = toolName.includes("__") ? toolName.split("__").at(-1)! : toolName;
+  return actionName === "propose_action"
+    || actionName === "sub_agent"
+    || actionName === "resync_chapter_state"
+    || actionName === "short_fiction_run"
+    || actionName === "script_create"
+    || actionName === "storyboard_create"
+    || actionName === "interactive_film_create"
+    || actionName === "translation_create"
+    || actionName === "fanfic_create"
+    || actionName === "continuation_import"
+    || actionName === "spinoff_create"
+    || actionName === "imitation_create"
+    || actionName === "generate_cover"
+    || actionName === "play_start"
+    || actionName === "play_edit"
+    || actionName === "play_revise"
+    || actionName === "play_step"
+    || actionName === "create_narrative_forecast"
+    || actionName === "get_narrative_forecast"
+    || actionName === "select_narrative_branch";
 }
 
 function hasUnansweredTerminalToolResult(messages: AgentMessage[]): boolean {
@@ -744,272 +739,65 @@ function agentMessagesToPlain(
 }
 
 // ---------------------------------------------------------------------------
-// Main entry point
-// ---------------------------------------------------------------------------
-
-/**
- * 会创建/修改书籍与产物的生产工具。suppressProductionTools 为 true（同会话
- * 有后台生产任务在运行）时从工具表剔除；read/grep/ls、research/material 与
- * propose_action 保留——propose_action 引发的确认任务在 host 侧另有单任务闸门。
- */
-const PRODUCTION_MUTATION_TOOL_NAMES = new Set([
-  "sub_agent",
-  "generate_cover",
-  "write_truth_file",
-  "rename_entity",
-  "patch_chapter_text",
-  "replace_chapter_text",
-  "resync_chapter_state",
-  "delete_latest_chapter",
-  "import_chapters",
-  "fanfic_create",
-  "continuation_import",
-  "spinoff_create",
-  "imitation_create",
-]);
-
-type CreateAgentToolsForModeParams = {
-  readonly pipeline: PipelineRunner;
-  readonly bookId: string | null;
-  readonly sessionId: string;
-  readonly sessionKind: SessionKind;
-  readonly actionSource: NonNullable<AgentSessionConfig["actionSource"]>;
-  readonly requestedIntent: AgentSessionConfig["requestedIntent"];
-  readonly actionPayload: AgentSessionConfig["actionPayload"];
-  readonly projectRoot: string;
-  readonly allowSystemFileRead: boolean;
-  readonly language: string;
-  readonly playMode?: "open" | "guided";
-  readonly playWorldExists: boolean;
-  readonly intentSkillTool?: ReturnType<typeof createUseSkillTool>;
-  readonly requestedSkillIds?: () => ReadonlyArray<string>;
-  readonly attachmentPaths?: () => ReadonlyArray<string>;
-  readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
-  readonly workerSkills?: (agent: string) => ReadonlyArray<ActivatedSkillGuidance>;
-  readonly productionSkills?: (capability: ProductionSkillCapability) => ReadonlyArray<ActivatedSkillGuidance>;
+const PROFILE_ID_BY_SESSION_KIND: Readonly<Record<SessionKind, string>> = {
+  chat: "workspace-default",
+  "book-create": "longform-novel",
+  book: "longform-novel",
+  edit: "longform-novel",
+  short: "short-fiction",
+  script: "script",
+  storyboard: "storyboard",
+  "interactive-film": "interactive-film",
+  "interactive-film-authoring": "interactive-film",
+  play: "interactive-world",
 };
 
-function createAgentToolsForMode(params: CreateAgentToolsForModeParams) {
-  const tools = createModeTools(params);
-  return params.intentSkillTool ? [...tools, params.intentSkillTool] : tools;
+function surfaceProfileId(sessionKind: SessionKind): string {
+  return PROFILE_ID_BY_SESSION_KIND[sessionKind];
 }
 
-function createModeTools(params: CreateAgentToolsForModeParams) {
-  const lang = params.language === "en" ? "en" : "zh";
-  const subAgentTool = createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, {
-    actionPayload: params.actionPayload,
-    language: lang,
-    activeSkills: params.activeSkills,
-    workerSkills: params.workerSkills,
-  });
-  const proposalTool = createProposeActionTool(lang, {
-    sameSession: params.sessionKind !== "chat",
-    requestedSkillIds: params.requestedSkillIds,
-    attachmentPaths: params.attachmentPaths,
-  });
-  const researchTool = createResearchWebTool(params.projectRoot);
-  const materialTool = createIngestMaterialTool(params.projectRoot);
-  const materialRetrievalTool = createRetrieveMaterialTool(params.projectRoot);
-  const projectReadTool = createReadTool(params.projectRoot, { scope: "project" });
-  const importChaptersTool = createImportChaptersTool(params.pipeline, params.bookId, params.projectRoot);
-  const isConfirmed = (
-    intent: NonNullable<AgentSessionConfig["requestedIntent"]>,
-  ): boolean => {
-    return (params.actionSource === "button" || params.actionSource === "slash")
-      && params.requestedIntent === intent;
-  };
+function surfaceWorkId(
+  sessionKind: SessionKind,
+  bookId: string | null,
+  sessionId: string,
+): string | null {
+  if (bookId) return bookId;
+  if (sessionKind === "play") return sessionId;
+  return null;
+}
 
-  if (params.sessionKind === "chat") {
-    if (isConfirmed("translation_create")) {
-      return [createTranslationCreateTool(params.projectRoot, { actionPayload: params.actionPayload })];
-    }
-    if (isConfirmed("fanfic_init")) {
-      return [createFanficBookTool(params.pipeline, params.projectRoot, {
-        defaultSkills: params.productionSkills?.("longWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (isConfirmed("continuation_import")) {
-      return [createContinuationImportTool(params.pipeline, params.bookId, params.projectRoot, {
-        defaultSkills: params.productionSkills?.("longWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (isConfirmed("spinoff_create")) {
-      return [createSpinoffBookTool(params.pipeline, params.projectRoot, {
-        defaultSkills: params.productionSkills?.("longWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (isConfirmed("style_imitation")) {
-      return [createImitationBookTool(params.pipeline, params.projectRoot, {
-        defaultSkills: params.productionSkills?.("longWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    return [proposalTool, researchTool, materialTool, materialRetrievalTool, importChaptersTool];
+async function loadSurfaceWork(
+  projectRoot: string,
+  workId: string | null,
+): Promise<WorkManifest | null> {
+  if (!workId) return null;
+  try {
+    return await loadWorkManifest(projectRoot, workId);
+  } catch {
+    return null;
   }
+}
 
-  if (params.sessionKind === "short") {
-    if (isConfirmed("short_run")) {
-      return [createShortFictionRunTool(params.pipeline, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        language: lang,
-        defaultSkills: params.productionSkills?.("shortWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (isConfirmed("generate_cover")) {
-      return [createGenerateCoverTool(params.projectRoot, { actionPayload: params.actionPayload })];
-    }
-    return [proposalTool, materialTool, materialRetrievalTool];
-  }
+function isHostConfirmedAction(
+  actionSource: NonNullable<AgentSessionConfig["actionSource"]>,
+  requestedIntent: AgentSessionConfig["requestedIntent"],
+): boolean {
+  return Boolean(
+    requestedIntent
+    && (actionSource === "button" || actionSource === "slash"),
+  );
+}
 
-  if (params.sessionKind === "script") {
-    if (isConfirmed("script_create")) {
-      return [createScriptCreationTool(params.pipeline, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        language: lang,
-        defaultSkills: params.productionSkills?.("script"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    return [proposalTool, projectReadTool, materialTool, materialRetrievalTool];
-  }
+function agentContextBudget(model: Model<Api>): number {
+  const contextWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
+    ? model.contextWindow
+    : 32_000;
+  return Math.max(2_000, Math.min(16_000, Math.floor(contextWindow * 0.25)));
+}
 
-  if (params.sessionKind === "storyboard") {
-    if (isConfirmed("storyboard_create")) {
-      return [createStoryboardCreationTool(params.pipeline, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        language: lang,
-        defaultSkills: params.productionSkills?.("storyboard"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    return [proposalTool, projectReadTool, materialTool, materialRetrievalTool];
-  }
-
-  if (params.sessionKind === "interactive-film") {
-    if (isConfirmed("interactive_film_create")) {
-      return [createInteractiveFilmCreationTool(params.pipeline, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        language: lang,
-        defaultSkills: params.productionSkills?.("interactiveFilm"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    return [proposalTool, projectReadTool, materialTool, materialRetrievalTool];
-  }
-
-  if (params.sessionKind === "interactive-film-authoring") {
-    const projectId = params.bookId;
-    if (!projectId) {
-      throw new Error("interactive-film-authoring session requires a non-null bookId");
-    }
-    const agentCtx = params.pipeline.createAgentContext("film-authoring", projectId);
-    const llm = filmLLMDepsFromClient(agentCtx.client, agentCtx.model, {
-      activatedSkills: () => mergeActivatedSkillGuidance(
-        params.productionSkills?.("interactiveFilm") ?? [],
-        params.activeSkills?.() ?? [],
-      ),
-    });
-    return createFilmAuthoringTools({
-      projectRoot: params.projectRoot,
-      projectId,
-      llm,
-      proposeActionTool: proposalTool,
-      confirmedIntent: params.requestedIntent,
-      language: lang,
-    });
-  }
-
-
-  if (params.sessionKind === "play") {
-    if (isConfirmed("play_start")) {
-      return [createPlayStartTool(params.pipeline, params.projectRoot, params.sessionId, params.playMode, {
-        actionPayload: params.actionPayload,
-        defaultSkills: params.productionSkills?.("play"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (params.playWorldExists) {
-      return [
-        createPlayEditTool(params.projectRoot, params.sessionId, lang),
-        createPlayReviseTool(params.pipeline, params.projectRoot, params.sessionId, {
-          language: lang,
-          defaultSkills: params.productionSkills?.("play"),
-          activeSkills: params.activeSkills,
-        }),
-        createPlayStepTool(params.pipeline, params.projectRoot, params.sessionId, {
-          language: lang,
-          defaultSkills: params.productionSkills?.("play"),
-          activeSkills: params.activeSkills,
-        }),
-        materialTool,
-        materialRetrievalTool,
-      ];
-    }
-    return [proposalTool, materialTool, materialRetrievalTool];
-  }
-
-  if (params.sessionKind === "book-create" && !params.bookId) {
-    if (isConfirmed("create_book")) {
-      return [createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        architectCreateOnly: true,
-        language: lang,
-        activeSkills: params.activeSkills,
-        workerSkills: params.workerSkills,
-      })];
-    }
-    return [proposalTool, researchTool, materialTool, materialRetrievalTool];
-  }
-
-  if (!params.bookId) {
-    return [];
-  }
-
-  const bookTools = [
-    subAgentTool,
-    createGenerateCoverTool(params.projectRoot, { actionPayload: params.actionPayload }),
-    createReadTool(params.projectRoot, { allowSystemPaths: params.allowSystemFileRead }),
-    createWriteTruthFileTool(params.pipeline, params.projectRoot, params.bookId),
-    createRenameEntityTool(params.pipeline, params.projectRoot, params.bookId),
-    createPatchChapterTextTool(params.pipeline, params.projectRoot, params.bookId),
-    createReplaceChapterTextTool(params.pipeline, params.projectRoot, params.bookId),
-    createResyncChapterStateTool(params.pipeline, params.bookId, {
-      language: lang,
-      defaultSkills: params.productionSkills?.("longWriting"),
-      activeSkills: params.activeSkills,
-    }),
-    createDeleteLatestChapterTool(params.projectRoot, params.bookId),
-    researchTool,
-    materialTool,
-    materialRetrievalTool,
-    createManageBookReferenceTool(params.projectRoot, params.bookId),
-    importChaptersTool,
-    createNarrativeForecastCreateTool(params.pipeline, params.bookId, params.projectRoot),
-    createNarrativeForecastGetTool(params.bookId, params.projectRoot),
-    createNarrativeForecastSelectTool(params.bookId, params.projectRoot),
-    createGrepTool(params.projectRoot),
-    createLsTool(params.projectRoot),
-  ];
-
-  if (params.sessionKind === "edit") {
-    // Edit mode stays deterministic: forecast create runs an LLM projection,
-    // and get/select belong to the planning workflow, not text editing.
-    return bookTools.filter((tool) => ![
-      "sub_agent",
-      "generate_cover",
-      "research_web",
-      "import_chapters",
-      "create_narrative_forecast",
-      "get_narrative_forecast",
-      "select_narrative_branch",
-    ].includes(tool.name));
-  }
-
-  return bookTools;
+function isAbortLike(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === "AbortError" || /\babort(?:ed)?\b/i.test(error.message);
 }
 
 /**
@@ -1061,6 +849,11 @@ async function runAgentSessionUnlocked(
   const playWorldExists = sessionKind === "play"
     ? Boolean(await new PlayStore(projectRoot).loadWorld(sessionId))
     : false;
+  const profiles = createBuiltInWorkProfileRegistry();
+  const workId = surfaceWorkId(sessionKind, bookId, sessionId);
+  const work = await loadSurfaceWork(projectRoot, workId);
+  const profileId = work?.profileId ?? surfaceProfileId(sessionKind);
+  const profile = profiles.require(profileId);
   const cacheKey = agentCacheKey(projectRoot, sessionId);
 
   // ----- Resolve or create Agent -----
@@ -1077,6 +870,7 @@ async function runAgentSessionUnlocked(
     const projectRootChanged = cached.projectRoot !== projectRoot;
     const bookChanged = cached.bookId !== bookId;
     const sessionKindChanged = cached.sessionKind !== sessionKind;
+    const profileChanged = cached.profileId !== profileId || cached.workId !== workId;
     const actionSourceChanged = cached.actionSource !== actionSource;
     const requestedIntentChanged = cached.requestedIntent !== requestedIntent;
     const actionPayloadChanged = cached.actionPayloadKey !== actionPayloadKey;
@@ -1094,6 +888,7 @@ async function runAgentSessionUnlocked(
       projectRootChanged ||
       bookChanged ||
       sessionKindChanged ||
+      profileChanged ||
       actionSourceChanged ||
       requestedIntentChanged ||
       actionPayloadChanged ||
@@ -1106,7 +901,7 @@ async function runAgentSessionUnlocked(
       suppressProductionToolsChanged ||
       transcriptChanged
     ) {
-      agentCache.delete(cacheKey);
+      removeCachedAgent(cacheKey);
       cached = undefined;
     }
   }
@@ -1141,18 +936,15 @@ async function runAgentSessionUnlocked(
     const turnSkills = new Map<string, ActivatedSkillGuidance>(
       skillResolution.usedSkills.map((skill) => [skill.id, { skill, resources: [] }]),
     );
-    const productionSkills = (capability: ProductionSkillCapability) => (
-      resolveProductionSkillActivations(skillResolution.availableSkills, capability)
+    const profileSkills = (targetProfileId: string, includeRecommended = false) => (
+      resolveProfileSkillActivations(
+        skillResolution.availableSkills,
+        profiles.require(targetProfileId),
+        { includeRecommended },
+      )
     );
     const allowIntentSkillSelection = actionSource === "free-text"
       && skillResolution.forcedSkillIds.length === 0;
-    const baseSystemPrompt = buildAgentSystemPrompt(bookId, language, sessionKind, {
-      actionSource,
-      requestedIntent,
-      playWorldExists,
-      skills: skillResolution,
-      allowIntentSkillSelection,
-    });
     const intentSkillTool = allowIntentSkillSelection
       ? createUseSkillTool({
           registry: skillRegistry,
@@ -1160,29 +952,85 @@ async function runAgentSessionUnlocked(
           onActivate: (activation) => turnSkills.set(activation.skill.id, activation),
         })
       : undefined;
-    const agentTools = createAgentToolsForMode({
+    const capabilities = createProductionCapabilityRegistry({
       pipeline,
-      bookId,
-      sessionId,
-      sessionKind,
-      actionSource,
-      requestedIntent,
-      actionPayload,
       projectRoot,
-      allowSystemFileRead,
+      sessionId,
+      work,
       language,
+      actionPayload,
       playMode,
       playWorldExists,
+      sameSessionProposal: sessionKind !== "chat",
+      allowSystemFileRead,
       intentSkillTool,
       requestedSkillIds: () => [...turnSkills.keys()],
       attachmentPaths: () => cached?.currentAttachmentPaths ?? [],
       activeSkills: () => [...turnSkills.values()],
       workerSkills: (agent) => {
-        if (agent === "architect" || agent === "writer") return productionSkills("longWriting");
-        if (agent === "auditor" || agent === "reviser") return productionSkills("longReview");
+        if (agent === "architect" || agent === "writer") return profileSkills("longform-novel");
+        if (agent === "auditor" || agent === "reviser") return profileSkills("longform-novel", true);
         return [];
       },
-      productionSkills,
+      profileSkills,
+      interactiveFilmAuthoring: sessionKind === "interactive-film-authoring",
+    });
+    const episodeStore = new CreativeEpisodeStore(join(projectRoot, ".inkos", "harness.sqlite"));
+    const harnessRuntime = new CreativeHarnessRuntime(projectRoot, capabilities, profiles, episodeStore);
+    const confirmedCapabilityAction = isHostConfirmedAction(actionSource, requestedIntent) && requestedIntent
+      ? confirmedCapabilityBinding(requestedIntent)
+      : undefined;
+    const agentTools = createCapabilityPiTools({
+      registry: capabilities,
+      profile,
+      includeAction: (capabilityId, action) => {
+        if (confirmedCapabilityAction) {
+          return capabilityId === confirmedCapabilityAction.capabilityId && action.id === confirmedCapabilityAction.actionId;
+        }
+        return action.requiresConfirmation !== true;
+      },
+      executeAction: async (capabilityId, actionId, parameters, signal, onUpdate) => {
+        if (!cached) throw new Error("Creative harness session is unavailable.");
+        const ephemeral = cached.currentEpisode === null;
+        const handle = cached.currentEpisode ?? cached.harnessRuntime.startEpisode({
+          profileId: cached.profileId,
+          work,
+        });
+        try {
+          const result = await cached.harnessRuntime.executeAction({
+            handle,
+            capabilityId,
+            actionId,
+            parameters,
+            source: actionSource === "free-text" ? "agent" : "explicit",
+            confirmed: isHostConfirmedAction(actionSource, requestedIntent),
+            signal,
+            onUpdate,
+          });
+          if (ephemeral) cached.harnessRuntime.finishEpisode(handle, "completed");
+          return result;
+        } catch (error) {
+          if (ephemeral) cached.harnessRuntime.finishEpisode(handle, isAbortLike(error) ? "cancelled" : "failed");
+          throw error;
+        }
+      },
+    });
+    const visibleTools = suppressProductionTools
+      ? agentTools.filter((tool) => {
+          const [capabilityId, actionId] = tool.name.split("__", 2);
+          if (!capabilityId || !actionId) return false;
+          return capabilities.resolve(capabilityId, actionId).action.risk === "read";
+        })
+      : agentTools;
+    const baseSystemPrompt = buildHarnessSystemPrompt({
+      profile,
+      work,
+      language,
+      skills: skillResolution,
+      allowIntentSkillSelection,
+      ...(isHostConfirmedAction(actionSource, requestedIntent) && requestedIntent
+        ? { confirmedAction: requestedIntent }
+        : {}),
     });
     const agent = new Agent({
       initialState: {
@@ -1190,14 +1038,16 @@ async function runAgentSessionUnlocked(
         systemPrompt: config.backgroundTaskContext
           ? `${baseSystemPrompt}\n\n${config.backgroundTaskContext}`
           : baseSystemPrompt,
-        tools: suppressProductionTools
-          ? agentTools.filter((tool) => !PRODUCTION_MUTATION_TOOL_NAMES.has(tool.name))
-          : agentTools,
+        tools: [...visibleTools],
         messages: initialAgentMessages,
       },
-      transformContext: sessionKind === "interactive-film-authoring" && bookId
-        ? createInteractiveFilmContextTransform(bookId, projectRoot)
-        : createBookContextTransform(bookId, projectRoot, { onContextCompression }),
+      transformContext: createHarnessContextTransform({
+        projectRoot,
+        work,
+        profile,
+        budgetTokens: agentContextBudget(model),
+        onContextCompression,
+      }),
       convertToLlm: (messages) => {
         terminalToolResultTail = hasUnansweredTerminalToolResult(messages);
         return convertAgentMessagesForModel(messages, model);
@@ -1222,11 +1072,16 @@ async function runAgentSessionUnlocked(
       projectRoot,
       bookId,
       sessionKind,
+      profileId,
+      workId,
       actionSource,
       requestedIntent,
       actionPayloadKey,
       skillResolutionKey,
       turnSkills,
+      harnessRuntime,
+      episodeStore,
+      currentEpisode: null,
       playWorldExists,
       language,
       modelIdentity: requestedModelIdentity,
@@ -1270,6 +1125,18 @@ async function runAgentSessionUnlocked(
     sessionKind,
     input: promptMessage,
   }));
+  const episodeHandle = cached.harnessRuntime.startEpisode({
+    profileId: cached.profileId,
+    work,
+    episodeId: `episode-${requestId}`,
+  });
+  cached.currentEpisode = episodeHandle;
+  let episodeFinished = false;
+  const finishEpisode = (status: "completed" | "failed" | "cancelled") => {
+    if (episodeFinished) return;
+    cached!.harnessRuntime.finishEpisode(episodeHandle, status);
+    episodeFinished = true;
+  };
 
   let parentUuid: string | null = null;
   let piTurnIndex = 0;
@@ -1344,7 +1211,8 @@ async function runAgentSessionUnlocked(
         skillTurnActive && index >= turnMessageStartIndex,
       )
     ));
-    errorMessage = assistantErrorMessage(finalAssistant);
+    const turnAborted = finalAssistant?.stopReason === "aborted";
+    errorMessage = assistantErrorMessage(finalAssistant) ?? (turnAborted ? "Agent turn aborted." : undefined);
     if (errorMessage) {
       const failedError = errorMessage;
       await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
@@ -1356,7 +1224,8 @@ async function runAgentSessionUnlocked(
         timestamp: Date.now(),
         error: failedError,
       }));
-      agentCache.delete(cacheKey);
+      finishEpisode(turnAborted ? "cancelled" : "failed");
+      removeCachedAgent(cacheKey);
     } else {
       const committed = await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
         type: "request_committed",
@@ -1367,6 +1236,7 @@ async function runAgentSessionUnlocked(
         timestamp: Date.now(),
       }));
       cached.lastCommittedSeq = committed.seq;
+      finishEpisode("completed");
     }
   } catch (error) {
     await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
@@ -1378,9 +1248,11 @@ async function runAgentSessionUnlocked(
       timestamp: Date.now(),
       error: error instanceof Error ? error.message : String(error),
     }));
-    agentCache.delete(cacheKey);
+    finishEpisode(isAbortLike(error) ? "cancelled" : "failed");
+    removeCachedAgent(cacheKey);
     throw error;
   } finally {
+    cached.currentEpisode = null;
     unsubscribe();
   }
 
@@ -1403,11 +1275,10 @@ async function runAgentSessionUnlocked(
 
 /** Manually evict a cached Agent session. */
 export function evictAgentCache(sessionId: string): boolean {
-  let deleted = agentCache.delete(sessionId);
+  let deleted = removeCachedAgent(sessionId);
   for (const [key, entry] of agentCache) {
     if (entry.sessionId !== sessionId) continue;
-    agentCache.delete(key);
-    deleted = true;
+    deleted = removeCachedAgent(key) || deleted;
   }
   return deleted;
 }
@@ -1419,7 +1290,7 @@ export function abortAgentSession(projectRoot: string, sessionId: string): boole
     if (entry.projectRoot !== projectRoot || entry.sessionId !== sessionId) continue;
     entry.agent.abort();
     entry.agent.clearAllQueues?.();
-    agentCache.delete(key);
+    if (entry.currentEpisode === null) removeCachedAgent(key);
     aborted = true;
   }
   return aborted;

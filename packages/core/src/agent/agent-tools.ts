@@ -52,7 +52,7 @@ import type { ActivatedSkillGuidance } from "./skill-tool.js";
 import {
   activatedSkillIds,
   mergeActivatedSkillGuidance,
-} from "../skills/production-bindings.js";
+} from "../skills/activations.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

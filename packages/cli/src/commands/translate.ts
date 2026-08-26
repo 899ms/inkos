@@ -1,10 +1,11 @@
 import { Command } from "commander";
 import {
   activatedSkillIds,
+  createBuiltInWorkProfileRegistry,
   createLLMTranslationModel,
   createTranslationProjectFromFile,
   loadAvailableAgentSkills,
-  resolveProductionSkillActivations,
+  resolveProfileSkillActivations,
   runTranslationProject,
   writeTranslationExport,
 } from "@actalk/inkos-core";
@@ -48,7 +49,7 @@ translateCommand
 translateCommand
   .command("run")
   .description("Translate pending segments and write a review report")
-  .argument("<project-id>", "Translation project ID under translations/")
+  .argument("<project-id>", "Translation Work ID")
   .option("--batch-size <n>", "Segments per model call", parseInt)
   .option("--max-tokens <n>", "Max output tokens per translation batch", parseInt)
   .option("--json", "Output JSON")
@@ -57,7 +58,10 @@ translateCommand
       const root = findProjectRoot();
       const config = await loadConfig({ requireApiKey: true, projectRoot: root });
       const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
-      const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "translation");
+      const activatedSkills = resolveProfileSkillActivations(
+        configuredSkills.skills,
+        createBuiltInWorkProfileRegistry().require("translation"),
+      );
       const model = createLLMTranslationModel({
         client: createClient(config),
         model: config.llm.model,
@@ -84,7 +88,7 @@ translateCommand
 translateCommand
   .command("export")
   .description("Export translated text to Markdown/TXT/EPUB")
-  .argument("<project-id>", "Translation project ID under translations/")
+  .argument("<project-id>", "Translation Work ID")
   .option("--format <format>", "Output format: md, txt, epub", "md")
   .option("--output <path>", "Output file path")
   .option("--json", "Output JSON")

@@ -72,7 +72,13 @@ import {
   loadAvailableAgentSkills,
   activatedSkillIds,
   mergeActivatedSkillGuidance,
-  resolveProductionSkillActivations,
+  resolveProfileSkillActivations,
+  confirmedCapabilityBinding,
+  createBuiltInWorkProfileRegistry,
+  createSingleToolCapabilityRegistry,
+  CreativeEpisodeStore,
+  CreativeHarnessRuntime,
+  loadWorkManifest,
   parseAgentSkillDocument,
   getBuiltinPrompt,
   listBuiltinPromptPacks,
@@ -532,7 +538,7 @@ function hasSuccessfulSubAgentExec(
   agent: string,
 ): boolean {
   return execs.some((exec) =>
-    exec.tool === "sub_agent"
+    exec.tool.split("__").at(-1) === "sub_agent"
     && exec.agent === agent
     && exec.status === "completed"
     && !isLikelyFailedToolResult(exec)
@@ -544,7 +550,7 @@ function hasSuccessfulToolExec(
   tool: string,
 ): boolean {
   return execs.some((exec) =>
-    exec.tool === tool
+    exec.tool.split("__").at(-1) === tool.split("__").at(-1)
     && exec.status === "completed"
     && !isLikelyFailedToolResult(exec)
   );
@@ -1144,12 +1150,13 @@ class ConfirmedActionExecutionError extends Error {
 }
 
 function suppressManualTextForTool(exec: CollectedToolExec): boolean {
-  return exec.tool === "play_start"
-    || exec.tool === "play_step"
-    || exec.tool === "play_revise"
-    || exec.tool === "script_create"
-    || exec.tool === "storyboard_create"
-    || exec.tool === "interactive_film_create";
+  const action = exec.tool.split("__").at(-1);
+  return action === "play_start"
+    || action === "play_step"
+    || action === "play_revise"
+    || action === "script_create"
+    || action === "storyboard_create"
+    || action === "interactive_film_create";
 }
 
 function hasSuccessfulToolOwnedResponse(execs: ReadonlyArray<CollectedToolExec>): boolean {
@@ -1235,10 +1242,13 @@ async function executeConfirmedProductionAction(args: {
     disabledSkills: args.disabledSkills,
   });
   const requestedSkillActivations = skillResolution.usedSkills.map((skill) => ({ skill, resources: [] }));
-  const productionSkills = (
-    capability: Parameters<typeof resolveProductionSkillActivations>[1],
-  ) => mergeActivatedSkillGuidance(
-    resolveProductionSkillActivations(skillResolution.availableSkills, capability),
+  const profileRegistry = createBuiltInWorkProfileRegistry();
+  const profileSkills = (profileId: string, includeRecommended = false) => mergeActivatedSkillGuidance(
+    resolveProfileSkillActivations(
+      skillResolution.availableSkills,
+      profileRegistry.require(profileId),
+      { includeRecommended },
+    ),
     requestedSkillActivations,
   );
   let tool: ReturnType<typeof createSubAgentTool>
@@ -1264,7 +1274,7 @@ async function executeConfirmedProductionAction(args: {
     const title = requirePayloadText(payload?.title, pick(lang, "确认建书缺少书名，请重新生成确认卡。", "The book creation confirmation is missing a title. Regenerate the confirmation card."));
     tool = createSubAgentTool(args.pipeline, null, args.root, {
       actionPayload,
-      workerSkills: (worker) => worker === "architect" ? productionSkills("longWriting") : [],
+      workerSkills: (worker) => worker === "architect" ? profileSkills("longform-novel") : [],
     });
     agent = "architect";
     params = {
@@ -1284,7 +1294,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createShortFictionRunTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("shortWriting"),
+      defaultSkills: profileSkills("short-fiction"),
     });
     params = {
       direction,
@@ -1301,7 +1311,7 @@ async function executeConfirmedProductionAction(args: {
     const chapterCount = actionPayload?.writeNext?.chapterCount ?? 1;
     tool = createSubAgentTool(args.pipeline, args.bookId, args.root, {
       language: lang,
-      workerSkills: (worker) => worker === "writer" ? productionSkills("longWriting") : [],
+      workerSkills: (worker) => worker === "writer" ? profileSkills("longform-novel") : [],
     });
     agent = "writer";
     params = {
@@ -1327,7 +1337,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createScriptCreationTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("script"),
+      defaultSkills: profileSkills("script"),
     });
     params = {
       title,
@@ -1347,7 +1357,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createStoryboardCreationTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("storyboard"),
+      defaultSkills: profileSkills("storyboard"),
     });
     params = {
       title,
@@ -1368,7 +1378,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createInteractiveFilmCreationTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("interactiveFilm"),
+      defaultSkills: profileSkills("interactive-film"),
     });
     params = {
       title,
@@ -1404,7 +1414,7 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "创建同人需要原作资料或上传文件。", "Fanfiction creation requires source material or an uploaded file."));
     }
     tool = createFanficBookTool(args.pipeline, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: profileSkills("longform-novel"),
     });
     params = {
       title,
@@ -1426,7 +1436,7 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "导入续写需要选择已有书籍或填写新书名。", "Continuation import requires an existing book or a new title."));
     }
     tool = createContinuationImportTool(args.pipeline, args.bookId, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: profileSkills("longform-novel"),
     });
     params = {
       ...(targetBookId ? { bookId: targetBookId } : {}),
@@ -1445,7 +1455,7 @@ async function executeConfirmedProductionAction(args: {
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建番外缺少书名。", "The side-story confirmation is missing a title."));
     const parentBookId = requirePayloadText(payload?.parentBookId ?? args.bookId ?? undefined, pick(lang, "创建番外需要指定正传书籍。", "Side-story creation requires a parent book."));
     tool = createSpinoffBookTool(args.pipeline, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: profileSkills("longform-novel"),
     });
     params = {
       title,
@@ -1465,7 +1475,7 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "仿写需要参考文本或上传文件。", "Style imitation requires reference text or an uploaded file."));
     }
     tool = createImitationBookTool(args.pipeline, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: profileSkills("longform-novel"),
     });
     params = {
       title,
@@ -1496,7 +1506,7 @@ async function executeConfirmedProductionAction(args: {
       : undefined;
     tool = createPlayStartTool(args.pipeline, args.root, args.sessionId, args.playMode, {
       actionPayload: confirmedActionPayload,
-      defaultSkills: productionSkills("play"),
+      defaultSkills: profileSkills("interactive-world"),
     });
     params = {
       title,
@@ -1513,7 +1523,7 @@ async function executeConfirmedProductionAction(args: {
     if (!projectId) throw new ApiError(400, "INVALID_ID", "interactive-film action requires a project id (bookId)");
     const agentCtx = args.pipeline.createAgentContext("film-authoring", projectId);
     const deps = filmLLMDepsFromClient(agentCtx.client, agentCtx.model, {
-      activatedSkills: () => productionSkills("interactiveFilm"),
+      activatedSkills: () => profileSkills("interactive-film"),
     });
     tool = createDraftStructureTool(args.root, projectId, deps, lang);
     params = {
@@ -1545,11 +1555,38 @@ async function executeConfirmedProductionAction(args: {
     throw new ApiError(400, "UNSUPPORTED_CONFIRMED_ACTION", `Unsupported confirmed action: ${args.requestedIntent}`);
   }
 
+  const binding = confirmedCapabilityBinding(args.requestedIntent);
+  if (!binding) {
+    throw new ApiError(400, "UNSUPPORTED_CONFIRMED_ACTION", `Unsupported confirmed action: ${args.requestedIntent}`);
+  }
+  const candidateWorkId = args.bookId ?? (
+    args.requestedIntent === "play_start"
+      ? args.sessionId
+      : null
+  );
+  const environmentWork = candidateWorkId
+    ? await loadWorkManifest(args.root, candidateWorkId).catch(() => null)
+    : null;
+  const profiles = profileRegistry;
+  const workProfile = environmentWork ? profiles.require(environmentWork.profileId) : null;
+  const profile = workProfile?.capabilityIds.includes(binding.capabilityId)
+    ? workProfile
+    : profiles.require(binding.profileId);
+  const episodeWork = environmentWork?.profileId === profile.id ? environmentWork : null;
+  const registry = createSingleToolCapabilityRegistry({ binding, tool });
+  const episodeStore = new CreativeEpisodeStore(join(args.root, ".inkos", "harness.sqlite"));
+  const runtime = new CreativeHarnessRuntime(args.root, registry, profiles, episodeStore);
+  const handle = runtime.startEpisode({
+    profileId: profile.id,
+    work: episodeWork,
+    episodeId: `episode-${id}`,
+  });
+  const toolName = `${binding.capabilityId}__${binding.actionId}`;
   const exec: CollectedToolExec = {
     id,
-    tool: tool.name,
+    tool: toolName,
     agent,
-    label: resolveToolLabel(tool.name, agent, lang),
+    label: resolveToolLabel(binding.actionId, agent, lang),
     status: "running",
     args: params,
     stages: agent ? pipelineStages(agent, lang)?.map(label => ({ label, status: "pending" as const })) : undefined,
@@ -1557,14 +1594,10 @@ async function executeConfirmedProductionAction(args: {
   };
 
   await args.onTaskChange(exec);
-
-  // background: true 标明这是后台生产任务的工具启动（聊天轮工具不带）。
-  // free-text 命中写章启发式时前端在发送时无法预知这轮会按任务执行，
-  // 收到这个标记后把该轮从聊天轮重分类为任务轮。
   broadcast("tool:start", {
     sessionId: args.streamSessionId,
     id,
-    tool: tool.name,
+    tool: toolName,
     args: params,
     stages: exec.stages?.map(stage => stage.label),
     background: true,
@@ -1572,35 +1605,49 @@ async function executeConfirmedProductionAction(args: {
   });
 
   try {
-    const result = await tool.execute(
-      id,
-      params as never,
-      args.signal,
-      (partialResult: unknown) => {
+    const actionResult = await runtime.executeAction({
+      handle,
+      capabilityId: binding.capabilityId,
+      actionId: binding.actionId,
+      parameters: params,
+      source: "explicit",
+      confirmed: true,
+      signal: args.signal,
+      onUpdate: (partialResult) => {
         const progress = toolResultText(partialResult, lang);
         if (progress) exec.logs = [...(exec.logs ?? []), progress].slice(-80);
         void args.onTaskChange(exec).catch(() => undefined);
       },
-    );
-    // 工具可以在结果里带 isError=true 表示"执行完成但结果需要人工处理"
-    //（如写章完成但审稿未通过）：任务卡按错误态展示，请求仍按成功返回结果文本。
-    const resultIsError = Boolean((result as { isError?: boolean } | null | undefined)?.isError);
+    });
+    const resultIsError = actionResult.status === "error";
+    runtime.finishEpisode(handle, resultIsError ? "failed" : "completed");
     exec.status = resultIsError ? "error" : "completed";
     exec.completedAt = Date.now();
-    exec.result = toolResultText(result, lang);
-    exec.details = (result as { details?: unknown } | undefined)?.details;
+    exec.result = actionResult.content ?? actionResult.summary;
+    exec.details = actionResult.data ?? actionResult;
     exec.stages = exec.stages?.map(stage => ({ ...stage, status: "completed" as const }));
     await args.onTaskChange(exec);
+    const result = {
+      content: [{ type: "text", text: exec.result }],
+      details: exec.details,
+      isError: resultIsError,
+      harnessResult: actionResult,
+    };
     broadcast("tool:end", {
       sessionId: args.streamSessionId,
       id,
-      tool: tool.name,
+      tool: toolName,
       result,
       details: exec.details,
       isError: resultIsError,
     });
     return exec;
   } catch (error) {
+    try {
+      runtime.finishEpisode(handle, args.signal.aborted ? "cancelled" : "failed");
+    } catch {
+      // The action may already have completed the episode before an observation failed.
+    }
     const message = error instanceof Error ? error.message : String(error);
     const result = { content: [{ type: "text", text: message }] };
     exec.status = "error";
@@ -1610,11 +1657,13 @@ async function executeConfirmedProductionAction(args: {
     broadcast("tool:end", {
       sessionId: args.streamSessionId,
       id,
-      tool: tool.name,
+      tool: toolName,
       result,
       isError: true,
     });
     throw new ConfirmedActionExecutionError(message, exec, error);
+  } finally {
+    episodeStore.close();
   }
 }
 
@@ -6444,7 +6493,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     try {
       const currentConfig = await loadCurrentProjectConfig();
       const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
-      const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "translation");
+      const activatedSkills = resolveProfileSkillActivations(
+        configuredSkills.skills,
+        createBuiltInWorkProfileRegistry().require("translation"),
+      );
       const model = createLLMTranslationModel({
         client: createLLMClient(currentConfig.llm),
         model: currentConfig.llm.model,

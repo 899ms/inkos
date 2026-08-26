@@ -78,6 +78,7 @@ export class CreativeHarnessRuntime {
     readonly source: ActionRequestSource;
     readonly confirmed?: boolean;
     readonly signal?: AbortSignal;
+    readonly onUpdate?: (partialResult: unknown) => void;
   }): Promise<ActionResult> {
     const { capability, action } = this.capabilities.resolve(input.capabilityId, input.actionId);
     if (!input.handle.profile.capabilityIds.includes(capability.id)) {
@@ -109,6 +110,7 @@ export class CreativeHarnessRuntime {
       work: input.handle.work,
       profile: input.handle.profile,
       signal: input.signal,
+      onUpdate: input.onUpdate,
       appendEvent: async (event) => {
         this.episodes.append(event);
       },
@@ -164,15 +166,15 @@ export class CreativeHarnessRuntime {
 
 export function isActionAuthorized(
   profile: WorkProfile,
-  action: Pick<CapabilityAction, "risk">,
+  action: Pick<CapabilityAction, "risk" | "requiresConfirmation">,
   source: ActionRequestSource,
   confirmed: boolean,
 ): boolean {
   if (action.risk === "read") return true;
   if (confirmed) return true;
+  if (action.requiresConfirmation) return false;
   if (action.risk === "destructive-write") return false;
   return source === "explicit"
     ? profile.confirmation.explicitRecoverableMutation === "execute"
     : profile.confirmation.inferredMutation === "execute";
 }
-

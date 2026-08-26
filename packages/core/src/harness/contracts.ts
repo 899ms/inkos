@@ -131,6 +131,7 @@ export type ActionObservation = z.infer<typeof ActionObservationSchema>;
 export const ActionResultSchema = z.object({
   status: z.enum(["success", "warning", "error"]),
   summary: z.string().min(1),
+  content: z.string().optional(),
   nextActions: z.array(HarnessIdSchema).default([]),
   artifacts: z.array(ActionArtifactRefSchema).default([]),
   observations: z.array(ActionObservationSchema).default([]),

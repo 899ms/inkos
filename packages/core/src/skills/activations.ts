@@ -1,34 +1,17 @@
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
+import type { WorkProfile } from "../harness/contracts.js";
 import type { AgentSkill } from "./types.js";
 
-export const PRODUCTION_SKILL_IDS = {
-  longWriting: ["inkos-long-writing"],
-  longReview: ["inkos-long-writing", "inkos-story-review"],
-  shortWriting: ["inkos-short-writing"],
-  play: ["inkos-play-world"],
-  script: ["inkos-script-writing"],
-  storyboard: ["inkos-storyboard"],
-  interactiveFilm: ["inkos-interactive-film"],
-  translation: ["inkos-translation"],
-} as const;
-
-export type ProductionSkillCapability = keyof typeof PRODUCTION_SKILL_IDS;
-
-export const NON_LONG_PRODUCTION_CAPABILITIES = [
-  "shortWriting",
-  "play",
-  "script",
-  "storyboard",
-  "interactiveFilm",
-  "translation",
-] as const satisfies ReadonlyArray<ProductionSkillCapability>;
-
-export function resolveProductionSkillActivations(
+export function resolveProfileSkillActivations(
   availableSkills: ReadonlyArray<AgentSkill>,
-  capability: ProductionSkillCapability,
+  profile: WorkProfile,
+  options: { readonly includeRecommended?: boolean } = {},
 ): ActivatedSkillGuidance[] {
   const byId = new Map(availableSkills.map((skill) => [skill.id, skill]));
-  return PRODUCTION_SKILL_IDS[capability].flatMap((id) => {
+  const ids = options.includeRecommended
+    ? [...profile.requiredSkillIds, ...profile.recommendedSkillIds]
+    : profile.requiredSkillIds;
+  return [...new Set(ids)].flatMap((id) => {
     const skill = byId.get(id);
     return skill ? [{ skill, resources: [] }] : [];
   });

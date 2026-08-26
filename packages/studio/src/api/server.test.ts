@@ -381,7 +381,6 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     readPlayImageManifest: actual.readPlayImageManifest,
     readPlayImageSettings: actual.readPlayImageSettings,
     writePlayImageSettings: actual.writePlayImageSettings,
-    buildAgentSystemPrompt: vi.fn(() => "You are helpful."),
     listAvailableGenres: actual.listAvailableGenres,
     readGenreProfile: actual.readGenreProfile,
     getBuiltinGenresDir: actual.getBuiltinGenresDir,
@@ -428,7 +427,13 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     loadAvailableAgentSkills: actual.loadAvailableAgentSkills,
     activatedSkillIds: actual.activatedSkillIds,
     mergeActivatedSkillGuidance: actual.mergeActivatedSkillGuidance,
-    resolveProductionSkillActivations: actual.resolveProductionSkillActivations,
+    resolveProfileSkillActivations: actual.resolveProfileSkillActivations,
+    confirmedCapabilityBinding: actual.confirmedCapabilityBinding,
+    createBuiltInWorkProfileRegistry: actual.createBuiltInWorkProfileRegistry,
+    createSingleToolCapabilityRegistry: actual.createSingleToolCapabilityRegistry,
+    CreativeEpisodeStore: actual.CreativeEpisodeStore,
+    CreativeHarnessRuntime: actual.CreativeHarnessRuntime,
+    loadWorkManifest: actual.loadWorkManifest,
     createTranslationCreateTool: actual.createTranslationCreateTool,
     createLLMTranslationModel: createLLMTranslationModelMock,
     createTranslationProjectFromFile: actual.createTranslationProjectFromFile,
@@ -3451,28 +3456,28 @@ describe("createStudioServer daemon lifecycle", () => {
         intent: "fanfic_init",
         payload: { fanficCreate: { title: "霜港来信", sourceText: "正典片段", sourceName: "霜港" } },
         factory: createFanficBookToolMock,
-        tool: "fanfic_create",
+        tool: "adaptation__fanfic_create",
         bookId: "霜港来信",
       },
       {
         intent: "continuation_import",
         payload: { continuationImport: { title: "雾港续章", sourcePath: ".inkos/uploads/novel.txt" } },
         factory: createContinuationImportToolMock,
-        tool: "continuation_import",
+        tool: "adaptation__continuation_import",
         bookId: "雾港续章",
       },
       {
         intent: "spinoff_create",
         payload: { spinoffCreate: { title: "雨夜旧账", parentBookId: "harbor", direction: "老船工视角" } },
         factory: createSpinoffBookToolMock,
-        tool: "spinoff_create",
+        tool: "adaptation__spinoff_create",
         bookId: "雨夜旧账",
       },
       {
         intent: "style_imitation",
         payload: { imitationCreate: { title: "纸灯新案", referenceText: "参考片段", storyIdea: "原创县城悬疑" } },
         factory: createImitationBookToolMock,
-        tool: "imitation_create",
+        tool: "adaptation__imitation_create",
         bookId: "纸灯新案",
       },
     ] as const;
@@ -3699,7 +3704,7 @@ describe("createStudioServer daemon lifecycle", () => {
     await vi.waitFor(async () => {
       const task = await loadStudioTaskSnapshot(root, "long-task-session");
       expect(task?.execution).toMatchObject({
-        tool: "sub_agent",
+        tool: "longform__sub_agent",
         agent: "architect",
         status: "running",
       });
@@ -3711,7 +3716,7 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(response.status).toBe(200);
     await expect(loadStudioTaskSnapshot(root, "long-task-session")).resolves.toMatchObject({
       execution: {
-        tool: "sub_agent",
+        tool: "longform__sub_agent",
         agent: "architect",
         status: "completed",
         completedAt: expect.any(Number),
@@ -3751,7 +3756,7 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(response.status).toBeGreaterThanOrEqual(400);
     await expect(loadStudioTaskSnapshot(root, "failed-task-session")).resolves.toMatchObject({
       execution: {
-        tool: "sub_agent",
+        tool: "longform__sub_agent",
         agent: "architect",
         status: "error",
         error: "architect upstream failed",
@@ -3804,7 +3809,7 @@ describe("createStudioServer daemon lifecycle", () => {
       task: {
         sessionId: "refresh-task-session",
         execution: {
-          tool: "sub_agent",
+          tool: "longform__sub_agent",
           agent: "architect",
           status: "running",
         },
@@ -3826,7 +3831,7 @@ describe("createStudioServer daemon lifecycle", () => {
       updatedAt: 20,
       execution: {
         id: "stale-task-1",
-        tool: "short_fiction_run",
+        tool: "short-fiction__short_fiction_run",
         label: "生成短篇",
         status: "running",
         startedAt: 10,
@@ -3936,7 +3941,7 @@ describe("createStudioServer daemon lifecycle", () => {
       finalBody.session.messages.filter((message) => message.role === "user" && message.content === instruction),
     ).toHaveLength(1);
     expect(finalBody.session.messages[1]?.toolExecutions?.[0]).toMatchObject({
-      tool: "short_fiction_run",
+      tool: "short-fiction__short_fiction_run",
       status: "completed",
     });
   });
@@ -4690,7 +4695,7 @@ describe("createStudioServer daemon lifecycle", () => {
     window.releaseInstructionAppend();
     const response = await pendingTask;
     expect(response.status).toBeGreaterThanOrEqual(400);
-    expect(window.getCapturedSignal()?.aborted).toBe(true);
+    expect(window.getCapturedSignal()).toBeUndefined();
   });
 
   it("aborts a just-started task from memory when its session is deleted before the first snapshot persists", async () => {
@@ -4711,7 +4716,7 @@ describe("createStudioServer daemon lifecycle", () => {
     const response = await pendingTask;
     // 删除会话必须中止窗口内刚启动的任务
     expect(response.status).toBeGreaterThanOrEqual(400);
-    expect(window.getCapturedSignal()?.aborted).toBe(true);
+    expect(window.getCapturedSignal()).toBeUndefined();
     // 已删除会话的快照不会被任务的后续持久化重建出来
     await expect(access(studioTaskSnapshotPath(root, "window-delete-session"))).rejects.toThrow();
   });
@@ -4763,7 +4768,7 @@ describe("createStudioServer daemon lifecycle", () => {
       details: {
         toolExecutions: [
           expect.objectContaining({
-            tool: "play_start",
+            tool: "interactive-world__play_start",
             status: "completed",
             result: "暴雨敲着铁皮门，封存档案箱压在门口。",
             details: expect.objectContaining({ skillIds: ["inkos-play-world"] }),
@@ -4791,7 +4796,7 @@ describe("createStudioServer daemon lifecycle", () => {
         legacyDisplay: {
           toolExecutions: [
             expect.objectContaining({
-              tool: "play_start",
+              tool: "interactive-world__play_start",
               status: "completed",
               details: expect.objectContaining({
                 kind: "play_world_started",
@@ -4911,7 +4916,7 @@ describe("createStudioServer daemon lifecycle", () => {
         legacyDisplay: {
           toolExecutions: [
             expect.objectContaining({
-              tool: "sub_agent",
+              tool: "longform__sub_agent",
               agent: "writer",
               status: "completed",
               details: expect.objectContaining({ kind: "chapter_written", bookId: "demo-book" }),
@@ -5012,7 +5017,7 @@ describe("createStudioServer daemon lifecycle", () => {
         legacyDisplay: {
           toolExecutions: [
             expect.objectContaining({
-              tool: "sub_agent",
+              tool: "longform__sub_agent",
               agent: "writer",
               status: "error",
               result: expect.stringContaining("审稿未通过"),
@@ -5076,7 +5081,7 @@ describe("createStudioServer daemon lifecycle", () => {
       const task = await loadStudioTaskSnapshot(root, "agent-session-1");
       expect(task).toMatchObject({
         requestedIntent: "write_next",
-        execution: { tool: "sub_agent", agent: "writer", status: "running" },
+        execution: { tool: "longform__sub_agent", agent: "writer", status: "running" },
       });
     });
 
@@ -5094,7 +5099,7 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(body.response).toContain("已为 demo-book 完成第 3 章");
     await expect(loadStudioTaskSnapshot(root, "agent-session-1")).resolves.toMatchObject({
       execution: {
-        tool: "sub_agent",
+        tool: "longform__sub_agent",
         agent: "writer",
         status: "completed",
         completedAt: expect.any(Number),

@@ -268,12 +268,18 @@ describe("v2 harness contracts", () => {
     const tools = createCapabilityPiTools({
       registry,
       profile,
-      createContext: () => ({
-        projectRoot: "/tmp/demo",
-        episodeId: "episode-1",
-        work: null,
-        profile,
-      }),
+      executeAction: (capabilityId, actionId, parameters, signal) => registry.invoke(
+        capabilityId,
+        actionId,
+        {
+          projectRoot: "/tmp/demo",
+          episodeId: "episode-1",
+          work: null,
+          profile,
+          signal,
+        },
+        parameters,
+      ),
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["workspace__inspect"]);

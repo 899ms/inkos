@@ -34,6 +34,7 @@ describe("v2 creative harness runtime", () => {
           title: "Draft",
           description: "Draft a revision.",
           risk: "recoverable-write",
+          requiresConfirmation: true,
           parameters: Type.Object({ instruction: Type.String() }),
           async execute(_context, input) {
             return ActionResultSchema.parse({
@@ -101,10 +102,9 @@ describe("v2 creative harness runtime", () => {
     const profiles = createBuiltInWorkProfileRegistry();
     const profile = profiles.require("longform-novel");
     expect(profile.confirmation).toEqual({
-      inferredMutation: "confirm",
+      inferredMutation: "execute",
       explicitRecoverableMutation: "execute",
       destructiveMutation: "confirm",
     });
   });
 });
-

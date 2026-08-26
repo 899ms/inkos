@@ -50,9 +50,20 @@ export {
   createCapabilityPiTools,
   capabilityToolName,
   CapabilityActionError,
-  type CapabilityAuthorizationResult,
   type CreateCapabilityPiToolsOptions,
 } from "./pi-tools.js";
+export {
+  confirmedCapabilityBinding,
+  createProductionCapabilityRegistry,
+  createSingleToolCapabilityRegistry,
+  type ConfirmedCapabilityBinding,
+  type ProductionCapabilityEnvironment,
+} from "./production-capabilities.js";
+export {
+  buildHarnessSystemPrompt,
+  type HarnessSystemPromptOptions,
+} from "./system-prompt.js";
+export { createHarnessContextTransform } from "./agent-context.js";
 export {
   CreativeHarnessRuntime,
   ActionConfirmationRequiredError,

@@ -360,7 +360,7 @@ describe("agent tools language wiring (en parity)", () => {
         "hi",
       );
 
-      const tool = agentInstances[0].state.tools.find((entry: any) => entry.name === "short_fiction_run");
+      const tool = agentInstances[0].state.tools.find((entry: any) => entry.name === "short-fiction__short_fiction_run");
       expect(tool).toBeTruthy();
       await tool.execute("short-en-session-1", { direction: "office revenge thriller" });
       expect(runShortFictionProductionMock.mock.calls[0]![0]).toMatchObject({ language: "en" });

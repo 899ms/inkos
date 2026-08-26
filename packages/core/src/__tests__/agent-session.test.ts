@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createWorkManifest, saveWorkManifest } from "../harness/index.js";
 
 const EMPTY_USAGE = {
   input: 0,
@@ -105,7 +106,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
             {
               type: "toolCall",
               id: "proposal-1",
-              name: "propose_action",
+              name: "workspace__propose_action",
               arguments: {
                 action: "short_run",
                 title: "生成短篇",
@@ -124,7 +125,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
             {
               type: "toolCall",
               id: "skill-1",
-              name: "use_skill",
+              name: "workspace__use_skill",
               arguments: { skillId: "specialist-skill" },
             },
           ], timestamp)
@@ -133,7 +134,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
             {
               type: "toolCall",
               id: "play-revise-1",
-              name: "play_revise",
+              name: "interactive-world__play_revise",
               arguments: { action: "regenerate_last" },
             },
           ], timestamp)
@@ -142,7 +143,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
             {
               type: "toolCall",
               id: "resync-failure-1",
-              name: "resync_chapter_state",
+              name: "longform__resync_chapter_state",
               arguments: { chapterNumber: 1 },
             },
           ], timestamp)
@@ -151,8 +152,8 @@ vi.mock("@mariozechner/pi-ai", async () => {
               {
                 type: "toolCall",
                 id: "tool-1",
-                name: "read",
-                arguments: { path: "book-a/story/story_bible.md" },
+                name: "longform__read",
+                arguments: { path: "book-a/source/story/story_bible.md" },
               },
             ], timestamp)
         : prompt === "raw chapter"
@@ -174,7 +175,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
               {
                 type: "toolCall",
                 id: "writer-1",
-                name: "sub_agent",
+                name: "longform__sub_agent",
                 arguments: { agent: "writer", instruction: "write next" },
               },
             ], timestamp)
@@ -252,6 +253,58 @@ async function writeProjectAgentSkill(
   );
 }
 
+async function writeLongformWork(root: string, workId: string, truth: string): Promise<void> {
+  await saveWorkManifest(root, createWorkManifest({
+    id: workId,
+    title: workId,
+    profileId: "longform-novel",
+    language: "zh",
+  }));
+  const storyDir = join(root, "works", workId, "source", "story");
+  await mkdir(storyDir, { recursive: true });
+  await writeFile(join(storyDir, "story_bible.md"), truth);
+}
+
+const WORKSPACE_TOOL_NAMES = [
+  "workspace__propose_action",
+  "workspace__read",
+  "workspace__research_web",
+  "workspace__ingest_material",
+  "workspace__retrieve_material",
+  "workspace__use_skill",
+];
+
+const LONGFORM_TOOL_NAMES = [
+  ...WORKSPACE_TOOL_NAMES,
+  "longform__sub_agent",
+  "longform__read",
+  "longform__write_truth_file",
+  "longform__rename_entity",
+  "longform__patch_chapter_text",
+  "longform__replace_chapter_text",
+  "longform__resync_chapter_state",
+  "longform__delete_latest_chapter",
+  "longform__manage_book_reference",
+  "longform__import_chapters",
+  "longform__create_narrative_forecast",
+  "longform__get_narrative_forecast",
+  "longform__select_narrative_branch",
+  "longform__grep",
+  "longform__ls",
+];
+
+const LONGFORM_READ_TOOL_NAMES = [
+  "workspace__propose_action",
+  "workspace__read",
+  "workspace__research_web",
+  "workspace__retrieve_material",
+  "workspace__use_skill",
+  "longform__read",
+  "longform__get_narrative_forecast",
+  "longform__grep",
+  "longform__ls",
+];
+
 describe("runAgentSession cache — bookId switch", () => {
   let projectRoot: string;
   let otherProjectRoot: string | null;
@@ -259,16 +312,8 @@ describe("runAgentSession cache — bookId switch", () => {
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), "inkos-agent-cache-"));
     otherProjectRoot = null;
-    await mkdir(join(projectRoot, "works", "book-a", "source", "story"), { recursive: true });
-    await writeFile(
-      join(projectRoot, "works", "book-a", "source", "story", "story_bible.md"),
-      "书A 的真相",
-    );
-    await mkdir(join(projectRoot, "works", "book-b", "source", "story"), { recursive: true });
-    await writeFile(
-      join(projectRoot, "works", "book-b", "source", "story", "story_bible.md"),
-      "书B 的真相",
-    );
+    await writeLongformWork(projectRoot, "book-a", "书A 的真相");
+    await writeLongformWork(projectRoot, "book-b", "书B 的真相");
     agentInstances.length = 0;
     streamCalls.length = 0;
     heldStreamCompletions.length = 0;
@@ -316,8 +361,8 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(agentInstances).toHaveLength(2);
 
     const body = JSON.stringify(streamCalls.at(-1)?.context.messages);
-    expect(body).toContain("书B 的真相");
-    expect(body).not.toContain("书A 的真相");
+    expect(body).toContain("works/book-b/work.json");
+    expect(body).not.toContain("works/book-a/work.json");
     expect(body).toContain("earlier question about book A");
   });
 
@@ -337,7 +382,7 @@ describe("runAgentSession cache — bookId switch", () => {
     );
 
     expect(agentInstances).toHaveLength(2);
-    expect(JSON.stringify(streamCalls.at(-1)?.context.messages)).toContain("书A 的真相");
+    expect(JSON.stringify(streamCalls.at(-1)?.context.messages)).toContain("works/book-a/work.json");
   });
 
   it("rejects unsafe bookId before building the system prompt", async () => {
@@ -451,11 +496,7 @@ describe("runAgentSession cache — bookId switch", () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
     otherProjectRoot = await mkdtemp(join(tmpdir(), "inkos-agent-cache-other-"));
-    await mkdir(join(otherProjectRoot, "works", "book-a", "source", "story"), { recursive: true });
-    await writeFile(
-      join(otherProjectRoot, "works", "book-a", "source", "story", "story_bible.md"),
-      "另一个 projectRoot 的真相",
-    );
+    await writeLongformWork(otherProjectRoot, "book-a", "另一个 projectRoot 的真相");
 
     await runAgentSession(
       { sessionId: "s-project-root-cache", bookId: "book-a", language: "zh", pipeline, projectRoot, model },
@@ -479,8 +520,8 @@ describe("runAgentSession cache — bookId switch", () => {
 
     expect(agentInstances).toHaveLength(2);
     const body = JSON.stringify(streamCalls.at(-1)?.context.messages);
-    expect(body).toContain("书A 的真相");
-    expect(body).not.toContain("另一个 projectRoot 的真相");
+    expect(body).toContain("works/book-a/work.json");
+    expect(body).toContain("root A again");
   });
 
   it("rebuilds Agent when model id is unchanged but API protocol changes", async () => {
@@ -600,7 +641,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "read");
+    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "longform__read");
     const result = await readTool.execute("tool-read-default-session", { path: outsidePath });
 
     expect(result.content[0]?.type).toBe("text");
@@ -629,7 +670,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "read");
+    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "longform__read");
     const result = await readTool.execute("tool-read-enabled-session", { path: outsidePath });
 
     expect(result.content[0]?.type).toBe("text");
@@ -657,7 +698,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "read");
+    const readTool = agentInstances[0].state.tools.find((tool: any) => tool.name === "longform__read");
     const result = await readTool.execute("tool-read-disabled-session", { path: outsidePath });
 
     expect(result.content[0]?.type).toBe("text");
@@ -676,14 +717,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "propose_action",
-      "research_web",
-      "ingest_material",
-      "retrieve_material",
-      "import_chapters",
-      "use_skill",
-    ]);
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(WORKSPACE_TOOL_NAMES);
   });
 
   it("exposes intent-selected skills only on free-text turns", async () => {
@@ -709,8 +743,8 @@ describe("runAgentSession cache — bookId switch", () => {
       "我想把一批真实样本拆明白再开始创作",
     );
 
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toContain("use_skill");
-    expect(agentInstances[0].state.systemPrompt).toContain("可按意图调用的 Skill");
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toContain("workspace__use_skill");
+    expect(agentInstances[0].state.systemPrompt).toContain("可按意图加载的 Skill");
 
     await runAgentSession(
       {
@@ -728,7 +762,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "确认创建这本书",
     );
 
-    expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).not.toContain("use_skill");
+    expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).not.toContain("workspace__use_skill");
     expect(agentInstances[1].state.systemPrompt).toContain("longform-writing");
   });
 
@@ -756,9 +790,9 @@ describe("runAgentSession cache — bookId switch", () => {
       "按这个专业能力分析我的世界设定",
     );
 
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).not.toContain("use_skill");
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).not.toContain("workspace__use_skill");
     expect(agentInstances[0].state.systemPrompt).toContain("open-world-play (强制)");
-    expect(agentInstances[0].state.systemPrompt).not.toContain("可按意图调用的 Skill");
+    expect(agentInstances[0].state.systemPrompt).not.toContain("可按意图加载的 Skill");
   });
 
   it("expires intent-selected skill instructions before the next turn and transcript restore", async () => {
@@ -815,13 +849,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "propose_action",
-      "research_web",
-      "ingest_material",
-      "retrieve_material",
-      "use_skill",
-    ]);
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(WORKSPACE_TOOL_NAMES);
   });
 
   it("does not run a hidden repair prompt when book-create returns plain text", async () => {
@@ -837,7 +865,7 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(streamCalls).toHaveLength(1);
     expect(result.messages).not.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ role: "toolResult", toolName: "propose_action" }),
+        expect.objectContaining({ role: "toolResult", toolName: "workspace__propose_action" }),
       ]),
     );
   });
@@ -861,19 +889,17 @@ describe("runAgentSession cache — bookId switch", () => {
       "确认创建这本都市悬疑长篇",
     );
 
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "sub_agent",
-    ]);
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(["longform__sub_agent"]);
   });
 
   it("exposes exactly one derivative-work tool after its confirmation", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
     const cases = [
-      ["fanfic_init", "fanfic_create"],
-      ["continuation_import", "continuation_import"],
-      ["spinoff_create", "spinoff_create"],
-      ["style_imitation", "imitation_create"],
+      ["fanfic_init", "adaptation__fanfic_create"],
+      ["continuation_import", "adaptation__continuation_import"],
+      ["spinoff_create", "adaptation__spinoff_create"],
+      ["style_imitation", "adaptation__imitation_create"],
     ] as const;
 
     for (const [index, [requestedIntent, toolName]] of cases.entries()) {
@@ -907,13 +933,7 @@ describe("runAgentSession cache — bookId switch", () => {
         { sessionId, bookId: null, sessionKind, language: "zh", pipeline, projectRoot, model },
         "先读项目里的素材，只讨论，不创建",
       );
-      expect(agentInstances.at(-1).state.tools.map((tool: any) => tool.name)).toEqual([
-        "propose_action",
-        "read",
-        "ingest_material",
-        "retrieve_material",
-        "use_skill",
-      ]);
+      expect(agentInstances.at(-1).state.tools.map((tool: any) => tool.name)).toEqual(WORKSPACE_TOOL_NAMES);
       evictAgentCache(sessionId);
     }
   });
@@ -926,23 +946,13 @@ describe("runAgentSession cache — bookId switch", () => {
       { sessionId: "short-session", bookId: null, sessionKind: "short", language: "zh", pipeline, projectRoot, model },
       "hi",
     );
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "propose_action",
-      "ingest_material",
-      "retrieve_material",
-      "use_skill",
-    ]);
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(WORKSPACE_TOOL_NAMES);
 
     await runAgentSession(
       { sessionId: "play-session", bookId: null, sessionKind: "play", language: "zh", pipeline, projectRoot, model },
       "hi",
     );
-    expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).toEqual([
-      "propose_action",
-      "ingest_material",
-      "retrieve_material",
-      "use_skill",
-    ]);
+    expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).toEqual(WORKSPACE_TOOL_NAMES);
   });
 
   it("treats propose_action as a terminal UI proposal instead of asking the model to continue", async () => {
@@ -958,7 +968,7 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(streamCalls).toHaveLength(1);
     expect(result.messages).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ role: "toolResult", toolName: "propose_action" }),
+        expect.objectContaining({ role: "toolResult", toolName: "workspace__propose_action" }),
       ]),
     );
   });
@@ -984,7 +994,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "确认创建一本书，建书后再写第一章。",
     );
 
-    const subAgent = agentInstances.at(-1).state.tools.find((tool: any) => tool.name === "sub_agent");
+    const subAgent = agentInstances.at(-1).state.tools.find((tool: any) => tool.name === "longform__sub_agent");
     expect(subAgent).toBeTruthy();
     expect(JSON.stringify(subAgent.parameters)).toContain('"const":"architect"');
     expect(JSON.stringify(subAgent.parameters)).not.toContain('"writer"');
@@ -1015,7 +1025,7 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(streamCalls).toHaveLength(1);
     expect(result.messages).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ role: "toolResult", toolName: "sub_agent" }),
+        expect.objectContaining({ role: "toolResult", toolName: "longform__sub_agent" }),
       ]),
     );
   });
@@ -1038,7 +1048,7 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(streamCalls).toHaveLength(1);
     expect(result.messages).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ role: "toolResult", toolName: "resync_chapter_state", isError: true }),
+        expect.objectContaining({ role: "toolResult", toolName: "longform__resync_chapter_state", isError: true }),
       ]),
     );
   });
@@ -1081,7 +1091,7 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(streamCalls).toHaveLength(1);
     expect(result.messages).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ role: "toolResult", toolName: "play_revise" }),
+        expect.objectContaining({ role: "toolResult", toolName: "interactive-world__play_revise" }),
       ]),
     );
   });
@@ -1129,12 +1139,10 @@ describe("runAgentSession cache — bookId switch", () => {
     );
 
     expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "play_edit",
-      "play_revise",
-      "play_step",
-      "ingest_material",
-      "retrieve_material",
-      "use_skill",
+      ...WORKSPACE_TOOL_NAMES,
+      "interactive-world__play_edit",
+      "interactive-world__play_revise",
+      "interactive-world__play_step",
     ]);
   });
 
@@ -1157,7 +1165,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "确认生成婚姻反杀短篇",
     );
     expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "short_fiction_run",
+      "short-fiction__short_fiction_run",
     ]);
 
     await runAgentSession(
@@ -1175,7 +1183,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "确认生成封面",
     );
     expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).toEqual([
-      "generate_cover",
+      "visual__generate_cover",
     ]);
   });
 
@@ -1198,7 +1206,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "确认启动雨夜茶馆互动世界",
     );
     expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "play_start",
+      "interactive-world__play_start",
     ]);
   });
 
@@ -1211,28 +1219,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "sub_agent",
-      "generate_cover",
-      "read",
-      "write_truth_file",
-      "rename_entity",
-      "patch_chapter_text",
-      "replace_chapter_text",
-      "resync_chapter_state",
-      "delete_latest_chapter",
-      "research_web",
-      "ingest_material",
-      "retrieve_material",
-      "manage_book_reference",
-      "import_chapters",
-      "create_narrative_forecast",
-      "get_narrative_forecast",
-      "select_narrative_branch",
-      "grep",
-      "ls",
-      "use_skill",
-    ]);
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(LONGFORM_TOOL_NAMES);
   });
 
   it("suppresses book-mutating production tools while a background task runs and restores them on flag change", async () => {
@@ -1246,19 +1233,7 @@ describe("runAgentSession cache — bookId switch", () => {
       { sessionId: "suppress-session", bookId: "book-a", language: "zh", pipeline, projectRoot, model, suppressProductionTools: true },
       "任务在跑吗？",
     );
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "read",
-      "research_web",
-      "ingest_material",
-      "retrieve_material",
-      "manage_book_reference",
-      "create_narrative_forecast",
-      "get_narrative_forecast",
-      "select_narrative_branch",
-      "grep",
-      "ls",
-      "use_skill",
-    ]);
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(LONGFORM_READ_TOOL_NAMES);
 
     // 任务结束：flag 变化必须让缓存的 Agent 重建，生产工具恢复
     await runAgentSession(
@@ -1266,31 +1241,10 @@ describe("runAgentSession cache — bookId switch", () => {
       "现在呢？",
     );
     expect(agentInstances).toHaveLength(2);
-    expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).toEqual([
-      "sub_agent",
-      "generate_cover",
-      "read",
-      "write_truth_file",
-      "rename_entity",
-      "patch_chapter_text",
-      "replace_chapter_text",
-      "resync_chapter_state",
-      "delete_latest_chapter",
-      "research_web",
-      "ingest_material",
-      "retrieve_material",
-      "manage_book_reference",
-      "import_chapters",
-      "create_narrative_forecast",
-      "get_narrative_forecast",
-      "select_narrative_branch",
-      "grep",
-      "ls",
-      "use_skill",
-    ]);
+    expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).toEqual(LONGFORM_TOOL_NAMES);
   });
 
-  it("exposes only deterministic edit tools in edit mode", async () => {
+  it("uses the same longform capability profile in edit mode", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
 
@@ -1299,21 +1253,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "hi",
     );
 
-    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
-      "read",
-      "write_truth_file",
-      "rename_entity",
-      "patch_chapter_text",
-      "replace_chapter_text",
-      "resync_chapter_state",
-      "delete_latest_chapter",
-      "ingest_material",
-      "retrieve_material",
-      "manage_book_reference",
-      "grep",
-      "ls",
-      "use_skill",
-    ]);
+    expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual(LONGFORM_TOOL_NAMES);
   });
 
   it("把真实 Agent 的 message_end 写入 JSONL，并在 cache 失效后只恢复可见对话", async () => {
@@ -1365,7 +1305,7 @@ describe("runAgentSession cache — bookId switch", () => {
     const body = JSON.stringify(streamCalls.at(-1)?.context.messages ?? []);
     expect(body).toContain("历史状态摘要");
     expect(body).toContain("read");
-    expect(body).toContain("书A 的真相");
+    expect(body).toContain("works/book-a/work.json");
     expect(body).not.toContain("\"toolCall\"");
     expect(body).not.toContain("\"toolResult\"");
 
@@ -1410,7 +1350,7 @@ describe("runAgentSession cache — bookId switch", () => {
     );
     expect(body).toContain("read");
     expect(body).toContain("tool-1");
-    expect(body).toContain("书A 的真相");
+    expect(body).toContain("works/book-a/work.json");
   });
 
   it("非 Google 的 openai-completions 端点也把 toolResult 折叠成 user 文本(避免上游 503)", async () => {

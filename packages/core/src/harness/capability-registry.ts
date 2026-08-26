@@ -16,6 +16,7 @@ export interface CapabilityExecutionContext {
   readonly work: WorkManifest | null;
   readonly profile: WorkProfile;
   readonly signal?: AbortSignal;
+  readonly onUpdate?: (partialResult: unknown) => void;
   readonly appendEvent?: (event: Omit<CreativeEpisodeEvent, "version" | "seq" | "timestamp">) => Promise<void>;
 }
 
@@ -24,6 +25,7 @@ export interface CapabilityAction<TParameters extends TSchema = TSchema> {
   readonly title: string;
   readonly description: string;
   readonly risk: ActionRisk;
+  readonly requiresConfirmation?: boolean;
   readonly contextRecipeId?: string;
   readonly defaultSkillIds?: ReadonlyArray<string>;
   readonly parameters: TParameters;
