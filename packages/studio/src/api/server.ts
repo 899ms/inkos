@@ -9,11 +9,9 @@ import {
   PipelineRunner,
   createLLMClient,
   createLogger,
-  createInteractionToolsFromDeps,
   computeAnalytics,
   loadProjectConfig,
   loadProjectSession,
-  processProjectInteractionRequest,
   resolveSessionActiveBook,
   listBookSessions,
   loadBookSession,
@@ -65,6 +63,7 @@ import {
   normalizePlayMode as normalizeCorePlayMode,
   normalizeRequestedIntent as normalizeCoreRequestedIntent,
   normalizeSkillIdList as normalizeCoreSkillIdList,
+  normalizePlatformOrOther,
   inferLanguage,
   isLLMApiFormat,
   ingestMaterial,
@@ -75,10 +74,8 @@ import {
   resolveProfileSkillActivations,
   confirmedCapabilityBinding,
   createBuiltInWorkProfileRegistry,
-  createSingleToolCapabilityRegistry,
-  CreativeEpisodeStore,
-  CreativeHarnessRuntime,
-  loadWorkManifest,
+  executeExplicitCapabilityTool,
+  createExportBookTool,
   parseAgentSkillDocument,
   getBuiltinPrompt,
   listBuiltinPromptPacks,
@@ -1559,28 +1556,6 @@ async function executeConfirmedProductionAction(args: {
   if (!binding) {
     throw new ApiError(400, "UNSUPPORTED_CONFIRMED_ACTION", `Unsupported confirmed action: ${args.requestedIntent}`);
   }
-  const candidateWorkId = args.bookId ?? (
-    args.requestedIntent === "play_start"
-      ? args.sessionId
-      : null
-  );
-  const environmentWork = candidateWorkId
-    ? await loadWorkManifest(args.root, candidateWorkId).catch(() => null)
-    : null;
-  const profiles = profileRegistry;
-  const workProfile = environmentWork ? profiles.require(environmentWork.profileId) : null;
-  const profile = workProfile?.capabilityIds.includes(binding.capabilityId)
-    ? workProfile
-    : profiles.require(binding.profileId);
-  const episodeWork = environmentWork?.profileId === profile.id ? environmentWork : null;
-  const registry = createSingleToolCapabilityRegistry({ binding, tool });
-  const episodeStore = new CreativeEpisodeStore(join(args.root, ".inkos", "harness.sqlite"));
-  const runtime = new CreativeHarnessRuntime(args.root, registry, profiles, episodeStore);
-  const handle = runtime.startEpisode({
-    profileId: profile.id,
-    work: episodeWork,
-    episodeId: `episode-${id}`,
-  });
   const toolName = `${binding.capabilityId}__${binding.actionId}`;
   const exec: CollectedToolExec = {
     id,
@@ -1605,13 +1580,13 @@ async function executeConfirmedProductionAction(args: {
   });
 
   try {
-    const actionResult = await runtime.executeAction({
-      handle,
-      capabilityId: binding.capabilityId,
-      actionId: binding.actionId,
+    const actionResult = await executeExplicitCapabilityTool({
+      projectRoot: args.root,
+      binding,
+      tool,
       parameters: params,
-      source: "explicit",
-      confirmed: true,
+      workId: args.bookId ?? (args.requestedIntent === "play_start" ? args.sessionId : null),
+      episodeId: `episode-${id}`,
       signal: args.signal,
       onUpdate: (partialResult) => {
         const progress = toolResultText(partialResult, lang);
@@ -1620,7 +1595,6 @@ async function executeConfirmedProductionAction(args: {
       },
     });
     const resultIsError = actionResult.status === "error";
-    runtime.finishEpisode(handle, resultIsError ? "failed" : "completed");
     exec.status = resultIsError ? "error" : "completed";
     exec.completedAt = Date.now();
     exec.result = actionResult.content ?? actionResult.summary;
@@ -1643,11 +1617,6 @@ async function executeConfirmedProductionAction(args: {
     });
     return exec;
   } catch (error) {
-    try {
-      runtime.finishEpisode(handle, args.signal.aborted ? "cancelled" : "failed");
-    } catch {
-      // The action may already have completed the episode before an observation failed.
-    }
     const message = error instanceof Error ? error.message : String(error);
     const result = { content: [{ type: "text", text: message }] };
     exec.status = "error";
@@ -1662,8 +1631,6 @@ async function executeConfirmedProductionAction(args: {
       isError: true,
     });
     throw new ConfirmedActionExecutionError(message, exec, error);
-  } finally {
-    episodeStore.close();
   }
 }
 
@@ -2935,26 +2902,36 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     bookCreateStatus.set(bookId, { status: "creating" });
 
     const pipeline = new PipelineRunner(await buildPipelineConfig());
-    const tools = createInteractionToolsFromDeps(pipeline, state);
-    processProjectInteractionRequest({
-      projectRoot: root,
-      request: {
-        intent: "create_book",
+    const actionPayload: ActionPayload = {
+      createBook: {
         title: body.title,
-        genre: body.genre,
-        language: body.language === "en" ? "en" : body.language === "zh" ? "zh" : undefined,
-        platform: body.platform,
-        chapterWordCount: body.chapterWordCount,
-        targetChapters: body.targetChapters,
-        blurb: body.blurb,
+        ...(body.genre ? { genre: body.genre } : {}),
+        ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
+        ...(body.platform ? { platform: normalizePlatformOrOther(body.platform) } : {}),
+        ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
+        ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
       },
-      tools,
+    };
+    const tool = createSubAgentTool(pipeline, null, root, { actionPayload, architectCreateOnly: true });
+    const binding = confirmedCapabilityBinding("create_book")!;
+    executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding,
+      tool,
+      parameters: {
+        agent: "architect",
+        instruction: body.blurb?.trim() || `Create ${body.title}`,
+        title: body.title,
+        ...(body.genre ? { genre: body.genre } : {}),
+        ...(body.platform ? { platform: normalizePlatformOrOther(body.platform) } : {}),
+        ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
+        ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
+        ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
+      },
     }).then(
-      async (result: {
-        readonly session: { readonly activeBookId?: string };
-        readonly details?: Readonly<Record<string, unknown>>;
-      }) => {
-        const createdBookId = resolveCreatedBookIdFromDetails(result.details);
+      async (result) => {
+        const details = result.data as Readonly<Record<string, unknown>> | undefined;
+        const createdBookId = resolveCreatedBookIdFromDetails(details);
         if (!createdBookId) {
           const error = "Book creation did not produce a completed book artifact.";
           bookCreateStatus.set(bookId, { status: "error", error });
@@ -5508,27 +5485,29 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const fmt = format ?? "txt";
 
     try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const tools = createInteractionToolsFromDeps(pipeline, state);
       const bookDir = state.bookDir(id);
       const outputPath = join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
-      const result = await processProjectInteractionRequest({
+      const tool = createExportBookTool(state, id, { outputPath });
+      const result = await executeExplicitCapabilityTool({
         projectRoot: root,
-        request: {
-          intent: "export_book",
-          bookId: id,
-          format: fmt as "txt" | "md" | "epub",
-          approvedOnly,
-          outputPath,
+        binding: {
+          capabilityId: "longform",
+          actionId: "export_book",
+          profileId: "longform-novel",
         },
-        tools,
-        activeBookId: id,
+        tool,
+        workId: id,
+        parameters: {
+          format: fmt,
+          approvedOnly: Boolean(approvedOnly),
+        },
       });
+      const details = result.data as Readonly<Record<string, unknown>> | undefined;
       return c.json({
         ok: true,
-        path: (result.details?.outputPath as string | undefined) ?? outputPath,
+        path: (details?.outputPath as string | undefined) ?? outputPath,
         format: fmt,
-        chapters: (result.details?.chaptersExported as number | undefined) ?? 0,
+        chapters: (details?.chaptersExported as number | undefined) ?? 0,
       });
     } catch (e) {
       return c.json({ error: String(e) }, 500);

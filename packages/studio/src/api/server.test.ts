@@ -35,8 +35,6 @@ const runWorkerAgentMock = vi.fn();
 const loadProjectConfigMock = vi.fn();
 const pipelineConfigs: unknown[] = [];
 const pipelineAbortSignals: Array<AbortSignal | undefined> = [];
-const processProjectInteractionRequestMock = vi.fn();
-const createInteractionToolsFromDepsMock = vi.fn(() => ({}));
 const loadProjectSessionMock = vi.fn();
 const resolveSessionActiveBookMock = vi.fn();
 const runAgentSessionMock = vi.fn();
@@ -335,8 +333,6 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     chatCompletion: chatCompletionMock,
     runWorkerAgent: runWorkerAgentMock,
     loadProjectConfig: loadProjectConfigMock,
-    processProjectInteractionRequest: processProjectInteractionRequestMock,
-    createInteractionToolsFromDeps: createInteractionToolsFromDepsMock,
     deleteLatestChapter: deleteLatestChapterMock,
     executeEditTransaction: actual.executeEditTransaction,
     listChapterVersions: actual.listChapterVersions,
@@ -431,6 +427,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     confirmedCapabilityBinding: actual.confirmedCapabilityBinding,
     createBuiltInWorkProfileRegistry: actual.createBuiltInWorkProfileRegistry,
     createSingleToolCapabilityRegistry: actual.createSingleToolCapabilityRegistry,
+    executeExplicitCapabilityTool: actual.executeExplicitCapabilityTool,
+    createExportBookTool: actual.createExportBookTool,
     CreativeEpisodeStore: actual.CreativeEpisodeStore,
     CreativeHarnessRuntime: actual.CreativeHarnessRuntime,
     loadWorkManifest: actual.loadWorkManifest,
@@ -645,27 +643,8 @@ describe("createStudioServer daemon lifecycle", () => {
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     });
     loadProjectConfigMock.mockReset();
-    processProjectInteractionRequestMock.mockReset();
-    createInteractionToolsFromDepsMock.mockReset();
     loadProjectSessionMock.mockReset();
     resolveSessionActiveBookMock.mockReset();
-    createInteractionToolsFromDepsMock.mockReturnValue({});
-    processProjectInteractionRequestMock.mockResolvedValue({
-      request: { intent: "create_book" },
-      session: {
-        sessionId: "session-structured",
-        projectRoot: root,
-        activeBookId: "new-book",
-        automationMode: "semi",
-        messages: [],
-        events: [],
-      },
-      details: {
-        bookId: "new-book",
-        outputPath: join(testWorkDirectory(root, "demo-book"), "source", "demo-book.txt"),
-        chaptersExported: 2,
-      },
-    });
     loadProjectSessionMock.mockResolvedValue({
       sessionId: "session-1",
       projectRoot: root,
@@ -2706,12 +2685,11 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: expect.stringContaining('Book "existing-book" already exists'),
     });
-    expect(processProjectInteractionRequestMock).not.toHaveBeenCalled();
     await expect(access(join(testWorkDirectory(root, "existing-book"), "source", "story", "story_bible.md"))).resolves.toBeUndefined();
   });
 
   it("reports async create failures through the create-status endpoint", async () => {
-    processProjectInteractionRequestMock.mockRejectedValueOnce(new Error("INKOS_LLM_API_KEY not set"));
+    initBookMock.mockRejectedValueOnce(new Error("INKOS_LLM_API_KEY not set"));
 
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -2728,13 +2706,13 @@ describe("createStudioServer daemon lifecycle", () => {
     });
 
     expect(response.status).toBe(200);
-    await Promise.resolve();
-
-    const status = await app.request("http://localhost/api/v1/books/broken-book/create-status");
-    expect(status.status).toBe(200);
-    await expect(status.json()).resolves.toMatchObject({
-      status: "error",
-      error: "INKOS_LLM_API_KEY not set",
+    await vi.waitFor(async () => {
+      const status = await app.request("http://localhost/api/v1/books/broken-book/create-status");
+      expect(status.status).toBe(200);
+      await expect(status.json()).resolves.toMatchObject({
+        status: "error",
+        error: "INKOS_LLM_API_KEY not set",
+      });
     });
   });
 
@@ -2797,7 +2775,6 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(json.error.code).toBe("LLM_CONFIG_ERROR");
     expect(json.error.message).toContain("Studio LLM API key not set");
     expect(json.error.message).not.toMatch(/kkaiapi/i);
-    expect(processProjectInteractionRequestMock).not.toHaveBeenCalled();
   });
 
   it("uses rollback semantics for chapter rejection instead of only flipping status", async () => {
@@ -2844,7 +2821,17 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(saveChapterIndexMock).not.toHaveBeenCalled();
   });
 
-  it("routes create requests through the shared structured interaction runtime", async () => {
+  it("routes create requests through the explicit capability runtime", async () => {
+    initBookMock.mockImplementationOnce(async (book: { id: string; title: string }) => {
+      await writeCompleteBookFixture(root, book.id, book.title);
+      const storyDir = join(testWorkDirectory(root, book.id), "source", "story");
+      await mkdir(join(storyDir, "outline"), { recursive: true });
+      await writeFile(join(storyDir, "outline", "story_frame.md"), "# Story Frame\n");
+      await writeFile(join(storyDir, "outline", "volume_map.md"), "# Volume Map\n");
+      await writeFile(join(storyDir, "book_rules.md"), "# Book Rules\n");
+      await writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n");
+      await writeFile(join(storyDir, "character_matrix.md"), "## Lead\n\n- Role: protagonist\n");
+    });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
 
@@ -2863,20 +2850,25 @@ describe("createStudioServer daemon lifecycle", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(createInteractionToolsFromDepsMock).toHaveBeenCalledTimes(1);
-    expect(processProjectInteractionRequestMock).toHaveBeenCalledWith(expect.objectContaining({
-      projectRoot: root,
-      request: {
-        intent: "create_book",
-        title: "New Book",
-        genre: "urban",
-        language: "zh",
-        platform: "qidian",
-        chapterWordCount: 2600,
-        targetChapters: 88,
-        blurb: "主角在旧城查账洗白，卷一先追账本。",
-      },
-    }));
+    await vi.waitFor(() => {
+      expect(initBookMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "new-book",
+          title: "New Book",
+          genre: "urban",
+          language: "zh",
+          platform: "qidian",
+          chapterWordCount: 2600,
+          targetChapters: 88,
+        }),
+        expect.objectContaining({ externalContext: "主角在旧城查账洗白，卷一先追账本。" }),
+      );
+    });
+    await vi.waitFor(async () => {
+      const status = await app.request("http://localhost/api/v1/books/new-book/create-status");
+      expect(status.status).toBe(200);
+      await expect(status.json()).resolves.toMatchObject({ status: "ready" });
+    });
   });
 
   it("creates books with Studio Ollama config without requiring an API key", async () => {
@@ -3151,7 +3143,17 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(resyncChapterArtifactsMock).toHaveBeenCalledWith("demo-book", 3);
   });
 
-  it("routes export-save through the shared structured interaction runtime", async () => {
+  it("routes export-save through the explicit capability runtime", async () => {
+    loadChapterIndexMock.mockResolvedValueOnce([{
+      number: 3,
+      title: "Demo",
+      status: "approved",
+      wordCount: 1,
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    }]);
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
 
@@ -3161,21 +3163,17 @@ describe("createStudioServer daemon lifecycle", () => {
       body: JSON.stringify({ format: "md", approvedOnly: true }),
     });
 
-    expect(response.status).toBe(200);
-    expect(processProjectInteractionRequestMock).toHaveBeenCalledWith(expect.objectContaining({
-      projectRoot: root,
-      activeBookId: "demo-book",
-      request: expect.objectContaining({
-        intent: "export_book",
-        bookId: "demo-book",
-        format: "md",
-        approvedOnly: true,
-      }),
-    }));
-    await expect(response.json()).resolves.toMatchObject({
+    const payload = await response.json() as Record<string, unknown>;
+    expect(response.status, JSON.stringify(payload)).toBe(200);
+    expect(payload).toMatchObject({
       ok: true,
-      chapters: 2,
+      format: "md",
+      chapters: 1,
     });
+    await expect(readFile(
+      join(testWorkDirectory(root, "demo-book"), "source", "demo-book.md"),
+      "utf-8",
+    )).resolves.toContain("# Demo Book");
   });
 
   it("creates a fresh book session on POST /api/v1/sessions", async () => {

@@ -64,6 +64,8 @@ export {
   type HarnessSystemPromptOptions,
 } from "./system-prompt.js";
 export { createHarnessContextTransform } from "./agent-context.js";
+export { executeExplicitCapabilityTool } from "./explicit-action.js";
+export { createExportBookTool } from "./tools/export-book.js";
 export {
   CreativeHarnessRuntime,
   ActionConfirmationRequiredError,
