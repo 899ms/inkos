@@ -13,4 +13,3 @@ export function toPiApi(format: LLMApiFormat): Api {
   if (format === "responses") return "openai-responses";
   return "openai-completions";
 }
-
