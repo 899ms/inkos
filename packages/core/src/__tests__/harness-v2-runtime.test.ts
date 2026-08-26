@@ -95,6 +95,10 @@ describe("v2 creative harness runtime", () => {
       "episode-completed",
     ]);
     expect(episodes.requireEpisode("episode-1").status).toBe("completed");
+    expect(episodes.listEpisodes({ workId: work.id })).toEqual([
+      expect.objectContaining({ id: "episode-1", status: "completed", workId: work.id }),
+    ]);
+    expect(episodes.listEpisodes({ status: "failed" })).toEqual([]);
     episodes.close();
   });
 

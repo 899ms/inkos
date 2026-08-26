@@ -6,6 +6,7 @@ export type HashRoute =
   | { page: "book"; bookId: string }
   | { page: "book-settings"; bookId: string }
   | { page: "book-create" }
+  | { page: "work"; workId: string }
   | { page: "services" }
   | { page: "project-settings" }
   | { page: "service-detail"; serviceId: string }
@@ -38,6 +39,9 @@ function parseHash(hash: string): HashRoute {
   const importMatch = path.match(/^import\/(chapters|canon|fanfic|spinoff|imitation)$/);
   if (importMatch) return { page: "import", tab: importMatch[1] as "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" };
   if (path === "book/new") return { page: "book-create" };
+
+  const workMatch = path.match(/^work\/([^/]+)$/);
+  if (workMatch) return { page: "work", workId: decodeURIComponent(workMatch[1]) };
 
   const serviceMatch = path.match(/^services\/([^/]+)$/);
   if (serviceMatch) return { page: "service-detail", serviceId: decodeURIComponent(serviceMatch[1]) };
@@ -73,6 +77,7 @@ function routeToHash(route: HashRoute): string {
     case "book": return `#/book/${encodeURIComponent(route.bookId)}`;
     case "book-settings": return `#/book/${encodeURIComponent(route.bookId)}/settings`;
     case "book-create": return "#/book/new";
+    case "work": return `#/work/${encodeURIComponent(route.workId)}`;
     case "services": return "#/services";
     case "project-settings": return "#/settings";
     case "translation": return "#/translation";
@@ -89,7 +94,7 @@ function routeToHash(route: HashRoute): string {
 
 export { parseHash, routeToHash }; // for testing
 
-const HASH_PAGES = new Set(["dashboard", "chat", "book", "book-settings", "book-create", "services", "project-settings", "service-detail", "translation", "import", "play", "film", "flow", "film-author", "film-studio"]);
+const HASH_PAGES = new Set(["dashboard", "chat", "book", "book-settings", "book-create", "work", "services", "project-settings", "service-detail", "translation", "import", "play", "film", "flow", "film-author", "film-studio"]);
 
 export function useHashRoute() {
   const [route, setRouteState] = useState<HashRoute>(() => parseHash(window.location.hash));

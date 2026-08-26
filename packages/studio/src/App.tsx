@@ -3,6 +3,7 @@ import { useHashRoute } from "./hooks/use-hash-route";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { Sidebar } from "./components/Sidebar";
 import { Dashboard } from "./pages/Dashboard";
+import { WorkInspector } from "./pages/WorkInspector";
 import { ChatPage } from "./pages/ChatPage";
 import { BookDetail } from "./pages/BookDetail";
 import { ChapterReader } from "./pages/ChapterReader";
@@ -95,6 +96,7 @@ export function App() {
     toBook: (bookId: string) => setRoute({ page: "book", bookId }),
     toBookSettings: (bookId: string) => setRoute({ page: "book-settings", bookId }),
     toBookCreate: () => setRoute({ page: "book-create" }),
+    toWork: (workId: string) => setRoute({ page: "work", workId }),
     toChapter: (bookId: string, chapterNumber: number) =>
       setRoute({ page: "chapter", bookId, chapterNumber }),
     toAnalytics: (bookId: string) => setRoute({ page: "analytics", bookId }),
@@ -230,6 +232,11 @@ export function App() {
           {route.page === "dashboard" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <Dashboard nav={nav} sse={sse} theme={theme} t={t} />
+            </div>
+          )}
+          {route.page === "work" && (
+            <div className="mx-auto w-full max-w-5xl px-6 py-12 md:px-12 lg:py-16 fade-in">
+              <WorkInspector workId={route.workId} onBack={nav.toDashboard} />
             </div>
           )}
           {isBookCreateChatRoute(route) && (

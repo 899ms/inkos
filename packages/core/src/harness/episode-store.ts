@@ -7,6 +7,7 @@ import {
   CreativeEpisodeSchema,
   EpisodeStatusSchema,
   HarnessIdSchema,
+  WorkResourceIdSchema,
   type CreativeEpisode,
   type CreativeEpisodeEvent,
   type EpisodeStatus,
@@ -117,6 +118,29 @@ export class CreativeEpisodeStore {
     const episode = this.getEpisode(episodeId);
     if (!episode) throw new Error(`Unknown creative episode: ${episodeId}`);
     return episode;
+  }
+
+  listEpisodes(options: {
+    readonly workId?: string;
+    readonly profileId?: string;
+    readonly status?: EpisodeStatus;
+    readonly limit?: number;
+  } = {}): CreativeEpisode[] {
+    const workId = options.workId === undefined ? null : WorkResourceIdSchema.parse(options.workId);
+    const profileId = options.profileId === undefined ? null : HarnessIdSchema.parse(options.profileId);
+    const status = options.status === undefined ? null : EpisodeStatusSchema.parse(options.status);
+    const limit = Math.max(1, Math.min(500, Math.trunc(options.limit ?? 100)));
+    const rows = this.db.prepare(`
+      SELECT episode_id AS id, work_id AS workId, profile_id AS profileId,
+             status, started_at AS startedAt, completed_at AS completedAt
+      FROM creative_episodes
+      WHERE (? IS NULL OR work_id = ?)
+        AND (? IS NULL OR profile_id = ?)
+        AND (? IS NULL OR status = ?)
+      ORDER BY started_at DESC, episode_id DESC
+      LIMIT ?
+    `).all(workId, workId, profileId, profileId, status, status, limit) as unknown as ReadonlyArray<Record<string, unknown>>;
+    return rows.map((row) => CreativeEpisodeSchema.parse({ version: HARNESS_VERSION, ...row }));
   }
 
   listEvents(episodeId: string): CreativeEpisodeEvent[] {

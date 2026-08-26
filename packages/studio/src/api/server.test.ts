@@ -325,6 +325,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     evaluateBookQuality: evaluateBookQualityMock,
     computeAnalytics: vi.fn(() => ({})),
     isSafeBookId: actual.isSafeBookId,
+    safeChildPath: actual.safeChildPath,
     normalizePlatformOrOther: actual.normalizePlatformOrOther,
     defaultChapterLength: actual.defaultChapterLength,
     inferLanguage: actual.inferLanguage,
@@ -3174,6 +3175,68 @@ describe("createStudioServer daemon lifecycle", () => {
       join(testWorkDirectory(root, "demo-book"), "source", "demo-book.md"),
       "utf-8",
     )).resolves.toContain("# Demo Book");
+  });
+
+  it("exposes every Work, artifact revision, and Episode through one harness API", async () => {
+    loadChapterIndexMock.mockResolvedValueOnce([{
+      number: 3,
+      title: "Demo",
+      status: "approved",
+      wordCount: 1,
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    }]);
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const exported = await app.request("http://localhost/api/v1/books/demo-book/export-save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format: "md", approvedOnly: true }),
+    });
+    expect(exported.status).toBe(200);
+
+    const works = await app.request("http://localhost/api/v1/works");
+    expect(works.status).toBe(200);
+    await expect(works.json()).resolves.toMatchObject({
+      works: expect.arrayContaining([
+        expect.objectContaining({ id: "demo-book", profileId: "longform-novel", artifactCount: expect.any(Number) }),
+      ]),
+    });
+
+    const detail = await app.request("http://localhost/api/v1/works/demo-book");
+    const detailPayload = await detail.json() as {
+      work: { artifacts: Array<{ id: string; revisions: Array<{ id: string; path: string }> }> };
+      episodes: Array<{ id: string; status: string }>;
+    };
+    expect(detail.status).toBe(200);
+    expect(detailPayload.episodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: "completed" }),
+    ]));
+    const bookArtifact = detailPayload.work.artifacts.find((artifact) => (
+      artifact.revisions.some((revision) => revision.path === "source/book.json")
+    ));
+    const bookRevision = bookArtifact?.revisions.find((revision) => revision.path === "source/book.json");
+    expect(bookArtifact).toBeDefined();
+    expect(bookRevision).toBeDefined();
+
+    const content = await app.request(
+      `http://localhost/api/v1/works/demo-book/artifacts/${bookArtifact!.id}/revisions/${bookRevision!.id}`,
+    );
+    const contentPayload = await content.json() as Record<string, unknown>;
+    expect(content.status, JSON.stringify(contentPayload)).toBe(200);
+    expect(contentPayload).toMatchObject({
+      workId: "demo-book",
+      artifactId: bookArtifact!.id,
+      content: expect.stringContaining("Demo Book"),
+    });
+
+    const episodes = await app.request("http://localhost/api/v1/episodes?workId=demo-book");
+    expect(episodes.status).toBe(200);
+    await expect(episodes.json()).resolves.toMatchObject({
+      episodes: expect.arrayContaining([expect.objectContaining({ status: "completed", workId: "demo-book" })]),
+    });
   });
 
   it("creates a fresh book session on POST /api/v1/sessions", async () => {

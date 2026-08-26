@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createProjectSession, loadProjectSession } from "../tui/session-store.js";
+import { createWorkManifest, saveWorkManifest } from "@actalk/inkos-core";
 
 const {
   runAgentSessionMock,
@@ -228,6 +229,34 @@ describe("tui agent session bridge", () => {
       "雨夜便利店里时间停止",
       [],
     );
+  });
+
+  it("inspects all Work profiles locally without spending a model turn", async () => {
+    await saveWorkManifest(projectRoot, createWorkManifest({
+      id: "tui-film",
+      title: "TUI Film",
+      profileId: "interactive-film",
+      language: "en",
+    }));
+    const { processTuiAgentInput } = await import("../tui/agent-input.js");
+    const session = createProjectSession(projectRoot);
+
+    const listed = await processTuiAgentInput({
+      projectRoot,
+      input: "/works",
+      session,
+    });
+    expect(listed.responseText).toContain("tui-film | interactive-film | TUI Film");
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+
+    const shown = await processTuiAgentInput({
+      projectRoot,
+      input: "/work tui-film",
+      session: listed.session,
+    });
+    expect(shown.responseText).toContain("TUI Film (tui-film)");
+    expect(shown.responseText).toContain("interactive-film");
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("persists a structured proposal and replays its payload and skills only after confirmation", async () => {

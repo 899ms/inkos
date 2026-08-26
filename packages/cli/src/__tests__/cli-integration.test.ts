@@ -107,6 +107,7 @@ describe("CLI integration", () => {
       expect(output).toContain("init");
       expect(output).toContain("book");
       expect(output).toContain("write");
+      expect(output).toContain("work");
     });
   });
 
@@ -146,6 +147,33 @@ describe("CLI integration", () => {
       expect(worksStat.isDirectory()).toBe(true);
       const radarStat = await stat(join(projectDir, "radar"));
       expect(radarStat.isDirectory()).toBe(true);
+    });
+  });
+
+  describe("inkos work", () => {
+    it("lists and inspects all Work profiles through one CLI surface", async () => {
+      await saveWorkManifest(projectDir, createWorkManifest({
+        id: "cli-script",
+        title: "CLI Script",
+        profileId: "script",
+        language: "en",
+      }));
+
+      const listed = JSON.parse(run(["work", "list", "--json"])) as {
+        works: Array<{ id: string; profileId: string }>;
+      };
+      expect(listed.works).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "cli-script", profileId: "script" }),
+      ]));
+
+      const shown = JSON.parse(run(["work", "show", "cli-script", "--json"])) as {
+        work: { id: string; profileId: string };
+        episodes: unknown[];
+      };
+      expect(shown).toMatchObject({
+        work: { id: "cli-script", profileId: "script" },
+        episodes: [],
+      });
     });
   });
 

@@ -1,10 +1,13 @@
 import {
   ActionPayloadSchema,
+  CreativeEpisodeStore,
   appendInteractionMessage,
   clearPendingDecision,
   createLLMClient,
   RequestedIntentSchema,
   runAgentSession,
+  listWorkManifests,
+  loadWorkManifest,
   SessionKindSchema,
   type ActionPayload,
   type ActionSource,
@@ -14,6 +17,7 @@ import {
   type RequestedIntent,
   type SessionKind,
 } from "@actalk/inkos-core";
+import { join } from "node:path";
 import { persistProjectSession } from "./session-store.js";
 import { buildPipelineConfig, loadConfig } from "../utils.js";
 
@@ -49,7 +53,16 @@ export async function processTuiAgentInput(params: {
   const userTimestamp = Date.now();
   const currentBookId = params.activeBookId ?? params.session.activeBookId ?? null;
   const language = config.language === "en" ? "en" : "zh";
-  const route = resolveTuiAgentRoute(params.input, params.session, currentBookId, language);
+  const localWorkResponse = await resolveLocalWorkCommand(params.projectRoot, params.input, language);
+  const currentKind = params.session.sessionKind ?? (currentBookId ? "book" : "chat");
+  const route = localWorkResponse
+    ? {
+        userMessage: params.input.trim(),
+        sessionKind: currentKind,
+        actionSource: "slash" as const,
+        localResponse: localWorkResponse,
+      }
+    : resolveTuiAgentRoute(params.input, params.session, currentBookId, language);
   const resolvedBookId = route.detachBook ? null : currentBookId;
   const initialMessages = params.session.messages
     .filter((message) => message.role === "user" || message.role === "assistant")
@@ -160,6 +173,38 @@ export async function processTuiAgentInput(params: {
 
   await persistProjectSession(params.projectRoot, nextSession);
   return { responseText, session: nextSession };
+}
+
+async function resolveLocalWorkCommand(
+  projectRoot: string,
+  rawInput: string,
+  language: "zh" | "en",
+): Promise<string | undefined> {
+  const input = rawInput.trim();
+  if (/^\/works$/i.test(input)) {
+    const works = await listWorkManifests(projectRoot);
+    if (works.length === 0) return language === "en" ? "No creative Works found." : "还没有创作 Work。";
+    return [
+      language === "en" ? "Creative Works:" : "创作 Works：",
+      ...works.map((work) => `- ${work.id} | ${work.profileId} | ${work.title} | ${work.artifacts.length} artifacts`),
+    ].join("\n");
+  }
+  const match = input.match(/^\/work\s+([^\s]+)$/i);
+  if (!match?.[1]) return undefined;
+  const work = await loadWorkManifest(projectRoot, match[1]);
+  const episodes = new CreativeEpisodeStore(join(projectRoot, ".inkos", "harness.sqlite"));
+  try {
+    const recent = episodes.listEpisodes({ workId: work.id, limit: 10 });
+    return [
+      `${work.title} (${work.id})`,
+      `${language === "en" ? "Profile" : "类型"}: ${work.profileId}`,
+      `${language === "en" ? "Artifacts" : "生成物"}: ${work.artifacts.length}`,
+      `${language === "en" ? "Recent episodes" : "最近执行"}: ${recent.length}`,
+      ...recent.map((episode) => `- ${episode.status} | ${episode.startedAt}`),
+    ].join("\n");
+  } finally {
+    episodes.close();
+  }
 }
 
 export function resolveTuiAgentRoute(

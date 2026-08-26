@@ -117,11 +117,14 @@ import {
   writeTranslationExport,
   translationProjectDir,
   listWorkManifests,
+  loadWorkManifest,
+  CreativeEpisodeStore,
   filmLLMDepsFromClient,
   applyGraphDelta,
   loadStoryGraph,
   storyGraphPath,
   workDirectory,
+  safeChildPath,
   reviewStoryGraph,
   exportInk,
   buildPlayableHtml,
@@ -2836,6 +2839,91 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   }
 
   // --- Books ---
+
+  app.get("/api/v1/works", async (c) => {
+    const profileId = c.req.query("profileId")?.trim() || undefined;
+    const works = await listWorkManifests(root, profileId);
+    return c.json({
+      works: works.map((work) => ({
+        ...work,
+        artifactCount: work.artifacts.length,
+      })),
+    });
+  });
+
+  app.get("/api/v1/works/:id", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const work = await loadWorkManifest(root, id);
+      const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+      try {
+        return c.json({
+          work,
+          episodes: episodes.listEpisodes({ workId: id, limit: 50 }),
+        });
+      } finally {
+        episodes.close();
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, code === "ENOENT" ? 404 : 400);
+    }
+  });
+
+  app.get("/api/v1/works/:id/artifacts", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const work = await loadWorkManifest(root, id);
+      return c.json({ workId: id, artifacts: work.artifacts });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, code === "ENOENT" ? 404 : 400);
+    }
+  });
+
+  app.get("/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const work = await loadWorkManifest(root, id);
+      const artifact = work.artifacts.find((candidate) => candidate.id === c.req.param("artifactId"));
+      const revision = artifact?.revisions.find((candidate) => candidate.id === c.req.param("revisionId"));
+      if (!artifact || !revision) return c.json({ error: "Artifact revision not found" }, 404);
+      const bytes = await readFile(safeChildPath(workDirectory(root, id), revision.path));
+      const textLike = revision.contentType.startsWith("text/")
+        || revision.contentType === "application/json";
+      return c.json({
+        workId: id,
+        artifactId: artifact.id,
+        revision,
+        ...(textLike
+          ? { content: bytes.toString("utf-8") }
+          : { dataUrl: `data:${revision.contentType};base64,${bytes.toString("base64")}` }),
+      });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, code === "ENOENT" ? 404 : 400);
+    }
+  });
+
+  app.get("/api/v1/episodes", async (c) => {
+    const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+    try {
+      const rawLimit = Number(c.req.query("limit") ?? "100");
+      const status = c.req.query("status")?.trim();
+      return c.json({
+        episodes: episodes.listEpisodes({
+          ...(c.req.query("workId")?.trim() ? { workId: c.req.query("workId")!.trim() } : {}),
+          ...(c.req.query("profileId")?.trim() ? { profileId: c.req.query("profileId")!.trim() } : {}),
+          ...(status ? { status: status as "running" | "completed" | "failed" | "cancelled" } : {}),
+          limit: Number.isFinite(rawLimit) ? rawLimit : 100,
+        }),
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    } finally {
+      episodes.close();
+    }
+  });
 
   app.get("/api/v1/books", async (c) => {
     const bookIds = await state.listBooks();
