@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadStudioTaskSnapshot, saveStudioTaskSnapshot, studioTaskSnapshotPath } from "./task-store.js";
 
+function testWorkDirectory(root: string, workId: string): string {
+  return join(root, "works", workId);
+}
+
 const schedulerStartMock = vi.fn<() => Promise<void>>();
 const initBookMock = vi.fn();
 const runRadarMock = vi.fn();
@@ -244,7 +248,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     }
 
     bookDir(id: string): string {
-      return join(this.root, "books", id);
+      return join(testWorkDirectory(this.root, id), "source");
     }
   }
 
@@ -472,7 +476,23 @@ function cloneProjectConfig() {
 }
 
 async function writeCompleteBookFixture(root: string, bookId: string, title = "New Book") {
-  const bookDir = join(root, "books", bookId);
+  const workDir = testWorkDirectory(root, bookId);
+  const now = "2026-04-12T00:00:00.000Z";
+  await mkdir(workDir, { recursive: true });
+  await writeFile(join(workDir, "work.json"), `${JSON.stringify({
+    version: 2,
+    id: bookId,
+    title,
+    profileId: "longform-novel",
+    language: "zh",
+    status: "active",
+    lineage: [],
+    artifacts: [],
+    metadata: {},
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2)}\n`, "utf-8");
+  const bookDir = join(workDir, "source");
   await mkdir(join(bookDir, "story"), { recursive: true });
   await writeFile(join(bookDir, "book.json"), JSON.stringify({
     id: bookId,
@@ -520,8 +540,9 @@ describe("createStudioServer daemon lifecycle", () => {
     loadChapterIndexMock.mockReset();
     loadBookConfigMock.mockReset();
     generatePlayImageMock.mockClear();
-    await mkdir(join(root, "books", "demo-book", "chapters"), { recursive: true });
-    await writeFile(join(root, "books", "demo-book", "chapters", "0003_Demo.md"), "# Demo\n\nBody", "utf-8");
+    await writeCompleteBookFixture(root, "demo-book", "Demo Book");
+    await mkdir(join(testWorkDirectory(root, "demo-book"), "source", "chapters"), { recursive: true });
+    await writeFile(join(testWorkDirectory(root, "demo-book"), "source", "chapters", "0003_Demo.md"), "# Demo\n\nBody", "utf-8");
     runRadarMock.mockResolvedValue({
       marketSummary: "Fresh market summary",
       recommendations: [],
@@ -636,7 +657,7 @@ describe("createStudioServer daemon lifecycle", () => {
       },
       details: {
         bookId: "new-book",
-        outputPath: join(root, "books", "demo-book", "demo-book.txt"),
+        outputPath: join(testWorkDirectory(root, "demo-book"), "source", "demo-book.txt"),
         chaptersExported: 2,
       },
     });
@@ -810,7 +831,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("allows reading and updating fixed control truth files", async () => {
-    const bookDir = join(root, "books", "demo-book");
+    const bookDir = join(testWorkDirectory(root, "demo-book"), "source");
     const storyDir = join(bookDir, "story");
     await mkdir(storyDir, { recursive: true });
     await Promise.all([
@@ -841,7 +862,8 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("exposes runtime context trace files as read-only truth diagnostics", async () => {
-    const bookDir = join(root, "books", "trace-book");
+    await writeCompleteBookFixture(root, "trace-book", "Trace Book");
+    const bookDir = join(testWorkDirectory(root, "trace-book"), "source");
     const storyDir = join(bookDir, "story");
     await mkdir(join(storyDir, "runtime"), { recursive: true });
     await writeFile(join(storyDir, "runtime", "chapter-0001.trace.json"), JSON.stringify({
@@ -2659,9 +2681,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("rejects create requests when a complete book with the same id already exists", async () => {
-    await mkdir(join(root, "books", "existing-book", "story"), { recursive: true });
-    await writeFile(join(root, "books", "existing-book", "book.json"), JSON.stringify({ id: "existing-book" }), "utf-8");
-    await writeFile(join(root, "books", "existing-book", "story", "story_bible.md"), "# existing", "utf-8");
+    await writeCompleteBookFixture(root, "existing-book", "Existing Book");
 
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -2682,7 +2702,7 @@ describe("createStudioServer daemon lifecycle", () => {
       error: expect.stringContaining('Book "existing-book" already exists'),
     });
     expect(processProjectInteractionRequestMock).not.toHaveBeenCalled();
-    await expect(access(join(root, "books", "existing-book", "story", "story_bible.md"))).resolves.toBeUndefined();
+    await expect(access(join(testWorkDirectory(root, "existing-book"), "source", "story", "story_bible.md"))).resolves.toBeUndefined();
   });
 
   it("reports async create failures through the create-status endpoint", async () => {
@@ -2717,7 +2737,7 @@ describe("createStudioServer daemon lifecycle", () => {
     // A long architect run (or a server restart) drops the in-memory status; on
     // success it is deleted outright. Without the disk fallback this returned a
     // bare 404 that a polling client reads as "creation failed".
-    const bookDir = join(root, "books", "disk-ready");
+    const bookDir = join(testWorkDirectory(root, "disk-ready"), "source");
     await mkdir(join(bookDir, "story", "outline"), { recursive: true });
     await mkdir(join(bookDir, "story", "roles", "主要角色"), { recursive: true });
     await writeFile(join(bookDir, "book.json"), "{}");
@@ -2736,7 +2756,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("create-status still 404s when neither an in-memory entry nor a complete foundation exists", async () => {
-    const bookDir = join(root, "books", "half-built");
+    const bookDir = join(testWorkDirectory(root, "half-built"), "source");
     await mkdir(join(bookDir, "story", "outline"), { recursive: true });
     await writeFile(join(bookDir, "book.json"), "{}");
     await writeFile(join(bookDir, "story", "outline", "story_frame.md"), "frame"); // missing the rest
@@ -2913,7 +2933,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("exposes editable chapter briefs, generated plans, and archived versions", async () => {
-    const bookDir = join(root, "books", "demo-book");
+    const bookDir = join(testWorkDirectory(root, "demo-book"), "source");
     const runtimeDir = join(bookDir, "story", "runtime");
     const versionsDir = join(bookDir, "chapters", ".versions", "0003");
     const versionId = "1782864000000_manual_11111111-1111-4111-8111-111111111111";
@@ -2981,7 +3001,7 @@ describe("createStudioServer daemon lifecycle", () => {
     );
     expect(briefResponse.status).toBe(200);
     await expect(readFile(
-      join(root, "books", "demo-book", "story", "runtime", "chapter-0003.user-brief.md"),
+      join(testWorkDirectory(root, "demo-book"), "source", "story", "runtime", "chapter-0003.user-brief.md"),
       "utf-8",
     )).resolves.toContain("让证人先撒谎");
 
@@ -2995,16 +3015,16 @@ describe("createStudioServer daemon lifecycle", () => {
     );
     expect(saveResponse.status).toBe(200);
     await expect(readFile(
-      join(root, "books", "demo-book", "chapters", "0003_Demo.md"),
+      join(testWorkDirectory(root, "demo-book"), "source", "chapters", "0003_Demo.md"),
       "utf-8",
     )).resolves.toContain("人工修改后的正文");
     const versionFiles = await (await import("node:fs/promises")).readdir(
-      join(root, "books", "demo-book", "chapters", ".versions", "0003"),
+      join(testWorkDirectory(root, "demo-book"), "source", "chapters", ".versions", "0003"),
     );
     expect(versionFiles).toHaveLength(1);
     expect(versionFiles[0]).toContain("_manual_");
     await expect(readFile(
-      join(root, "books", "demo-book", "chapters", ".versions", "0003", versionFiles[0]!),
+      join(testWorkDirectory(root, "demo-book"), "source", "chapters", ".versions", "0003", versionFiles[0]!),
       "utf-8",
     )).resolves.toContain("Body");
   });
@@ -3014,7 +3034,7 @@ describe("createStudioServer daemon lifecycle", () => {
       content: "## 灵感卡\n\n让证人先交出一页伪账，再由水印暴露替换时间。",
       usage: { inputTokens: 100, outputTokens: 30 },
     });
-    const chapterPath = join(root, "books", "demo-book", "chapters", "0003_Demo.md");
+    const chapterPath = join(testWorkDirectory(root, "demo-book"), "source", "chapters", "0003_Demo.md");
     const before = await readFile(chapterPath, "utf-8");
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -3066,13 +3086,13 @@ describe("createStudioServer daemon lifecycle", () => {
       revisionGate: "always",
     });
     await expect(readFile(
-      join(root, "books", "demo-book", "story", "runtime", "chapter-0003.user-brief.md"),
+      join(testWorkDirectory(root, "demo-book"), "source", "story", "runtime", "chapter-0003.user-brief.md"),
       "utf-8",
     )).resolves.toContain("保留事实");
   });
 
   it("restores an archived chapter version and exposes safe latest-chapter deletion", async () => {
-    const bookDir = join(root, "books", "demo-book");
+    const bookDir = join(testWorkDirectory(root, "demo-book"), "source");
     const versionsDir = join(bookDir, "chapters", ".versions", "0003");
     const versionId = "1782864000000_revision_11111111-1111-4111-8111-111111111111";
     await mkdir(versionsDir, { recursive: true });
@@ -5343,7 +5363,7 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(response.json()).resolves.toMatchObject({
       response: "Agent response.",
     });
-    await expect(readFile(join(root, "books", "demo-book", "chapters", "0003_Demo.md"), "utf-8"))
+    await expect(readFile(join(testWorkDirectory(root, "demo-book"), "source", "chapters", "0003_Demo.md"), "utf-8"))
       .resolves.not.toContain("Body updated");
     expect(saveChapterIndexMock).not.toHaveBeenCalled();
     expect(runAgentSessionMock).toHaveBeenCalledWith(
@@ -6531,13 +6551,13 @@ describe("createStudioServer daemon lifecycle", () => {
 
     const projectMode = await app.request("http://localhost/api/v1/project/chapter-review-mode");
     await expect(projectMode.json()).resolves.toMatchObject({ mode: "auto" });
-    const rawBook = JSON.parse(await readFile(join(root, "books", "demo-book", "book.json"), "utf-8"));
+    const rawBook = JSON.parse(await readFile(join(testWorkDirectory(root, "demo-book"), "source", "book.json"), "utf-8"));
     expect(rawBook.writing.reviewMode).toBe("manual");
   });
 
   it("uses a book-level manual review override when writing the next chapter", async () => {
     await writeCompleteBookFixture(root, "demo-book", "Demo Book");
-    const rawBookPath = join(root, "books", "demo-book", "book.json");
+    const rawBookPath = join(testWorkDirectory(root, "demo-book"), "source", "book.json");
     const rawBook = JSON.parse(await readFile(rawBookPath, "utf-8"));
     await writeFile(rawBookPath, JSON.stringify({
       ...rawBook,
@@ -6555,7 +6575,7 @@ describe("createStudioServer daemon lifecycle", () => {
 
   it("uses a book-level revisionGate override when revising a chapter", async () => {
     await writeCompleteBookFixture(root, "demo-book", "Demo Book");
-    const rawBookPath = join(root, "books", "demo-book", "book.json");
+    const rawBookPath = join(testWorkDirectory(root, "demo-book"), "source", "book.json");
     const rawBook = JSON.parse(await readFile(rawBookPath, "utf-8"));
     await writeFile(rawBookPath, JSON.stringify({
       ...rawBook,
@@ -6773,9 +6793,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("spinoff/init rejects a duplicate target book id before running the pipeline", async () => {
-    await mkdir(join(root, "books", "existing-book", "story"), { recursive: true });
-    await writeFile(join(root, "books", "existing-book", "book.json"), JSON.stringify({ id: "existing-book" }), "utf-8");
-    await writeFile(join(root, "books", "existing-book", "story", "story_bible.md"), "# existing", "utf-8");
+    await writeCompleteBookFixture(root, "existing-book", "Existing Book");
 
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);

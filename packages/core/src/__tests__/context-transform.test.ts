@@ -15,7 +15,7 @@ describe("createBookContextTransform", () => {
 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), "ctx-test-"));
-    const storyDir = join(projectRoot, "books", bookId, "story");
+    const storyDir = join(projectRoot, "works", bookId, "source", "story");
     await mkdir(storyDir, { recursive: true });
     await writeFile(join(storyDir, "story_bible.md"), "# Story Bible\nA hero's journey.");
     await writeFile(join(storyDir, "current_focus.md"), "Focus on chapter 3.");
@@ -53,7 +53,7 @@ describe("createBookContextTransform", () => {
   });
 
   it("indexes large truth files structurally instead of selecting semantic keyword rows", async () => {
-    const storyDir = join(projectRoot, "books", bookId, "story");
+    const storyDir = join(projectRoot, "works", bookId, "source", "story");
     await writeFile(
       join(storyDir, "story_bible.md"),
       [
@@ -81,7 +81,7 @@ describe("createBookContextTransform", () => {
   });
 
   it("emits session context compression lifecycle events when compacting truth files", async () => {
-    const storyDir = join(projectRoot, "books", bookId, "story");
+    const storyDir = join(projectRoot, "works", bookId, "source", "story");
     await writeFile(
       join(storyDir, "story_bible.md"),
       [
@@ -108,7 +108,7 @@ describe("createBookContextTransform", () => {
   });
 
   it("sorts truth files in priority order", async () => {
-    const storyDir = join(projectRoot, "books", bookId, "story");
+    const storyDir = join(projectRoot, "works", bookId, "source", "story");
     await writeFile(join(storyDir, "volume_outline.md"), "# Volume Outline");
     await writeFile(join(storyDir, "book_rules.md"), "# Book Rules");
     await writeFile(join(storyDir, "extra_notes.md"), "# Extra");
@@ -152,7 +152,7 @@ describe("createBookContextTransform", () => {
   });
 
   it("does NOT inject upgrade hint when book is Phase 5 layout", async () => {
-    const outlineDir = join(projectRoot, "books", bookId, "story", "outline");
+    const outlineDir = join(projectRoot, "works", bookId, "source", "story", "outline");
     await mkdir(outlineDir, { recursive: true });
     await writeFile(join(outlineDir, "story_frame.md"), "## 主题\n段落式内容");
 
@@ -167,7 +167,7 @@ describe("createBookContextTransform", () => {
   });
 
   it("injects authoritative new-layout outline files into active-book chat context", async () => {
-    const outlineDir = join(projectRoot, "books", bookId, "story", "outline");
+    const outlineDir = join(projectRoot, "works", bookId, "source", "story", "outline");
     await mkdir(outlineDir, { recursive: true });
     await writeFile(join(outlineDir, "story_frame.md"), "## 故事基石\n主角以第一人称调查物业黑账。");
     await writeFile(join(outlineDir, "volume_map.md"), "## 第一卷\n暴雨夜发现电表账单异常。");

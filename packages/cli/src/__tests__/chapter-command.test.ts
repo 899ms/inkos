@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWorkManifest, saveWorkManifest, workDirectory } from "@actalk/inkos-core";
 
 const logMock = vi.fn();
 const logErrorMock = vi.fn();
@@ -46,7 +47,13 @@ async function setupBook(params: {
   readonly snapshotChapters?: ReadonlyArray<number>;
 }): Promise<string> {
   projectRoot = await mkdtemp(join(tmpdir(), "inkos-chapter-cmd-"));
-  const bookDir = join(projectRoot, "books", params.bookId);
+  await saveWorkManifest(projectRoot, createWorkManifest({
+    id: params.bookId,
+    title: params.bookId,
+    profileId: "longform-novel",
+    language: "zh",
+  }));
+  const bookDir = join(workDirectory(projectRoot, params.bookId), "source");
   await mkdir(join(bookDir, "chapters"), { recursive: true });
   await writeFile(
     join(bookDir, "book.json"),

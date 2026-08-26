@@ -1,8 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createWorkManifest, saveWorkManifest } from "../harness/index.js";
 import { PipelineRunner, type ChapterPipelineResult } from "../pipeline/runner.js";
+
+async function createBookWork(root: string, bookId = "demo-book"): Promise<void> {
+  await saveWorkManifest(root, createWorkManifest({
+    id: bookId,
+    title: "Demo Book",
+    profileId: "longform-novel",
+    language: "en",
+  }));
+  await mkdir(join(root, "works", bookId, "source"), { recursive: true });
+}
 
 function chapter(
   chapterNumber: number,
@@ -34,6 +45,7 @@ describe("PipelineRunner.writeChapters", () => {
   it("holds one book lock while writing sequential chapters", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-batch-"));
     roots.push(root);
+    await createBookWork(root);
     const runner = new PipelineRunner({
       client: {} as never,
       model: "test-model",
@@ -67,6 +79,7 @@ describe("PipelineRunner.writeChapters", () => {
   it("stops the batch after the first chapter that needs review", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-batch-"));
     roots.push(root);
+    await createBookWork(root);
     const runner = new PipelineRunner({
       client: {} as never,
       model: "test-model",

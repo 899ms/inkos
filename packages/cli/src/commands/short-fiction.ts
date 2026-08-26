@@ -34,8 +34,7 @@ shortCommand
   .description("Run a short fiction chain from a direction")
   .requiredOption("--direction <text>", "Story direction, e.g. \"女频短篇 婚姻背叛 证据反杀\" or \"female-lead short: marriage betrayal, evidence payback\"")
   .option("--reference <path>", "Optional reference notes/text")
-  .option("--story-id <id>", "Output story id under shorts/")
-  .option("--out-dir <path>", "Output directory", "shorts")
+  .option("--story-id <id>", "Work id for the generated short fiction")
   .option("--lang <language>", "Writing language: zh or en", "zh")
   .option("--chapters <n>", "Complete short chapter count (12-18)", String(SHORT_FICTION_DEFAULT_CHAPTERS))
   .option("--chars <n>", "Per-chapter length: zh characters (900-1200) or en words (600-800)")
@@ -123,7 +122,6 @@ shortCommand
         },
         reference,
         storyId: opts.storyId,
-        outDir: opts.outDir,
         chapterCount,
         charsPerChapter,
         language,
@@ -159,7 +157,6 @@ interface ShortRunOptions {
   readonly direction: string;
   readonly reference?: string;
   readonly storyId?: string;
-  readonly outDir: string;
   readonly lang: string;
   readonly chapters?: string;
   readonly chars?: string;

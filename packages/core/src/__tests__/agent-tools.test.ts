@@ -20,6 +20,8 @@ import {
   createScriptCreationTool,
   createStoryboardCreationTool,
   createInteractiveFilmCreationTool,
+  createGrepTool,
+  createLsTool,
   createManageBookReferenceTool,
   createWriteFileTool,
   createWriteTruthFileTool,
@@ -1385,7 +1387,7 @@ describe("agent deterministic writing tools", () => {
     }
   });
 
-  it("keeps read tool scoped to books by default", async () => {
+  it("keeps read tool scoped to works by default", async () => {
     const outsidePath = join(root, "outside.md");
     await writeFile(outsidePath, "outside secret", "utf-8");
     const tool = createReadTool(root);
@@ -1407,7 +1409,7 @@ describe("agent deterministic writing tools", () => {
     const tool = createReadTool(root);
 
     const result = await tool.execute("tool-read-long", {
-      path: "harbor/story/long.md",
+      path: "harbor/source/story/long.md",
     });
 
     expect(result.content[0]?.type).toBe("text");
@@ -1418,13 +1420,13 @@ describe("agent deterministic writing tools", () => {
   });
 
   it("reads project-local production sources without escaping the project root", async () => {
-    const filmDir = join(root, "interactive-films", "storm-eye");
+    const filmDir = join(root, "works", "storm-eye", "source");
     await mkdir(filmDir, { recursive: true });
     await writeFile(join(filmDir, "script.md"), "# Storm Eye\n\nAuthoritative source.", "utf-8");
     const tool = createReadTool(root, { scope: "project" });
 
     const result = await tool.execute("tool-read-project", {
-      path: "interactive-films/storm-eye/script.md",
+      path: "works/storm-eye/source/script.md",
     });
     expect(result.content[0]).toEqual({
       type: "text",
@@ -1459,13 +1461,45 @@ describe("agent deterministic writing tools", () => {
     const tool = createWriteFileTool(root);
 
     const result = await tool.execute("tool-10", {
-      path: "harbor/story/runtime/notes.md",
+      path: "harbor/source/story/runtime/notes.md",
       content: "# Notes\n\nWatch the harbor ledger.\n",
     });
 
     expect(result.content[0]?.type).toBe("text");
     await expect(readFile(join(state.bookDir("harbor"), "story", "runtime", "notes.md"), "utf-8"))
       .resolves.toContain("Watch the harbor ledger");
+  });
+
+  it("searches longform Work source files instead of the Work metadata directory", async () => {
+    await mkdir(join(state.bookDir("harbor"), "story"), { recursive: true });
+    await writeFile(join(state.bookDir("harbor"), "story", "clues.md"), "The brass ledger stayed hidden.", "utf-8");
+    const tool = createGrepTool(root);
+
+    const result = await tool.execute("tool-grep-work", {
+      bookId: "harbor",
+      pattern: "brass ledger",
+    });
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: "story/clues.md:1: The brass ledger stayed hidden.",
+    });
+  });
+
+  it("lists a longform Work source directory", async () => {
+    await mkdir(join(state.bookDir("harbor"), "chapters"), { recursive: true });
+    await writeFile(join(state.bookDir("harbor"), "chapters", "0001_Arrival.md"), "# Arrival", "utf-8");
+    const tool = createLsTool(root);
+
+    const result = await tool.execute("tool-ls-work", {
+      bookId: "harbor",
+      subdir: "chapters",
+    });
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("0001_Arrival.md"),
+    });
   });
 
   it("writes Phase 5 outline truth files through write_truth_file", async () => {

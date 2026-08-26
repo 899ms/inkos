@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { isNewLayoutBook } from "../utils/outline-paths.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import { loadStoryGraph } from "../interactive-film/graph-store.js";
+import { workDirectory } from "../harness/work-store.js";
 
 /** Files read in this order; anything else in story/ comes after, sorted alphabetically. */
 const PRIORITY_FILES = [
@@ -37,7 +38,7 @@ export function createBookContextTransform(
     return async (messages) => messages;
   }
 
-  const bookDir = join(projectRoot, "books", bookId);
+  const bookDir = join(workDirectory(projectRoot, bookId), "source");
   const storyDir = join(bookDir, "story");
 
   return async (messages) => {

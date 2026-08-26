@@ -4,6 +4,14 @@ import { join, resolve } from "node:path";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
+import {
+  createWorkManifest,
+  listWorkManifests,
+  loadWorkManifest,
+  saveWorkManifest,
+  workDirectory,
+} from "../harness/work-store.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -368,11 +376,11 @@ export class StateManager {
   }
 
   get booksDir(): string {
-    return join(this.projectRoot, "books");
+    return join(this.projectRoot, "works");
   }
 
   bookDir(bookId: string): string {
-    return join(this.booksDir, bookId);
+    return join(workDirectory(this.projectRoot, bookId), "source");
   }
 
   stateDir(bookId: string): string {
@@ -401,6 +409,27 @@ export class StateManager {
 
   async saveBookConfig(bookId: string, config: BookConfig): Promise<void> {
     await this.saveBookConfigAt(this.bookDir(bookId), config);
+    try {
+      await loadWorkManifest(this.projectRoot, bookId);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await saveWorkManifest(this.projectRoot, createWorkManifest({
+        id: bookId,
+        title: config.title,
+        profileId: "longform-novel",
+        language: config.language ?? "zh",
+        now: config.createdAt,
+        lineage: config.parentBookId
+          ? [{ relation: "derived-from", sourceWorkId: config.parentBookId }]
+          : [],
+        metadata: {
+          genre: config.genre,
+          platform: config.platform,
+          ...(config.fanficMode ? { fanficMode: config.fanficMode } : {}),
+        },
+      }));
+    }
+    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: bookId, updatedAt: config.updatedAt });
   }
 
   async saveBookConfigAt(bookDir: string, config: BookConfig): Promise<void> {
@@ -420,22 +449,7 @@ export class StateManager {
   }
 
   async listBooks(): Promise<ReadonlyArray<string>> {
-    try {
-      const entries = await readdir(this.booksDir);
-      const bookIds: string[] = [];
-      for (const entry of entries) {
-        const bookJsonPath = join(this.booksDir, entry, "book.json");
-        try {
-          await stat(bookJsonPath);
-          bookIds.push(entry);
-        } catch {
-          // not a book directory
-        }
-      }
-      return bookIds;
-    } catch {
-      return [];
-    }
+    return (await listWorkManifests(this.projectRoot, "longform-novel")).map((work) => work.id);
   }
 
   async getNextChapterNumber(bookId: string): Promise<number> {

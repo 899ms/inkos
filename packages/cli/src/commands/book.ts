@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { access, readFile, rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
-import { deriveBookIdFromTitle, normalizePlatformOrOther, PipelineRunner, StateManager, type BookConfig } from "@actalk/inkos-core";
+import { deriveBookIdFromTitle, normalizePlatformOrOther, PipelineRunner, StateManager, workDirectory, type BookConfig } from "@actalk/inkos-core";
 import {
   formatBookBackupCreated,
   formatBookBackupListEmpty,
@@ -37,14 +37,15 @@ bookCommand
 
       const bookId = deriveBookIdFromTitle(opts.title) || `book-${Date.now().toString(36)}`;
 
-      const bookDir = join(root, "books", bookId);
+      const workDir = workDirectory(root, bookId);
+      const bookDir = join(workDir, "source");
       try {
         await access(bookDir);
         const state = new StateManager(root);
         if (await state.isCompleteBookDirectory(bookDir)) {
-          throw new Error(`Book "${bookId}" already exists at books/${bookId}/. Use a different title or delete the existing book first.`);
+          throw new Error(`Book "${bookId}" already exists as a Work. Use a different title or delete the existing book first.`);
         }
-        await rm(bookDir, { recursive: true, force: true });
+        await rm(workDir, { recursive: true, force: true });
       } catch (e) {
         if (e instanceof Error && e.message.includes("already exists")) throw e;
         // Directory doesn't exist, good
@@ -82,7 +83,7 @@ bookCommand
           title: book.title,
           genre: book.genre,
           platform: book.platform,
-          location: `books/${bookId}/`,
+          location: `works/${bookId}/source/`,
           nextStep: `inkos write next ${bookId}`,
         }, null, 2));
       } else {
@@ -245,8 +246,7 @@ bookCommand
         }
       }
 
-      const bookDir = join(root, "books", bookId);
-      await rm(bookDir, { recursive: true, force: true });
+      await rm(workDirectory(root, bookId), { recursive: true, force: true });
 
       if (opts.json) {
         log(JSON.stringify({ deleted: bookId, chapters: index.length }));

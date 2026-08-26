@@ -48,13 +48,15 @@ import {
 import { loadNarrativeMemorySeed, loadSnapshotCurrentStateFacts } from "../state/runtime-state-store.js";
 import { rewriteStructuredStateFromMarkdown } from "../state/state-bootstrap.js";
 import { readFile, readdir, writeFile, mkdir, rename, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   parseStateDegradedReviewNote,
   resolveStateDegradedBaseStatus,
   retrySettlementAfterValidationFailure,
 } from "./chapter-state-recovery.js";
 import { persistChapterArtifacts } from "./chapter-persistence.js";
+import { createWorkManifest, saveWorkManifest } from "../harness/work-store.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { runChapterReviewCycle } from "./chapter-review-cycle.js";
 import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
@@ -781,6 +783,7 @@ export class PipelineRunner {
       stageLanguage,
       targetChapters: book.targetChapters,
     });
+    let published = false;
     try {
       this.logStage(stageLanguage, { zh: "保存书籍配置", en: "saving book config" });
       await this.state.saveBookConfigAt(stagingBookDir, book);
@@ -820,14 +823,33 @@ export class PipelineRunner {
 
       if (await this.pathExists(bookDir)) {
         if (await this.state.isCompleteBookDirectory(bookDir)) {
-          throw new Error(`Book "${book.id}" already exists at books/${book.id}/. Use a different title or delete the existing book first.`);
+          throw new Error(`Book "${book.id}" already exists as a Work. Use a different title or delete the existing book first.`);
         }
         await rm(bookDir, { recursive: true, force: true });
       }
 
+      await mkdir(dirname(bookDir), { recursive: true });
       await rename(stagingBookDir, bookDir);
+      published = true;
+      await saveWorkManifest(this.config.projectRoot, createWorkManifest({
+        id: book.id,
+        title: book.title,
+        profileId: "longform-novel",
+        language: book.language ?? gp.language,
+        now: book.createdAt,
+        lineage: book.parentBookId
+          ? [{ relation: "derived-from", sourceWorkId: book.parentBookId }]
+          : [],
+        metadata: {
+          genre: book.genre,
+          platform: book.platform,
+          ...(book.fanficMode ? { fanficMode: book.fanficMode } : {}),
+        },
+      }));
+      await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: book.id });
     } catch (error) {
       await rm(stagingBookDir, { recursive: true, force: true }).catch(() => undefined);
+      if (published) await rm(dirname(bookDir), { recursive: true, force: true }).catch(() => undefined);
       throw error;
     }
   }
@@ -930,6 +952,7 @@ export class PipelineRunner {
       book.language ?? gp.language,
       "revise",
     );
+    await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId });
   }
 
   private async copyDirShallow(src: string, dest: string): Promise<void> {
@@ -988,6 +1011,7 @@ export class PipelineRunner {
     await mkdir(storyDir, { recursive: true });
     await writeFile(join(storyDir, "fanfic_canon.md"), result.fullDocument, "utf-8");
 
+    await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId });
     return result.fullDocument;
   }
 
@@ -1343,6 +1367,7 @@ export class PipelineRunner {
       { summary: result.summary, issueCount: result.issues.length },
     );
 
+    await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId });
     return { ...result, chapterNumber: targetChapter };
   }
 
@@ -1739,6 +1764,7 @@ export class PipelineRunner {
         fixedCount: reviseOutput.fixedIssues.length,
       });
 
+      await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId });
       return {
         chapterNumber: targetChapter,
         wordCount: revisedCount,
@@ -1821,12 +1847,14 @@ export class PipelineRunner {
     this.throwIfOperationAborted();
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
-      return await this._writeNextChapterLocked(
+      const result = await this._writeNextChapterLocked(
         bookId,
         wordCount,
         temperatureOverride,
         externalContext ?? this.config.externalContext,
       );
+      await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId });
+      return result;
     } finally {
       await releaseLock();
     }
@@ -1857,6 +1885,7 @@ export class PipelineRunner {
         options.onChapterComplete?.(result, results.length, chapterCount);
         if (result.status !== "ready-for-review") break;
       }
+      await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId });
       return results;
     } finally {
       await releaseLock();
@@ -1866,7 +1895,9 @@ export class PipelineRunner {
   async repairChapterState(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
-      return await this._repairChapterStateLocked(bookId, chapterNumber);
+      const result = await this._repairChapterStateLocked(bookId, chapterNumber);
+      await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId });
+      return result;
     } finally {
       await releaseLock();
     }
@@ -1875,7 +1906,9 @@ export class PipelineRunner {
   async resyncChapterArtifacts(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
-      return await this._resyncChapterArtifactsLocked(bookId, chapterNumber);
+      const result = await this._resyncChapterArtifactsLocked(bookId, chapterNumber);
+      await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId });
+      return result;
     } finally {
       await releaseLock();
     }

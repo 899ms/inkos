@@ -1340,7 +1340,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.episodeCount ? { episodeCount: payload.episodeCount } : {}),
       ...(payload?.episodeDuration ? { episodeDuration: payload.episodeDuration } : {}),
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
-      ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
   } else if (args.requestedIntent === "storyboard_create") {
     const payload = actionPayload?.storyboardCreate;
@@ -1362,7 +1361,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.granularity ? { granularity: payload.granularity } : {}),
       ...(payload?.maxShots ? { maxShots: payload.maxShots } : {}),
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
-      ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
   } else if (args.requestedIntent === "interactive_film_create") {
     const payload = actionPayload?.interactiveFilmCreate;
@@ -1385,7 +1383,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.budget ? { budget: payload.budget } : {}),
       ...(payload?.referenceMode ? { referenceMode: payload.referenceMode } : {}),
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
-      ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
   } else if (args.requestedIntent === "translation_create") {
     const payload = actionPayload?.translationCreate;
@@ -1943,7 +1940,7 @@ function readBookChapterReviewMode(rawBook: Record<string, unknown>): ChapterRev
 }
 
 async function loadRawBookConfig(root: string, bookId: string): Promise<Record<string, unknown>> {
-  const raw = await readFile(join(root, "books", bookId, "book.json"), "utf-8");
+  const raw = await readFile(join(workDirectory(root, bookId), "source", "book.json"), "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
@@ -2915,7 +2912,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           broadcast("book:error", { bookId, error });
           return;
         }
-        if (!await completeBookExists(join(root, "books", createdBookId))) {
+        if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
           const error = "Book creation artifact is incomplete on disk.";
           bookCreateStatus.set(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, error });
@@ -4959,7 +4956,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           if (exec.status === "completed") {
             createdBookId = resolveCreatedBookIdFromToolExecs([exec]);
             if (createdBookId) {
-              if (!await completeBookExists(join(root, "books", createdBookId))) {
+              if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
                 const message = pick(surfaceLanguage, "创作工具返回了建书结果，但磁盘上的书籍工件不完整。", "The creation tool returned a book result, but the on-disk book artifact is incomplete.");
                 bookCreateStatus.set(createdBookId, { status: "error", error: message });
                 broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error: message });
@@ -5194,7 +5191,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         const createdBookId = resolveCreatedBookIdFromToolExecs(collectedToolExecs);
         if (!createdBookId) return null;
         if (broadcastedCreatedBookId === createdBookId) return createdBookId;
-        if (!await completeBookExists(join(root, "books", createdBookId))) {
+        if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
           const error = "Book creation artifact is incomplete on disk.";
           bookCreateStatus.set(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error });
@@ -5635,7 +5632,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const bookId = c.req.param("id");
     if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
     const { mode } = await c.req.json<{ mode?: string }>();
-    const rawBookPath = join(root, "books", bookId, "book.json");
+    const rawBookPath = join(workDirectory(root, bookId), "source", "book.json");
     try {
       const [projectConfig, rawBook] = await Promise.all([
         loadRawConfig(root),
@@ -6298,7 +6295,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       inkosJson: existsSync(join(root, "inkos.json")),
       projectEnv: existsSync(join(root, ".env")),
       globalEnv: existsSync(GLOBAL_ENV_PATH),
-      booksDir: existsSync(join(root, "books")),
+      booksDir: existsSync(join(root, "works")),
       llmConnected: false,
       bookCount: 0,
     };

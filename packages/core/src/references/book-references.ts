@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { workDirectory } from "../harness/work-store.js";
 import type { MaterialAsset } from "../materials/ingest.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { safeChildPath } from "../utils/path-safety.js";
@@ -226,11 +227,11 @@ function assertMaterialId(value: string): string {
 }
 
 function referenceManifestPath(projectRoot: string, bookId: string): string {
-  return join(projectRoot, "books", bookId, "story", MANIFEST_FILE);
+  return join(workDirectory(projectRoot, bookId), "source", "story", MANIFEST_FILE);
 }
 
 async function assertBookExists(projectRoot: string, bookId: string): Promise<void> {
-  const bookDir = join(projectRoot, "books", bookId);
+  const bookDir = join(workDirectory(projectRoot, bookId), "source");
   try {
     if (!(await stat(bookDir)).isDirectory()) throw new Error(`Book not found: ${bookId}`);
   } catch (error) {
@@ -241,7 +242,7 @@ async function assertBookExists(projectRoot: string, bookId: string): Promise<vo
 
 async function writeManifestAtomic(projectRoot: string, manifest: BookReferenceManifest): Promise<void> {
   const path = referenceManifestPath(projectRoot, manifest.bookId);
-  await mkdir(join(projectRoot, "books", manifest.bookId, "story"), { recursive: true });
+  await mkdir(join(workDirectory(projectRoot, manifest.bookId), "source", "story"), { recursive: true });
   const tempPath = `${path}.tmp-${randomUUID()}`;
   try {
     await writeFile(tempPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");

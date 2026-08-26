@@ -4,7 +4,12 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { StateManager } from "@actalk/inkos-core";
+import {
+  StateManager,
+  createWorkManifest,
+  saveWorkManifest,
+  workDirectory,
+} from "@actalk/inkos-core";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const cliDir = resolve(testDir, "..", "..");
@@ -13,6 +18,22 @@ const CLI_PROCESS_TIMEOUT_MS = 10_000;
 const DOUBLE_CLI_INVOCATION_TEST_TIMEOUT_MS = CLI_PROCESS_TIMEOUT_MS * 2;
 
 let projectDir: string;
+
+async function createBookSource(
+  bookId: string,
+  title = bookId,
+  language = "zh",
+): Promise<string> {
+  await saveWorkManifest(projectDir, createWorkManifest({
+    id: bookId,
+    title,
+    profileId: "longform-novel",
+    language,
+  }));
+  const sourceDir = join(workDirectory(projectDir, bookId), "source");
+  await mkdir(sourceDir, { recursive: true });
+  return sourceDir;
+}
 
 function buildTestEnv(overrides?: Record<string, string>) {
   const baseEnv = Object.fromEntries(
@@ -120,9 +141,9 @@ describe("CLI integration", () => {
       await expect(readFile(join(projectDir, ".node-version"), "utf-8")).resolves.toContain("22");
     });
 
-    it("creates books/ and radar/ directories", async () => {
-      const booksStat = await stat(join(projectDir, "books"));
-      expect(booksStat.isDirectory()).toBe(true);
+    it("creates works/ and radar/ directories", async () => {
+      const worksStat = await stat(join(projectDir, "works"));
+      expect(worksStat.isDirectory()).toBe(true);
       const radarStat = await stat(join(projectDir, "radar"));
       expect(radarStat.isDirectory()).toBe(true);
     });
@@ -261,7 +282,7 @@ describe("CLI integration", () => {
         expect(data.session.activeBookId).toBe("harbor");
       } finally {
         await writeFile(envPath, originalEnv, "utf-8");
-        await rm(join(projectDir, "books", "harbor"), { recursive: true, force: true });
+        await rm(workDirectory(projectDir, "harbor"), { recursive: true, force: true });
         await rm(join(projectDir, ".inkos-session.json"), { force: true }).catch(() => {});
       }
     }, CLI_PROCESS_TIMEOUT_MS);
@@ -312,7 +333,7 @@ describe("CLI integration", () => {
         run(["init"]);
       }
       const bookId = "stale-book";
-      const staleDir = join(projectDir, "books", bookId);
+      const staleDir = await createBookSource(bookId, "Stale Book");
       await mkdir(join(staleDir, "story"), { recursive: true });
       await writeFile(join(staleDir, "book.json"), JSON.stringify({
         id: bookId,
@@ -354,7 +375,7 @@ describe("CLI integration", () => {
     });
 
     it("shows English chapter counts in words for chapter rows", async () => {
-      const bookDir = join(projectDir, "books", "english-status");
+      const bookDir = await createBookSource("english-status", "English Status Book", "en");
       await mkdir(join(bookDir, "chapters"), { recursive: true });
       await writeFile(
         join(bookDir, "book.json"),
@@ -395,7 +416,7 @@ describe("CLI integration", () => {
     });
 
     it("shows degraded chapter counts and issues explicitly", async () => {
-      const bookDir = join(projectDir, "books", "degraded-status");
+      const bookDir = await createBookSource("degraded-status", "Degraded Status Book");
       await mkdir(join(bookDir, "chapters"), { recursive: true });
       await writeFile(
         join(bookDir, "book.json"),
@@ -439,7 +460,7 @@ describe("CLI integration", () => {
     }, DOUBLE_CLI_INVOCATION_TEST_TIMEOUT_MS);
 
     it("shows a migration hint for legacy pre-v0.6 books", async () => {
-      const bookDir = join(projectDir, "books", "legacy-status-hint");
+      const bookDir = await createBookSource("legacy-status-hint", "Legacy Status Hint");
       const storyDir = join(bookDir, "story");
       await mkdir(join(bookDir, "chapters"), { recursive: true });
       await mkdir(storyDir, { recursive: true });
@@ -468,7 +489,7 @@ describe("CLI integration", () => {
 
     it("reports persisted chapter file count instead of runtime progress when state runs ahead", async () => {
       const bookId = "ahead-status";
-      const bookDir = join(projectDir, "books", bookId);
+      const bookDir = await createBookSource(bookId, "Ahead Status Book");
       const chaptersDir = join(bookDir, "chapters");
       const stateDir = join(bookDir, "story", "state");
 
@@ -605,7 +626,7 @@ describe("CLI integration", () => {
     });
 
     it("reports legacy books in the version migration check", async () => {
-      const bookDir = join(projectDir, "books", "legacy-doctor-hint");
+      const bookDir = await createBookSource("legacy-doctor-hint", "Legacy Doctor Hint");
       const storyDir = join(bookDir, "story");
       await mkdir(join(bookDir, "chapters"), { recursive: true });
       await mkdir(storyDir, { recursive: true });
@@ -636,7 +657,7 @@ describe("CLI integration", () => {
 
   describe("inkos write", () => {
     it("warns before writing when the target book still uses legacy format", async () => {
-      const bookDir = join(projectDir, "books", "legacy-write-hint");
+      const bookDir = await createBookSource("legacy-write-hint", "Legacy Write Hint");
       const storyDir = join(bookDir, "story");
       await mkdir(join(bookDir, "chapters"), { recursive: true });
       await mkdir(storyDir, { recursive: true });
@@ -667,7 +688,7 @@ describe("CLI integration", () => {
 
     it("fails rewrite before deleting chapters when the rollback snapshot is missing", async () => {
       const bookId = "rewrite-missing-snapshot";
-      const bookDir = join(projectDir, "books", bookId);
+      const bookDir = await createBookSource(bookId, "Rewrite Missing Snapshot");
       const storyDir = join(bookDir, "story");
       const chaptersDir = join(bookDir, "chapters");
 
@@ -708,7 +729,7 @@ describe("CLI integration", () => {
     it("keeps next chapter at 2 after rewrite 2 trims later chapters, even if regeneration fails", async () => {
       const state = new StateManager(projectDir);
       const bookId = "rewrite-cli";
-      const bookDir = join(projectDir, "books", bookId);
+      const bookDir = await createBookSource(bookId, "Rewrite CLI", "en");
       const storyDir = join(bookDir, "story");
       const chaptersDir = join(bookDir, "chapters");
       const stateDir = join(storyDir, "state");
@@ -788,7 +809,7 @@ describe("CLI integration", () => {
 
       const state = new StateManager(projectDir);
       const bookId = "review-approve-cli";
-      const bookDir = join(projectDir, "books", bookId);
+      const bookDir = await createBookSource(bookId, "Review Approve CLI");
       const storyDir = join(bookDir, "story");
       const chaptersDir = join(bookDir, "chapters");
       await mkdir(chaptersDir, { recursive: true });
@@ -855,7 +876,7 @@ describe("CLI integration", () => {
       const initialized = await stat(configPath).then(() => true).catch(() => false);
       if (!initialized) run(["init"]);
 
-      const bookDir = join(projectDir, "books", "cli-book");
+      const bookDir = await createBookSource("cli-book", "CLI Book");
       const storyDir = join(bookDir, "story");
       await mkdir(join(storyDir, "runtime"), { recursive: true });
 
@@ -935,7 +956,7 @@ describe("CLI integration", () => {
       expect(data.bookId).toBe("cli-book");
       expect(data.chapterNumber).toBe(1);
       expect(data.intentPath).toContain("story/runtime/chapter-0001.intent.md");
-      await expect(stat(join(projectDir, "books", "cli-book", data.intentPath))).resolves.toBeTruthy();
+      await expect(stat(join(workDirectory(projectDir, "cli-book"), "source", data.intentPath))).resolves.toBeTruthy();
     });
 
     it("runs compose chapter and returns runtime artifact paths in JSON mode", async () => {
@@ -948,15 +969,15 @@ describe("CLI integration", () => {
       expect(data.ruleStackPath).toContain("story/runtime/chapter-0001.rule-stack.yaml");
       expect(data.tracePath).toContain("story/runtime/chapter-0001.trace.json");
 
-      await expect(stat(join(projectDir, "books", "cli-book", data.contextPath))).resolves.toBeTruthy();
-      await expect(stat(join(projectDir, "books", "cli-book", data.ruleStackPath))).resolves.toBeTruthy();
-      await expect(stat(join(projectDir, "books", "cli-book", data.tracePath))).resolves.toBeTruthy();
+      await expect(stat(join(workDirectory(projectDir, "cli-book"), "source", data.contextPath))).resolves.toBeTruthy();
+      await expect(stat(join(workDirectory(projectDir, "cli-book"), "source", data.ruleStackPath))).resolves.toBeTruthy();
+      await expect(stat(join(workDirectory(projectDir, "cli-book"), "source", data.tracePath))).resolves.toBeTruthy();
     });
 
     it("re-plans from outline when compose runs without a new context (Phase 1: persisted plans disabled)", async () => {
       const output = run(["compose", "chapter", "cli-book", "--json"]);
       const data = JSON.parse(output);
-      const intentMarkdown = await readFile(join(projectDir, "books", "cli-book", data.intentPath), "utf-8");
+      const intentMarkdown = await readFile(join(workDirectory(projectDir, "cli-book"), "source", data.intentPath), "utf-8");
 
       expect(typeof data.goal).toBe("string");
       expect(data.goal.length).toBeGreaterThan(0);
@@ -970,7 +991,7 @@ describe("CLI integration", () => {
       const initialized = await stat(configPath).then(() => true).catch(() => false);
       if (!initialized) run(["init"]);
 
-      const bookDir = join(projectDir, "books", "export-book");
+      const bookDir = await createBookSource("export-book", "Export Book");
       await mkdir(join(bookDir, "chapters"), { recursive: true });
 
       await writeFile(

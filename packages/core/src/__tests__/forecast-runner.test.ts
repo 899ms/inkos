@@ -54,7 +54,7 @@ describe("narrative forecast runner", () => {
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "inkos-forecast-run-"));
-    bookDir = join(root, "books", BOOK_ID);
+    bookDir = join(root, "works", BOOK_ID, "source");
     await writeForecastFixtureBook(bookDir);
   });
   afterEach(async () => {
@@ -227,7 +227,7 @@ describe("narrative forecast runner", () => {
   });
 
   it("errors early when the book does not exist", async () => {
-    await mkdir(join(root, "books"), { recursive: true });
+    await mkdir(join(root, "works"), { recursive: true });
     await expect(createNarrativeForecast({ ...createOptions(), bookId: "nope" })).rejects.toThrow(/nope/);
   });
 });

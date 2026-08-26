@@ -259,14 +259,14 @@ describe("runAgentSession cache — bookId switch", () => {
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), "inkos-agent-cache-"));
     otherProjectRoot = null;
-    await mkdir(join(projectRoot, "books", "book-a", "story"), { recursive: true });
+    await mkdir(join(projectRoot, "works", "book-a", "source", "story"), { recursive: true });
     await writeFile(
-      join(projectRoot, "books", "book-a", "story", "story_bible.md"),
+      join(projectRoot, "works", "book-a", "source", "story", "story_bible.md"),
       "书A 的真相",
     );
-    await mkdir(join(projectRoot, "books", "book-b", "story"), { recursive: true });
+    await mkdir(join(projectRoot, "works", "book-b", "source", "story"), { recursive: true });
     await writeFile(
-      join(projectRoot, "books", "book-b", "story", "story_bible.md"),
+      join(projectRoot, "works", "book-b", "source", "story", "story_bible.md"),
       "书B 的真相",
     );
     agentInstances.length = 0;
@@ -451,9 +451,9 @@ describe("runAgentSession cache — bookId switch", () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
     otherProjectRoot = await mkdtemp(join(tmpdir(), "inkos-agent-cache-other-"));
-    await mkdir(join(otherProjectRoot, "books", "book-a", "story"), { recursive: true });
+    await mkdir(join(otherProjectRoot, "works", "book-a", "source", "story"), { recursive: true });
     await writeFile(
-      join(otherProjectRoot, "books", "book-a", "story", "story_bible.md"),
+      join(otherProjectRoot, "works", "book-a", "source", "story", "story_bible.md"),
       "另一个 projectRoot 的真相",
     );
 

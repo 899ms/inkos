@@ -828,19 +828,19 @@ describe("StateManager", () => {
   // -------------------------------------------------------------------------
 
   describe("path helpers", () => {
-    it("booksDir points to <projectRoot>/books", () => {
-      expect(manager.booksDir).toBe(join(tempDir, "books"));
+    it("booksDir points to the unified works root", () => {
+      expect(manager.booksDir).toBe(join(tempDir, "works"));
     });
 
-    it("bookDir returns <booksDir>/<bookId>", () => {
+    it("bookDir returns the long-form Work source directory", () => {
       expect(manager.bookDir("my-book")).toBe(
-        join(tempDir, "books", "my-book"),
+        join(tempDir, "works", "my-book", "source"),
       );
     });
 
     it("stateDir returns <bookDir>/story/state", () => {
       expect(manager.stateDir("my-book")).toBe(
-        join(tempDir, "books", "my-book", "story", "state"),
+        join(tempDir, "works", "my-book", "source", "story", "state"),
       );
     });
   });

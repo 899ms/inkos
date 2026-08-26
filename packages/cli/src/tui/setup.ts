@@ -261,7 +261,7 @@ async function autoInit(cwd: string): Promise<void> {
   console.log();
   console.log(`  ${c("◌", cyan)} ${c(messages.initializing, dim)}`);
 
-  await mkdir(join(cwd, "books"), { recursive: true });
+  await mkdir(join(cwd, "works"), { recursive: true });
   await mkdir(join(cwd, "radar"), { recursive: true });
 
   const config = {

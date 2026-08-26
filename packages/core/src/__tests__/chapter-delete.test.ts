@@ -30,7 +30,7 @@ async function setupBook(params: {
   readonly snapshotChapters: ReadonlyArray<number>;
 }): Promise<{ readonly root: string; readonly bookDir: string }> {
   const root = await mkdtemp(join(tmpdir(), "inkos-chapter-delete-"));
-  const bookDir = join(root, "books", params.bookId);
+  const bookDir = join(root, "works", params.bookId, "source");
   const storyDir = join(bookDir, "story");
   await mkdir(join(bookDir, "chapters"), { recursive: true });
   await mkdir(storyDir, { recursive: true });

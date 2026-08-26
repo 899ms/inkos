@@ -500,7 +500,7 @@ describe("PipelineRunner", () => {
     try {
       await runner.initBook(book);
 
-      const storyDir = join(root, "books", bookId, "story");
+      const storyDir = join(root, "works", bookId, "source", "story");
       const authorIntent = await readFile(join(storyDir, "author_intent.md"), "utf-8");
       const currentFocus = await readFile(join(storyDir, "current_focus.md"), "utf-8");
       const runtimeDir = await stat(join(storyDir, "runtime"));
@@ -563,7 +563,7 @@ describe("PipelineRunner", () => {
         undefined,
       );
 
-      const storyDir = join(root, "books", bookId, "story");
+      const storyDir = join(root, "works", bookId, "source", "story");
       await expect(readFile(join(storyDir, "author_intent.md"), "utf-8"))
         .resolves.toContain("冷硬、克制、利益驱动");
       await expect(readFile(join(storyDir, "current_focus.md"), "utf-8"))
@@ -783,7 +783,7 @@ describe("PipelineRunner", () => {
     try {
       await runner.writeDraft(bookId);
 
-      const storyDir = join(root, "books", bookId, "story");
+      const storyDir = join(root, "works", bookId, "source", "story");
       const authorIntent = await readFile(join(storyDir, "author_intent.md"), "utf-8");
       const currentFocus = await readFile(join(storyDir, "current_focus.md"), "utf-8");
       const runtimeDir = await stat(join(storyDir, "runtime"));

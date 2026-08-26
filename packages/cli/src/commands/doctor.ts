@@ -218,7 +218,7 @@ export const doctorCommand = new Command("doctor")
     // 5b. Check version migration status
     {
       const { existsSync } = await import("node:fs");
-      const hasStructuredState = existsSync(join(root, "books"));
+      const hasStructuredState = existsSync(join(root, "works"));
       if (hasStructuredState) {
         const { StateManager } = await import("@actalk/inkos-core");
         const sm = new StateManager(root);

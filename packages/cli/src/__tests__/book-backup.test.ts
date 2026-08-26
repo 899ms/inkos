@@ -2,6 +2,7 @@ import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWorkManifest, saveWorkManifest, workDirectory } from "@actalk/inkos-core";
 import { createBookBackup, listBookBackups, restoreBookBackup } from "../book-backup.js";
 
 const logMock = vi.fn();
@@ -21,7 +22,14 @@ async function exists(path: string): Promise<boolean> {
 
 async function setupBook(bookId: string): Promise<string> {
   projectRoot = await mkdtemp(join(tmpdir(), "inkos-book-backup-"));
-  const bookDir = join(projectRoot, "books", bookId);
+  await saveWorkManifest(projectRoot, createWorkManifest({
+    id: bookId,
+    title: bookId,
+    profileId: "longform-novel",
+    language: "zh",
+  }));
+  const workDir = workDirectory(projectRoot, bookId);
+  const bookDir = join(workDir, "source");
   await mkdir(join(bookDir, "chapters"), { recursive: true });
   await mkdir(join(bookDir, "story"), { recursive: true });
   await writeFile(join(bookDir, "book.json"), JSON.stringify({ id: bookId, title: bookId, language: "zh" }), "utf-8");
@@ -40,8 +48,9 @@ describe("book backup module", () => {
 
     expect(result.backupId).toBe("20260715-081233");
     const backupDir = join(projectRoot, ".inkos", "backups", "backbook", "20260715-081233");
-    await expect(readFile(join(backupDir, "chapters", "0001_起风.md"), "utf-8")).resolves.toBe("第一章原文。");
-    await expect(readFile(join(backupDir, "story", "current_state.md"), "utf-8")).resolves.toBe("原始状态");
+    await expect(readFile(join(backupDir, "work.json"), "utf-8")).resolves.toContain('"profileId": "longform-novel"');
+    await expect(readFile(join(backupDir, "source", "chapters", "0001_起风.md"), "utf-8")).resolves.toBe("第一章原文。");
+    await expect(readFile(join(backupDir, "source", "story", "current_state.md"), "utf-8")).resolves.toBe("原始状态");
     // The original book stays in place.
     await expect(exists(join(bookDir, "book.json"))).resolves.toBe(true);
   });
@@ -93,8 +102,8 @@ describe("book backup module", () => {
 
     // The pre-restore auto-backup preserves the botched state.
     const preRestoreDir = join(projectRoot, ".inkos", "backups", "restorebook", "20260715-090000-pre-restore");
-    await expect(readFile(join(preRestoreDir, "chapters", "0001_起风.md"), "utf-8")).resolves.toBe("改坏了的第一章。");
-    await expect(readFile(join(preRestoreDir, "chapters", "0002_多余.md"), "utf-8")).resolves.toBe("多写的一章。");
+    await expect(readFile(join(preRestoreDir, "source", "chapters", "0001_起风.md"), "utf-8")).resolves.toBe("改坏了的第一章。");
+    await expect(readFile(join(preRestoreDir, "source", "chapters", "0002_多余.md"), "utf-8")).resolves.toBe("多写的一章。");
   });
 
   it("rejects backing up a book that does not exist", async () => {

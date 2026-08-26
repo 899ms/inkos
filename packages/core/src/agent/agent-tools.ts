@@ -3533,7 +3533,7 @@ const ReadParams = Type.Object({
 
 export interface ReadToolOptions {
   readonly allowSystemPaths?: boolean;
-  readonly scope?: "books" | "project";
+  readonly scope?: "works" | "project";
 }
 
 function resolveReadPath(readRoot: string, requestedPath: string, options: ReadToolOptions): string {
@@ -3547,12 +3547,12 @@ export function createReadTool(
   projectRoot: string,
   options: ReadToolOptions = {},
 ): AgentTool<typeof ReadParams> {
-  const readRoot = options.scope === "project" ? projectRoot : join(projectRoot, "books");
+  const readRoot = options.scope === "project" ? projectRoot : join(projectRoot, "works");
   const description = options.allowSystemPaths
-    ? "Read a file. Relative paths resolve under books/; absolute paths read from the system filesystem."
+    ? "Read a file. Relative paths resolve under works/; absolute paths read from the system filesystem."
     : options.scope === "project"
       ? "Read a UTF-8 file inside the current InkOS project. Path is relative to the project root."
-    : "Read a file from the book directory. Path is relative to books/.";
+    : "Read a file from the Work store. Path is relative to works/.";
 
   return {
     name: "read",
@@ -3579,18 +3579,18 @@ export function createReadTool(
 // ---------------------------------------------------------------------------
 
 const EditParams = Type.Object({
-  path: Type.String({ description: "File path relative to books/" }),
+  path: Type.String({ description: "File path relative to works/" }),
   old_string: Type.String({ description: "Exact string to find in the file" }),
   new_string: Type.String({ description: "Replacement string" }),
 });
 
 export function createEditTool(projectRoot: string): AgentTool<typeof EditParams> {
-  const booksRoot = join(projectRoot, "books");
+  const worksRoot = join(projectRoot, "works");
 
   return {
     name: "edit",
     description:
-      "Edit a file under books/ via exact string replacement. " +
+      "Edit a file under works/ via exact string replacement. " +
       "old_string must appear exactly once in the file. " +
       "For chapter text use patch_chapter_text; for canonical truth files (outline/story_frame.md, outline/volume_map.md, roles/**/*.md, current_focus.md, author_intent.md) prefer write_truth_file; " +
       "to rewrite or polish a whole chapter call sub_agent with agent=\"reviser\".",
@@ -3601,7 +3601,7 @@ export function createEditTool(projectRoot: string): AgentTool<typeof EditParams
       params: Static<typeof EditParams>,
     ): Promise<AgentToolResult<undefined>> {
       try {
-        const filePath = safeBooksPath(booksRoot, params.path);
+        const filePath = safeBooksPath(worksRoot, params.path);
         const content = await readFile(filePath, "utf-8");
         const idx = content.indexOf(params.old_string);
         if (idx === -1) {
@@ -3625,17 +3625,17 @@ export function createEditTool(projectRoot: string): AgentTool<typeof EditParams
 // ---------------------------------------------------------------------------
 
 const WriteFileParams = Type.Object({
-  path: Type.String({ description: "File path relative to books/" }),
+  path: Type.String({ description: "File path relative to works/" }),
   content: Type.String({ description: "Full file content to write" }),
 });
 
 export function createWriteFileTool(projectRoot: string): AgentTool<typeof WriteFileParams> {
-  const booksRoot = join(projectRoot, "books");
+  const worksRoot = join(projectRoot, "works");
 
   return {
     name: "write",
     description:
-      "Create a new file, or fully replace an existing file's content under books/. " +
+      "Create a new file, or fully replace an existing file's content under works/. " +
       "Parent directories are created automatically. Existing content is overwritten silently — " +
       "for canonical truth files prefer write_truth_file; " +
       "for whole-chapter rewrites/polishing call sub_agent with agent=\"reviser\".",
@@ -3646,7 +3646,7 @@ export function createWriteFileTool(projectRoot: string): AgentTool<typeof Write
       params: Static<typeof WriteFileParams>,
     ): Promise<AgentToolResult<undefined>> {
       try {
-        const filePath = safeBooksPath(booksRoot, params.path);
+        const filePath = safeBooksPath(worksRoot, params.path);
         const parentDir = resolve(filePath, "..");
         const { mkdir } = await import("node:fs/promises");
         await mkdir(parentDir, { recursive: true });
@@ -3669,7 +3669,7 @@ const GrepParams = Type.Object({
 });
 
 export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams> {
-  const booksRoot = join(projectRoot, "books");
+  const worksRoot = join(projectRoot, "works");
 
   return {
     name: "grep",
@@ -3682,7 +3682,7 @@ export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams
       params: Static<typeof GrepParams>,
     ): Promise<AgentToolResult<undefined>> {
       try {
-        const bookDir = safeBooksPath(booksRoot, params.bookId);
+        const bookDir = safeBooksPath(worksRoot, join(params.bookId, "source"));
         const regex = new RegExp(params.pattern, "gi");
         const results: string[] = [];
 
@@ -3744,7 +3744,7 @@ const LsParams = Type.Object({
 });
 
 export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
-  const booksRoot = join(projectRoot, "books");
+  const worksRoot = join(projectRoot, "works");
 
   return {
     name: "ls",
@@ -3756,7 +3756,7 @@ export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
       params: Static<typeof LsParams>,
     ): Promise<AgentToolResult<undefined>> {
       try {
-        const base = safeBooksPath(booksRoot, params.bookId);
+        const base = safeBooksPath(worksRoot, join(params.bookId, "source"));
         const target = params.subdir ? safeBooksPath(base, params.subdir) : base;
 
         const entries = await readdir(target);

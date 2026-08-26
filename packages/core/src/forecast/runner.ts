@@ -1,5 +1,6 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
+import { workDirectory } from "../harness/work-store.js";
 import type { AgentContext } from "../agents/base.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { NarrativeForecastAgent } from "./agent.js";
@@ -187,11 +188,11 @@ async function isForecastStale(
 }
 
 async function resolveBookDir(projectRoot: string, bookId: string): Promise<string> {
-  const bookDir = join(projectRoot, "books", bookId);
+  const bookDir = join(workDirectory(projectRoot, bookId), "source");
   try {
     await access(join(bookDir, "book.json"));
   } catch {
-    throw new Error(`Book "${bookId}" not found under ${join(projectRoot, "books")}.`);
+    throw new Error(`Book Work not found: ${bookId}.`);
   }
   return bookDir;
 }

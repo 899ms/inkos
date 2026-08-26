@@ -132,7 +132,7 @@ export async function initializeProjectDirectory(
   }
 
   await mkdir(projectDir, { recursive: true });
-  await mkdir(join(projectDir, "books"), { recursive: true });
+  await mkdir(join(projectDir, "works"), { recursive: true });
   await mkdir(join(projectDir, "radar"), { recursive: true });
 
   await writeFile(

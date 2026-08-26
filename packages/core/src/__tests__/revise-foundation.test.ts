@@ -4,6 +4,7 @@ import { FoundationReviewerAgent } from "../agents/foundation-reviewer.js";
 import type { ArchitectOutput } from "../agents/architect.js";
 import type { BookConfig } from "../models/book.js";
 import type { LLMClient } from "../llm/provider.js";
+import { createWorkManifest, saveWorkManifest } from "../harness/index.js";
 
 // 测试 stub：chat 会被 vi.spyOn 拦截，client.defaults 运行时根本不会被读取。
 // 故意不填 temperature / maxTokens 等数字，避免在测试里留下"推荐配置"的错误
@@ -114,7 +115,7 @@ describe("pipeline.reviseFoundation", () => {
     const { StateManager } = await import("../state/manager.js");
 
     const root = await mkdtemp(join(tmpdir(), "inkos-revise-e2e-"));
-    const bookDir = join(root, "books", "legacy-book");
+    const bookDir = join(root, "works", "legacy-book", "source");
 
     try {
       // Construct a 旧书 on disk with 4 legacy files
@@ -154,6 +155,7 @@ describe("pipeline.reviseFoundation", () => {
         model: "test-model",
       } as unknown as ConstructorParameters<typeof PipelineRunner>[0]);
 
+      await saveWorkManifest(root, createWorkManifest({ id: "legacy-book", title: "旧书", profileId: "longform-novel", language: "zh" }));
       await runner.reviseFoundation("legacy-book", "升级到段落式");
 
       // New files created
@@ -180,7 +182,7 @@ describe("pipeline.reviseFoundation", () => {
     const { StateManager } = await import("../state/manager.js");
 
     const root = await mkdtemp(join(tmpdir(), "inkos-revise-runtime-"));
-    const bookDir = join(root, "books", "live-book");
+    const bookDir = join(root, "works", "live-book", "source");
 
     try {
       // 构造一本已经写过 N 章的 legacy 旧书——架构稿文件 + 运行时状态文件
@@ -220,6 +222,7 @@ describe("pipeline.reviseFoundation", () => {
         state, projectRoot: root, client: TEST_CLIENT, model: "test-model",
       } as unknown as ConstructorParameters<typeof PipelineRunner>[0]);
 
+      await saveWorkManifest(root, createWorkManifest({ id: "live-book", title: "写了 20 章的书", profileId: "longform-novel", language: "zh" }));
       await runner.reviseFoundation("live-book", "改下主角设定");
 
       // 5 个运行时状态文件**必须保持原内容**（消费者看到的是"写了 20 章后"的状态，
@@ -254,7 +257,7 @@ describe("pipeline.reviseFoundation", () => {
     const { StateManager } = await import("../state/manager.js");
 
     const root = await mkdtemp(join(tmpdir(), "inkos-revise-phase5-"));
-    const bookDir = join(root, "books", "phase5-book");
+    const bookDir = join(root, "works", "phase5-book", "source");
 
     try {
       // 构造一本已经是 Phase 5 的书
@@ -305,6 +308,7 @@ describe("pipeline.reviseFoundation", () => {
         state, projectRoot: root, client: TEST_CLIENT, model: "test-model",
       } as unknown as ConstructorParameters<typeof PipelineRunner>[0]);
 
+      await saveWorkManifest(root, createWorkManifest({ id: "phase5-book", title: "Phase 5 书", profileId: "longform-novel", language: "zh" }));
       await runner.reviseFoundation("phase5-book", "调整某个角色设定");
 
       // 检查传给 architect 的 reviseFrom.storyBible 和 characterMatrix 是权威全文，
@@ -328,7 +332,7 @@ describe("pipeline.reviseFoundation", () => {
     const { StateManager } = await import("../state/manager.js");
 
     const root = await mkdtemp(join(tmpdir(), "inkos-revise-ghost-"));
-    const bookDir = join(root, "books", "ghost-book");
+    const bookDir = join(root, "works", "ghost-book", "source");
 
     try {
       // 初始状态：Phase 5 书已有 3 个主要角色、2 个次要角色
@@ -372,6 +376,7 @@ describe("pipeline.reviseFoundation", () => {
         state, projectRoot: root, client: TEST_CLIENT, model: "test-model",
       } as unknown as ConstructorParameters<typeof PipelineRunner>[0]);
 
+      await saveWorkManifest(root, createWorkManifest({ id: "ghost-book", title: "Ghost Book", profileId: "longform-novel", language: "zh" }));
       await runner.reviseFoundation("ghost-book", "精简角色");
 
       // 新输出的 2 个 role 应该存在
@@ -395,7 +400,7 @@ describe("pipeline.reviseFoundation", () => {
     const { StateManager } = await import("../state/manager.js");
 
     const root = await mkdtemp(join(tmpdir(), "inkos-revise-legacyfallback-"));
-    const bookDir = join(root, "books", "safe-book");
+    const bookDir = join(root, "works", "safe-book", "source");
 
     try {
       // 构造 Phase 5 书 —— outline/ + roles/ 有原始内容
@@ -433,6 +438,7 @@ describe("pipeline.reviseFoundation", () => {
       } as unknown as ConstructorParameters<typeof PipelineRunner>[0]);
 
       // revise 应该抛错
+      await saveWorkManifest(root, createWorkManifest({ id: "safe-book", title: "Safe", profileId: "longform-novel", language: "zh" }));
       await expect(runner.reviseFoundation("safe-book", "改"))
         .rejects.toThrow(/legacy-format output.*NOT been modified/);
 
@@ -464,7 +470,7 @@ describe("pipeline.reviseFoundation", () => {
     const { StateManager } = await import("../state/manager.js");
 
     const root = await mkdtemp(join(tmpdir(), "inkos-revise-backup-"));
-    const bookDir = join(root, "books", "p5");
+    const bookDir = join(root, "works", "p5", "source");
 
     try {
       await mkdir(join(bookDir, "story", "outline"), { recursive: true });
@@ -498,6 +504,7 @@ describe("pipeline.reviseFoundation", () => {
         state, projectRoot: root, client: TEST_CLIENT, model: "test-model",
       } as unknown as ConstructorParameters<typeof PipelineRunner>[0]);
 
+      await saveWorkManifest(root, createWorkManifest({ id: "p5", title: "P5", profileId: "longform-novel", language: "zh" }));
       await runner.reviseFoundation("p5", "改");
 
       const entries = await readdir(join(bookDir, "story"));
