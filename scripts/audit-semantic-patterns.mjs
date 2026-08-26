@@ -95,6 +95,10 @@ function isLikelySemanticDecision(path, line, windowText) {
   if (line.includes("trimmed.startsWith(\"#\")")) return false;
   if (line.includes("actionSource") && line.includes("startsWith(\"/\")")) return false;
   if (line.includes("startsWith(\"/\")")) return false;
+  // Explicit slash-command grammar and Pi tool namespaces are protocols, not
+  // natural-language intent inference.
+  if (path.endsWith("agent-input.ts") && line.includes("/^\\/")) return false;
+  if (path.endsWith("agent-session.ts") && line.includes("toolName.includes(\"__\")")) return false;
   if (line.includes("endsWith(") && !hasAny(windowText, ["instruction", "intent"])) return false;
   return true;
 }
