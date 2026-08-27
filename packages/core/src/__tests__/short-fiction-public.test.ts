@@ -93,6 +93,18 @@ describe("public short-fiction chain", () => {
     ]);
   });
 
+  it("caps each writer call even when the model advertises a very large output window", () => {
+    expect(buildShortFictionChapterBatches(
+      Array.from({ length: 12 }, (_, index) => index + 1),
+      1000,
+      65_536,
+    )).toEqual([
+      [1, 2, 3, 4],
+      [5, 6, 7, 8],
+      [9, 10, 11, 12],
+    ]);
+  });
+
   it("rejects non-empty but near-empty chapters before final promotion", () => {
     const draft = parseShortFictionBatchDraft(`
 === SHORT_FICTION_TITLE ===

@@ -17,4 +17,18 @@ describe("short-fiction writer craft prompt", () => {
   it("restrains simile over-reliance (B2)", () => {
     expect(prompt).toContain("明喻节制");
   });
+
+  it("carries prior batches as continuity context without asking for rewrites", () => {
+    const continued = buildShortFictionWriterUserPrompt({
+      direction: "悬疑短篇",
+      outlineMarkdown: "## 大纲",
+      chapterCount: 12,
+      charsPerChapter: 1000,
+      chapterNumbers: [5, 6, 7, 8],
+      previousDraftMarkdown: "=== CHAPTER 4 CONTENT ===\n钥匙落进排水沟。",
+    });
+    expect(continued).toContain("已写章节（权威连续性上下文）");
+    expect(continued).toContain("钥匙落进排水沟");
+    expect(continued).toContain("不要重写");
+  });
 });

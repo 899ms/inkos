@@ -31,6 +31,7 @@ export interface ShortFictionDraftPromptInput {
   readonly chapterCount: number;
   readonly charsPerChapter: number;
   readonly chapterNumbers?: readonly number[];
+  readonly previousDraftMarkdown?: string;
 }
 
 export interface ShortFictionDraftContinuationPromptInput extends ShortFictionDraftPromptInput {
@@ -258,6 +259,14 @@ export function buildShortFictionWriterUserPrompt(
       "",
       "## Story Plan",
       input.outlineMarkdown,
+      ...(input.previousDraftMarkdown?.trim()
+        ? [
+            "",
+            "## Previously Written Chapters (authoritative continuity context)",
+            "Continue from this prose without rewriting it or contradicting its established details.",
+            input.previousDraftMarkdown.trim(),
+          ]
+        : []),
       "",
       "## Output Format",
       "=== SHORT_FICTION_TITLE ===",
@@ -288,6 +297,14 @@ export function buildShortFictionWriterUserPrompt(
     "",
     "## 故事方案",
     input.outlineMarkdown,
+    ...(input.previousDraftMarkdown?.trim()
+      ? [
+          "",
+          "## 已写章节（权威连续性上下文）",
+          "承接这些正文继续写，不要重写，也不要推翻其中已经成立的细节。",
+          input.previousDraftMarkdown.trim(),
+        ]
+      : []),
     "",
     "## 输出格式",
     "=== SHORT_FICTION_TITLE ===",

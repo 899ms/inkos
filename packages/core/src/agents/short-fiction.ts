@@ -177,7 +177,14 @@ export class ShortFictionWriterAgent extends BaseAgent {
       const response = await retryShortFictionCall(() =>
         this.chat([
           { role: "system", content: buildShortFictionWriterSystemPrompt(input.language) },
-          { role: "user", content: buildShortFictionWriterUserPrompt({ ...input, chapterNumbers }, input.language) },
+          {
+            role: "user",
+            content: buildShortFictionWriterUserPrompt({
+              ...input,
+              chapterNumbers,
+              ...(outputs.length > 0 ? { previousDraftMarkdown: outputs.join("\n\n") } : {}),
+            }, input.language),
+          },
         ], {
           temperature: 0.58,
           maxTokens: estimateShortFictionMaxTokens(
@@ -572,6 +579,8 @@ function estimateShortFictionMaxTokens(
   return Math.min(requested, safeShortFictionOutputBudget(modelMaxOutput));
 }
 
+const MAX_SHORT_FICTION_CHAPTERS_PER_CALL = 4;
+
 export function minimumShortFictionChapterLength(targetLength: number): number {
   // This is a corruption/truncation floor, not the editorial length target.
   // Normal range observations remain stricter; this gate only prevents a title
@@ -586,7 +595,10 @@ export function buildShortFictionChapterBatches(
 ): number[][] {
   const budget = safeShortFictionOutputBudget(modelMaxOutput);
   const perChapter = Math.max(1, Math.ceil(charsPerChapter * 2.2));
-  const batchSize = Math.max(1, Math.floor((budget - 2048) / perChapter));
+  const batchSize = Math.max(1, Math.min(
+    MAX_SHORT_FICTION_CHAPTERS_PER_CALL,
+    Math.floor((budget - 2048) / perChapter),
+  ));
   const normalized = [...new Set(chapterNumbers)]
     .filter((chapter) => Number.isInteger(chapter) && chapter > 0)
     .sort((a, b) => a - b);
