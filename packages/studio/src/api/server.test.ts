@@ -3799,6 +3799,86 @@ describe("createStudioServer daemon lifecycle", () => {
     );
   });
 
+  it("binds domain-specific storyId results to their real Work", async () => {
+    const { createWorkManifest, saveWorkManifest } = await import("@actalk/inkos-core");
+    let shortSession: {
+      sessionId: string;
+      bookId: null;
+      sessionKind: string;
+      profileId: string;
+      workId: string | null;
+      title: null;
+      messages: unknown[];
+      events: unknown[];
+      draftRounds: unknown[];
+      createdAt: number;
+      updatedAt: number;
+    } = {
+      sessionId: "short-work-session",
+      bookId: null,
+      sessionKind: "short",
+      profileId: "short-fiction",
+      workId: null,
+      title: null,
+      messages: [],
+      events: [],
+      draftRounds: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    loadBookSessionMock.mockImplementation(async () => shortSession);
+    createAndPersistBookSessionMock.mockImplementation(async (
+      _projectRoot: string,
+      _bookId: string | null,
+      _sessionId?: string,
+      _sessionKind?: string,
+      options?: { profileId?: string; workId?: string | null },
+    ) => {
+      shortSession = {
+        ...shortSession,
+        profileId: options?.profileId ?? shortSession.profileId,
+        workId: options && "workId" in options ? options.workId ?? null : shortSession.workId,
+      };
+      return shortSession;
+    });
+    createShortFictionRunToolMock.mockImplementationOnce((_pipeline, projectRoot) => ({
+      name: "short_fiction_run",
+      execute: vi.fn(async () => {
+        const work = createWorkManifest({
+          id: "short-domain-id",
+          title: "Short Domain ID",
+          profileId: "short-fiction",
+          language: "en",
+        });
+        await mkdir(join(projectRoot, "works", work.id, "source"), { recursive: true });
+        await saveWorkManifest(projectRoot, work);
+        return {
+          content: [{ type: "text", text: "Short fiction completed." }],
+          details: { kind: "short_fiction_created", storyId: work.id },
+        };
+      }),
+    }));
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "Create the short.",
+        sessionId: shortSession.sessionId,
+        sessionKind: "short",
+        actionSource: "button",
+        requestedIntent: "short_run",
+        actionPayload: { shortRun: { direction: "harbor suspense", cover: false, language: "en" } },
+      }),
+    });
+
+    const body = await response.json() as { session?: { profileId?: string; workId?: string } };
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    expect(body.session).toMatchObject({ profileId: "short-fiction", workId: "short-domain-id" });
+  });
+
   it("does not bind a confirmed derivative result when its book artifact is missing", async () => {
     loadBookSessionMock.mockResolvedValue({
       sessionId: "missing-derivative-session",

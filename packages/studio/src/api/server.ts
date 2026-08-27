@@ -1755,8 +1755,12 @@ function resolveCreatedBookIdFromDetails(details: Readonly<Record<string, unknow
 
 function resolveCreatedWorkIdFromToolExec(exec: CollectedToolExec): string | null {
   if (exec.status !== "completed" || !exec.details || typeof exec.details !== "object") return null;
-  const workId = (exec.details as { workId?: unknown }).workId;
-  return typeof workId === "string" && workId.trim() ? workId.trim() : null;
+  const details = exec.details as Record<string, unknown>;
+  for (const key of ["workId", "storyId", "projectId", "worldId"]) {
+    const value = details[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 async function loadStudioBookListSummary(
