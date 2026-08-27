@@ -52,7 +52,7 @@ import {
   activatedSkillIds,
   mergeActivatedSkillGuidance,
 } from "../skills/activations.js";
-import { listWorkManifests } from "../harness/work-store.js";
+import { listWorkManifests, loadWorkManifest } from "../harness/work-store.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -3538,7 +3538,44 @@ export function createListWorksTool(projectRoot: string): AgentTool<typeof ListW
       }
       return textResult(works.map((work) => (
         `- title=${JSON.stringify(work.title)} | id=${JSON.stringify(work.id)} | profile=${work.profileId} | status=${work.status}`
-      )).join("\n"));
+      )).join("\n") + "\nUse workspace__inspect_work with an exact id to inspect its canonical artifact paths.");
+    },
+  };
+}
+
+const InspectWorkParams = Type.Object({
+  workId: Type.String({ description: "Exact Work ID returned by workspace__list_works." }),
+});
+
+export function createInspectWorkTool(projectRoot: string): AgentTool<typeof InspectWorkParams> {
+  return {
+    name: "inspect_work",
+    description:
+      "Inspect one Work manifest and return canonical current artifact paths. " +
+      "Use these paths with workspace__read; never invent truth.md or another filename.",
+    label: "Inspect Work",
+    parameters: InspectWorkParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof InspectWorkParams>,
+    ): Promise<AgentToolResult<undefined>> {
+      const work = await loadWorkManifest(projectRoot, params.workId);
+      const artifacts = work.artifacts.flatMap((artifact) => {
+        const revision = artifact.revisions.find((candidate) => candidate.id === artifact.currentRevisionId);
+        return revision
+          ? [`- artifact=${JSON.stringify(artifact.id)} | kind=${artifact.kind} | path=${JSON.stringify(`works/${work.id}/${revision.path}`)}`]
+          : [];
+      });
+      return textResult([
+        `title=${JSON.stringify(work.title)}`,
+        `id=${JSON.stringify(work.id)}`,
+        `profile=${work.profileId}`,
+        `language=${work.language}`,
+        `status=${work.status}`,
+        `lineage=${JSON.stringify(work.lineage)}`,
+        "Artifacts:",
+        ...(artifacts.length > 0 ? artifacts : ["- none"]),
+      ].join("\n"));
     },
   };
 }

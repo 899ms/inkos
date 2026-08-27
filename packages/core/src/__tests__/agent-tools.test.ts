@@ -7,6 +7,7 @@ import { ArchitectIncompleteFoundationError } from "../agents/architect.js";
 import {
   createReadTool,
   createListWorksTool,
+  createInspectWorkTool,
   createGenerateCoverTool,
   createSubAgentTool,
   createShortFictionRunTool,
@@ -108,6 +109,17 @@ describe("agent deterministic writing tools", () => {
     expect(content).toContain('title="潮汐档案验收"');
     expect(content).toContain('id="harbor-work"');
     expect(content).not.toContain(".inkos/books");
+  });
+
+  it("inspects canonical Work artifact paths without guessing filenames", async () => {
+    const tool = createInspectWorkTool(root);
+
+    const result = await tool.execute("inspect-work", { workId: "harbor" });
+    const content = result.content.find((item) => item.type === "text")?.text ?? "";
+
+    expect(content).toContain('id="harbor"');
+    expect(content).toContain('path="works/harbor/source/book.json"');
+    expect(content).not.toContain("truth.md");
   });
 
   it("writes truth files through the deterministic tool path", async () => {
