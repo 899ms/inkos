@@ -252,6 +252,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         sessionKind: data.session?.sessionKind ?? sessionKind,
         profileId: data.session?.profileId ?? binding?.profileId,
         workId: data.session?.workId ?? binding?.workId,
+        proposalAction: data.session?.proposalAction ?? binding?.proposalAction,
         playMode: data.session?.playMode,
         title: data.session?.title ?? null,
       });
@@ -288,6 +289,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         sessionKind,
         profileId: binding?.profileId,
         workId: binding?.workId,
+        proposalAction: binding?.proposalAction,
         playMode,
         title: null,
         isDraft: true,
@@ -422,6 +424,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
                 sessionKind: detail.sessionKind,
                 profileId: detail.profileId,
                 workId: detail.workId,
+                proposalAction: detail.proposalAction,
                 playMode: detail.playMode,
                 title: detail.title ?? null,
               })),
@@ -429,6 +432,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
               sessionKind: detail.sessionKind ?? runtime?.sessionKind,
               profileId: detail.profileId ?? runtime?.profileId,
               workId: detail.workId ?? runtime?.workId,
+              proposalAction: detail.proposalAction ?? runtime?.proposalAction,
               playMode: detail.playMode ?? runtime?.playMode,
               title: detail.title ?? runtime?.title ?? null,
               messages: nextMessages,
@@ -484,6 +488,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     const actionSource = options?.actionSource ?? "free-text";
     const profileId = options?.profileId ?? session.profileId;
     const workId = options?.workId ?? session.workId;
+    const proposalAction = session.proposalAction;
     const playMode = options?.playMode ?? session.playMode;
     // 确认式生产任务的发送轮不是"聊天轮"：请求会挂起到任务结束，
     // 期间用户仍可继续聊天，所以不置 isChatStreaming。
@@ -514,12 +519,12 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         await fetchJson<SessionResponse>("/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, bookId: session.bookId, sessionKind, playMode, profileId, workId }),
+          body: JSON.stringify({ sessionId, bookId: session.bookId, sessionKind, playMode, profileId, workId, proposalAction }),
         });
         // 落盘成功：把 isDraft 翻成 false，同时把 sessionId 追加进 sessionIdsByBook
         // 让侧边栏现在才看到这条会话。
         set((state) => ({
-          sessions: updateSession(state.sessions, sessionId, () => ({ isDraft: false, sessionKind, profileId, workId, playMode })),
+          sessions: updateSession(state.sessions, sessionId, () => ({ isDraft: false, sessionKind, profileId, workId, proposalAction, playMode })),
           sessionIdsByBook: {
             ...state.sessionIdsByBook,
             [bookKey(session.bookId)]: mergeSessionIds(

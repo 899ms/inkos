@@ -38,6 +38,17 @@ describe("createSessionRuntime", () => {
     const rt = createSessionRuntime({ sessionId: "s1", bookId: null, sessionKind: "play", playMode: "guided", title: null });
     expect(rt.playMode).toBe("guided");
   });
+
+  it("carries the creation-entry proposal action", () => {
+    const rt = createSessionRuntime({
+      sessionId: "s2",
+      bookId: null,
+      sessionKind: "chat",
+      proposalAction: "style_imitation",
+      title: null,
+    });
+    expect(rt.proposalAction).toBe("style_imitation");
+  });
 });
 
 describe("deriveResolvedProposals", () => {

@@ -69,6 +69,7 @@ export interface SessionSummary {
   readonly sessionKind?: ChatSessionKind;
   readonly profileId?: string;
   readonly workId?: string | null;
+  readonly proposalAction?: ChatRequestedIntent;
   readonly playMode?: PlayMode;
   readonly title: string | null;
   readonly messageCount: number;
@@ -90,6 +91,7 @@ export interface AgentResponse {
     readonly sessionKind?: ChatSessionKind;
     readonly profileId?: string;
     readonly workId?: string | null;
+    readonly proposalAction?: ChatRequestedIntent;
     readonly playMode?: PlayMode;
     readonly title?: string | null;
     readonly activeBookId?: string;
@@ -106,6 +108,7 @@ export interface SessionResponse {
     readonly sessionKind?: ChatSessionKind;
     readonly profileId?: string;
     readonly workId?: string | null;
+    readonly proposalAction?: ChatRequestedIntent;
     readonly playMode?: PlayMode;
     readonly title?: string | null;
     readonly activeBookId?: string;
@@ -172,6 +175,7 @@ export interface SessionRuntime {
   readonly sessionKind?: ChatSessionKind;
   readonly profileId?: string;
   readonly workId?: string | null;
+  readonly proposalAction?: ChatRequestedIntent;
   readonly playMode?: PlayMode;
   readonly title: string | null;
   readonly messages: ReadonlyArray<Message>;
@@ -226,8 +230,8 @@ export interface MessageActions {
   addErrorMessage: (sessionId: string, errorMsg: string) => void;
   loadSessionMessages: (sessionId: string, msgs: ReadonlyArray<SessionMessage>) => void;
   loadSessionList: (bookId: string | null) => Promise<ReadonlyArray<SessionSummary>>;
-  createSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode, binding?: { readonly profileId?: string; readonly workId?: string | null }) => Promise<string>;
-  createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode, binding?: { readonly profileId?: string; readonly workId?: string | null }) => string;
+  createSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode, binding?: { readonly profileId?: string; readonly workId?: string | null; readonly proposalAction?: ChatRequestedIntent }) => Promise<string>;
+  createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode, binding?: { readonly profileId?: string; readonly workId?: string | null; readonly proposalAction?: ChatRequestedIntent }) => string;
   setSessionPlayMode: (sessionId: string, playMode: PlayMode) => void;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;

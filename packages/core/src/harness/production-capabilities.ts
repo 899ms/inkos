@@ -74,6 +74,7 @@ export interface ProductionCapabilityEnvironment {
   readonly projectRoot: string;
   readonly sessionId: string;
   readonly profileId: string;
+  readonly proposalAction?: RequestedIntent;
   readonly work: WorkManifest | null;
   readonly language: string;
   readonly actionPayload?: ActionPayload;
@@ -176,7 +177,9 @@ export function createProductionCapabilityRegistry(
   const lang = environment.language === "en" ? "en" : "zh";
   const proposalTool = createProposeActionTool(lang, {
     sameSession: environment.sameSessionProposal,
-    proposalAction: environment.work ? undefined : proposalActionForProfile(environment.profileId),
+    proposalAction: environment.work
+      ? undefined
+      : proposedActionName(environment.proposalAction) ?? proposalActionForProfile(environment.profileId),
     requestedSkillIds: environment.requestedSkillIds,
     attachmentPaths: environment.attachmentPaths,
   });
@@ -347,6 +350,27 @@ export function createProductionCapabilityRegistry(
     createGenerateCoverTool(environment.projectRoot, { actionPayload: environment.actionPayload }),
   ]);
   return registry;
+}
+
+function proposedActionName(value: RequestedIntent | undefined): ProposedActionName | undefined {
+  if (value === "create_book"
+    || value === "short_run"
+    || value === "play_start"
+    || value === "generate_cover"
+    || value === "fanfic_init"
+    || value === "continuation_import"
+    || value === "spinoff_create"
+    || value === "style_imitation"
+    || value === "script_create"
+    || value === "storyboard_create"
+    || value === "interactive_film_create"
+    || value === "translation_create"
+    || value === "draft_structure"
+    || value === "connect_choice"
+    || value === "remove_node") {
+    return value;
+  }
+  return undefined;
 }
 
 function proposalActionForProfile(profileId: string): ProposedActionName | undefined {

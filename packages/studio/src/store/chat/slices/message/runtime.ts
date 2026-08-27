@@ -201,6 +201,7 @@ export function createSessionRuntime(input: {
   sessionKind?: SessionRuntime["sessionKind"];
   profileId?: string;
   workId?: string | null;
+  proposalAction?: SessionRuntime["proposalAction"];
   playMode?: SessionRuntime["playMode"];
   title: string | null;
   messages?: ReadonlyArray<Message>;
@@ -212,6 +213,7 @@ export function createSessionRuntime(input: {
     sessionKind: input.sessionKind,
     profileId: input.profileId,
     workId: input.workId,
+    proposalAction: input.proposalAction,
     playMode: input.playMode,
     title: input.title,
     messages: input.messages ?? [],
@@ -475,7 +477,7 @@ export function updateSession(
 
 export function upsertSessionSummary(
   sessions: Record<string, SessionRuntime>,
-  summary: Pick<SessionSummary, "sessionId" | "bookId" | "sessionKind" | "profileId" | "workId" | "playMode" | "title">,
+  summary: Pick<SessionSummary, "sessionId" | "bookId" | "sessionKind" | "profileId" | "workId" | "proposalAction" | "playMode" | "title">,
 ): Record<string, SessionRuntime> {
   const existing = sessions[summary.sessionId];
   return {
@@ -487,6 +489,7 @@ export function upsertSessionSummary(
           sessionKind: summary.sessionKind ?? existing.sessionKind,
           profileId: summary.profileId ?? existing.profileId,
           workId: summary.workId ?? existing.workId,
+          proposalAction: summary.proposalAction ?? existing.proposalAction,
           playMode: summary.playMode ?? existing.playMode,
           title: summary.title,
         }

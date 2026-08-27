@@ -1011,6 +1011,30 @@ describe("runAgentSession cache — bookId switch", () => {
     }
   });
 
+  it("narrows a generic adaptation entry to its one proposal action", async () => {
+    const sessionId = "imitation-proposal-session";
+    await runAgentSession(
+      {
+        sessionId,
+        bookId: null,
+        sessionKind: "chat",
+        profileId: "workspace-default",
+        proposalAction: "style_imitation",
+        language: "zh",
+        pipeline: {} as any,
+        projectRoot,
+        model: { provider: "x", id: "y", api: "anthropic-messages" } as any,
+      },
+      "讨论一个仿写方向",
+    );
+
+    const proposal = agentInstances.at(-1).state.tools.find((tool: any) => tool.name === "workspace__propose_action");
+    expect(proposal.parameters.properties.action).toMatchObject({ const: "style_imitation" });
+    expect(Object.keys(proposal.parameters.properties)).toContain("imitationCreate");
+    expect(Object.keys(proposal.parameters.properties)).not.toContain("createBook");
+    evictAgentCache(sessionId);
+  });
+
   it("lets production discussions read project-local sources before confirmation", async () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;

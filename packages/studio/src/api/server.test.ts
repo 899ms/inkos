@@ -3319,6 +3319,44 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
+  it("persists a validated creation-entry proposal action", async () => {
+    createAndPersistBookSessionMock.mockResolvedValueOnce({
+      sessionId: "imitation-session",
+      bookId: null,
+      sessionKind: "chat",
+      profileId: "workspace-default",
+      workId: null,
+      proposalAction: "style_imitation",
+      title: null,
+      messages: [],
+      events: [],
+      draftRounds: [],
+      createdAt: 10,
+      updatedAt: 10,
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "123456-imitation",
+        sessionKind: "chat",
+        proposalAction: "style_imitation",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(createAndPersistBookSessionMock).toHaveBeenCalledWith(
+      root,
+      null,
+      "123456-imitation",
+      "chat",
+      { profileId: "workspace-default", workId: null, proposalAction: "style_imitation" },
+    );
+  });
+
   it("binds Studio sessions to the Work profile and rejects missing explicit Works", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);

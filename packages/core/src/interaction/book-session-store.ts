@@ -69,6 +69,7 @@ async function appendSessionCreatedEvent(
       ...(session.sessionKind ? { sessionKind: session.sessionKind } : {}),
       ...(session.profileId ? { profileId: session.profileId } : {}),
       ...(session.workId !== undefined ? { workId: session.workId } : {}),
+      ...(session.proposalAction ? { proposalAction: session.proposalAction } : {}),
       ...(session.playMode ? { playMode: session.playMode } : {}),
       title: session.title,
       createdAt: session.createdAt,
@@ -85,6 +86,7 @@ async function appendSessionMetadataUpdatedEvent(
     readonly sessionKind?: SessionKind;
     readonly profileId?: string;
     readonly workId?: string | null;
+    readonly proposalAction?: string;
     readonly playMode?: PlayMode;
     readonly title?: string | null;
     readonly updatedAt: number;
@@ -101,6 +103,7 @@ async function appendSessionMetadataUpdatedEvent(
     ...(metadata.sessionKind ? { sessionKind: metadata.sessionKind } : {}),
     ...(metadata.profileId ? { profileId: metadata.profileId } : {}),
     ...(metadata.workId !== undefined ? { workId: metadata.workId } : {}),
+    ...(metadata.proposalAction ? { proposalAction: metadata.proposalAction } : {}),
     ...(metadata.playMode ? { playMode: metadata.playMode } : {}),
     ...("title" in metadata ? { title: metadata.title } : {}),
   }]);
@@ -125,6 +128,7 @@ export async function persistBookSession(
     ...(session.sessionKind ? { sessionKind: session.sessionKind } : {}),
     ...(session.profileId ? { profileId: session.profileId } : {}),
     ...(session.workId !== undefined ? { workId: session.workId } : {}),
+    ...(session.proposalAction ? { proposalAction: session.proposalAction } : {}),
     ...(session.playMode ? { playMode: session.playMode } : {}),
     title: session.title,
     updatedAt: session.updatedAt,
@@ -137,6 +141,7 @@ export interface BookSessionSummary {
   readonly sessionKind?: SessionKind;
   readonly profileId?: string;
   readonly workId?: string | null;
+  readonly proposalAction?: string;
   readonly playMode?: PlayMode;
   readonly title: string | null;
   readonly messageCount: number;
@@ -177,6 +182,7 @@ export async function listBookSessions(
           sessionKind: session.sessionKind,
           profileId: session.profileId,
           workId: session.workId,
+          proposalAction: session.proposalAction,
           playMode: session.playMode,
           title: session.title,
           messageCount: session.messages.length,
@@ -242,7 +248,12 @@ export async function createAndPersistBookSession(
   bookId: string | null,
   sessionId?: string,
   sessionKind?: SessionKind,
-  options?: { readonly playMode?: PlayMode; readonly profileId?: string; readonly workId?: string | null },
+  options?: {
+    readonly playMode?: PlayMode;
+    readonly profileId?: string;
+    readonly workId?: string | null;
+    readonly proposalAction?: string;
+  },
 ): Promise<BookSession> {
   // 如果指定了 sessionId 且对应文件已存在，视为幂等操作直接返回（支持"用户发消息时才持久化 draft"流程）
   if (sessionId) {
@@ -253,12 +264,14 @@ export async function createAndPersistBookSession(
         || (options?.playMode && existing.playMode !== options.playMode)
         || (options?.profileId && existing.profileId !== options.profileId)
         || (options && "workId" in options && existing.workId !== options.workId)
+        || (options?.proposalAction && existing.proposalAction !== options.proposalAction)
       ) {
         await appendSessionMetadataUpdatedEvent(projectRoot, sessionId, {
           ...(sessionKind ? { sessionKind } : {}),
           ...(options?.playMode ? { playMode: options.playMode } : {}),
           ...(options?.profileId ? { profileId: options.profileId } : {}),
           ...(options && "workId" in options ? { workId: options.workId } : {}),
+          ...(options?.proposalAction ? { proposalAction: options.proposalAction } : {}),
           updatedAt: Date.now(),
         });
         return await loadBookSession(projectRoot, sessionId) ?? existing;

@@ -585,6 +585,23 @@ function normalizeStudioRequestedIntent(value: unknown): RequestedIntent | undef
   }
 }
 
+const CREATION_ENTRY_PROPOSAL_ACTIONS: ReadonlySet<RequestedIntent> = new Set([
+  "fanfic_init",
+  "spinoff_create",
+  "style_imitation",
+  "continuation_import",
+  "translation_create",
+]);
+
+function normalizeStudioProposalAction(value: unknown): RequestedIntent | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const action = normalizeStudioRequestedIntent(value);
+  if (!action || !CREATION_ENTRY_PROPOSAL_ACTIONS.has(action)) {
+    throw new ApiError(400, "INVALID_PROPOSAL_ACTION", `Invalid proposalAction: ${String(value)}`);
+  }
+  return action;
+}
+
 function normalizeStudioActionPayload(value: unknown): ActionPayload | undefined {
   try {
     return normalizeCoreActionPayload(value);
@@ -4690,6 +4707,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       bookId?: string | null;
       workId?: string | null;
       profileId?: string;
+      proposalAction?: string;
       sessionId?: string;
       sessionKind?: string;
       playMode?: string;
@@ -4700,6 +4718,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       bookId ? "book" : "chat",
     );
     const playMode = normalizeStudioPlayMode((body as { playMode?: unknown }).playMode);
+    const proposalAction = normalizeStudioProposalAction((body as { proposalAction?: unknown }).proposalAction);
     const sessionId = (body as { sessionId?: string }).sessionId;
     // sessionId 只允许 timestamp-random 格式；防止注入任意文件名
     const safeSessionId = sessionId && /^[0-9]+-[a-z0-9]+$/.test(sessionId) ? sessionId : undefined;
@@ -4724,7 +4743,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       bookId,
       resolvedSessionId,
       sessionKind,
-      { ...(playMode ? { playMode } : {}), profileId, workId },
+      { ...(playMode ? { playMode } : {}), profileId, workId, ...(proposalAction ? { proposalAction } : {}) },
     );
     // 客户端可以用同一个 sessionId 重新创建会话：移除删除标记，
     // 让新会话的生产任务可以正常持久化快照。
@@ -5306,6 +5325,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           playMode,
           actionSource,
           requestedIntent,
+          proposalAction: normalizeStudioProposalAction(bookSession.proposalAction),
           actionPayload,
           requestedSkills,
           disabledSkills,

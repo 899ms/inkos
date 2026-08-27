@@ -6,6 +6,7 @@ import type { TFunction } from "../hooks/use-i18n";
 import { tr } from "../lib/app-language";
 import { setProjectChatSessionId } from "../pages/chat-page-state";
 import { useChatStore } from "../store/chat";
+import type { ChatRequestedIntent } from "../store/chat/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   Dialog,
@@ -243,9 +244,14 @@ export function Sidebar({ nav, activePage, sse, t }: {
     void loadSessionDetail(sessionId);
   };
 
-  const handleCreateProjectChatSession = () => {
+  const handleCreateProjectChatSession = (proposalAction?: ChatRequestedIntent) => {
     setProjectChatExpanded(true);
-    const sessionId = createDraftSession(null, "chat");
+    const sessionId = createDraftSession(
+      null,
+      "chat",
+      undefined,
+      proposalAction ? { proposalAction } : undefined,
+    );
     setProjectChatSessionId(sessionId);
     setInput("");
     nav.toChat();
@@ -312,11 +318,11 @@ export function Sidebar({ nav, activePage, sse, t }: {
             <CreateItem icon={<Clapperboard size={16} />} label={t("nav.createScript")} onClick={() => launchProjectMode("script")} />
             <CreateItem icon={<Rows3 size={16} />} label={t("nav.createStoryboard")} onClick={() => launchProjectMode("storyboard")} />
             <CreateItem icon={<Film size={16} />} label={t("nav.createInteractiveFilm")} onClick={() => launchProjectMode("interactive-film")} />
-            <CreateItem icon={<Feather size={16} />} label={t("nav.createFanfic")} onClick={handleCreateProjectChatSession} />
-            <CreateItem icon={<BookCopy size={16} />} label={t("nav.createSpinoff")} onClick={handleCreateProjectChatSession} />
-            <CreateItem icon={<Wand2 size={16} />} label={t("nav.createImitation")} onClick={handleCreateProjectChatSession} />
-            <CreateItem icon={<FileInput size={16} />} label={t("nav.createContinuation")} onClick={handleCreateProjectChatSession} />
-            <CreateItem icon={<Languages size={16} />} label={t("nav.createTranslation")} onClick={handleCreateProjectChatSession} />
+            <CreateItem icon={<Feather size={16} />} label={t("nav.createFanfic")} onClick={() => handleCreateProjectChatSession("fanfic_init")} />
+            <CreateItem icon={<BookCopy size={16} />} label={t("nav.createSpinoff")} onClick={() => handleCreateProjectChatSession("spinoff_create")} />
+            <CreateItem icon={<Wand2 size={16} />} label={t("nav.createImitation")} onClick={() => handleCreateProjectChatSession("style_imitation")} />
+            <CreateItem icon={<FileInput size={16} />} label={t("nav.createContinuation")} onClick={() => handleCreateProjectChatSession("continuation_import")} />
+            <CreateItem icon={<Languages size={16} />} label={t("nav.createTranslation")} onClick={() => handleCreateProjectChatSession("translation_create")} />
             <CreateItem icon={<GitBranch size={16} />} label={t("nav.createBranching")} onClick={() => launchProjectMode("play", "guided")} />
             <CreateItem icon={<Gamepad2 size={16} />} label={t("nav.createFree")} onClick={() => launchProjectMode("play", "open")} />
           </div>
@@ -540,7 +546,7 @@ export function Sidebar({ nav, activePage, sse, t }: {
                   })}
                   <button
                     type="button"
-                    onClick={handleCreateProjectChatSession}
+                    onClick={() => handleCreateProjectChatSession()}
                     className="w-full flex items-center gap-2 pl-2 pr-2 py-1.5 text-[13px] text-muted-foreground/50 hover:text-foreground transition-colors"
                   >
                     <Plus size={12} />

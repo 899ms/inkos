@@ -842,6 +842,7 @@ export async function deriveBookSessionFromTranscript(
   let sessionKind = created?.type === "session_created" ? created.sessionKind : undefined;
   let profileId = created?.type === "session_created" ? created.profileId : undefined;
   let workId = created?.type === "session_created" ? created.workId : undefined;
+  let proposalAction = created?.type === "session_created" ? created.proposalAction : undefined;
   let playMode: PlayMode | undefined = created?.type === "session_created" ? created.playMode : undefined;
   let title = created?.type === "session_created" ? created.title : null;
   const createdAt = created?.type === "session_created"
@@ -864,6 +865,7 @@ export async function deriveBookSessionFromTranscript(
     if ("sessionKind" in event && event.sessionKind !== undefined) sessionKind = event.sessionKind;
     if ("profileId" in event && event.profileId !== undefined) profileId = event.profileId;
     if ("workId" in event && event.workId !== undefined) workId = event.workId;
+    if ("proposalAction" in event && event.proposalAction !== undefined) proposalAction = event.proposalAction;
     if ("playMode" in event && event.playMode !== undefined) playMode = event.playMode;
     if ("title" in event && event.title !== undefined) title = event.title;
     updatedAt = Math.max(updatedAt, event.updatedAt);
@@ -881,6 +883,7 @@ export async function deriveBookSessionFromTranscript(
     sessionKind,
     profileId,
     workId: workId ?? bookId,
+    proposalAction,
     playMode,
     title,
     messages,

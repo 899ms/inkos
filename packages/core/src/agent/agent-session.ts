@@ -84,6 +84,8 @@ export interface AgentSessionConfig {
   actionSource?: ActionSource;
   /** Explicit user-confirmed action requested by the UI/command surface. */
   requestedIntent?: RequestedIntent;
+  /** Creation-entry proposal schema. This narrows propose_action but grants no execution authority. */
+  proposalAction?: RequestedIntent;
   /** Structured execution arguments confirmed by the UI/command surface. */
   actionPayload?: ActionPayload;
   /** User/UI-forced Agent Skills for this turn, e.g. @open-world-play. */
@@ -170,6 +172,7 @@ interface CachedAgent {
   workId: string | null;
   actionSource: NonNullable<AgentSessionConfig["actionSource"]>;
   requestedIntent: AgentSessionConfig["requestedIntent"];
+  proposalAction: AgentSessionConfig["proposalAction"];
   actionPayloadKey: string;
   skillResolutionKey: string;
   turnSkills: Map<string, ActivatedSkillGuidance>;
@@ -834,6 +837,7 @@ async function runAgentSessionUnlocked(
   const playMode = config.playMode;
   const actionSource = config.actionSource ?? "free-text";
   const requestedIntent = config.requestedIntent;
+  const proposalAction = config.proposalAction;
   const actionPayload = config.actionPayload;
   const actionPayloadKey = actionPayloadCacheKey(actionPayload);
   const configuredSkills = await loadAvailableAgentSkills({ projectRoot });
@@ -881,6 +885,7 @@ async function runAgentSessionUnlocked(
     const profileChanged = cached.profileId !== profileId || cached.workId !== workId;
     const actionSourceChanged = cached.actionSource !== actionSource;
     const requestedIntentChanged = cached.requestedIntent !== requestedIntent;
+    const proposalActionChanged = cached.proposalAction !== proposalAction;
     const actionPayloadChanged = cached.actionPayloadKey !== actionPayloadKey;
     const skillResolutionChanged = cached.skillResolutionKey !== skillResolutionKey;
     const languageChanged = cached.language !== language;
@@ -899,6 +904,7 @@ async function runAgentSessionUnlocked(
       profileChanged ||
       actionSourceChanged ||
       requestedIntentChanged ||
+      proposalActionChanged ||
       actionPayloadChanged ||
       skillResolutionChanged ||
       languageChanged ||
@@ -965,6 +971,7 @@ async function runAgentSessionUnlocked(
       projectRoot,
       sessionId,
       profileId,
+      proposalAction,
       work,
       language,
       actionPayload,
@@ -1087,6 +1094,7 @@ async function runAgentSessionUnlocked(
       workId,
       actionSource,
       requestedIntent,
+      proposalAction,
       actionPayloadKey,
       skillResolutionKey,
       turnSkills,
