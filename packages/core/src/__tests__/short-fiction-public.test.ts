@@ -167,7 +167,7 @@ describe("public short-fiction chain", () => {
 === CHAPTER 1 TITLE ===
 新章
 === CHAPTER 1 CONTENT ===
-新正文修正了时间线。
+${"新正文修正时间线，并保留人物行动、证据和现场反应。".repeat(45)}
 `,
         usage: ZERO_USAGE,
       });
@@ -194,6 +194,48 @@ describe("public short-fiction chain", () => {
     expect(revised.storyTitle).toBe("新稿标题");
 
     chatSpy.mockRestore();
+  });
+
+  it("adopts valid chapter revisions without letting one bad chapter revert the whole draft", async () => {
+    const originalOne = "第一章原稿保留完整场面和证据。".repeat(70);
+    const originalTwo = "第二章原稿保留人物行动和因果。".repeat(70);
+    const acceptedOne = "第一章新版修正时间线并压缩重复反应。".repeat(55);
+    const firstDraft = parseShortFictionBatchDraft(`
+=== SHORT_FICTION_TITLE ===
+初稿标题
+=== CHAPTER 1 TITLE ===
+旧一章
+=== CHAPTER 1 CONTENT ===
+${originalOne}
+=== CHAPTER 2 TITLE ===
+旧二章
+=== CHAPTER 2 CONTENT ===
+${originalTwo}
+`, { expectedChapters: 2 });
+    const chatSpy = vi.spyOn(ShortFictionDraftReviserAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce({
+        content: `=== SHORT_FICTION_TITLE ===\n新稿标题\n=== CHAPTER 1 TITLE ===\n新一章\n=== CHAPTER 1 CONTENT ===\n${acceptedOne}`,
+        usage: ZERO_USAGE,
+      })
+      .mockResolvedValue({
+        content: "=== CHAPTER 2 TITLE ===\n过短二章\n=== CHAPTER 2 CONTENT ===\n仍然太短。",
+        usage: ZERO_USAGE,
+      });
+    const agent = new ShortFictionDraftReviserAgent({ client: fakeClient(), model: "fake", projectRoot: "/tmp" });
+
+    const revised = await agent.reviseDraft({
+      direction: "现实悬疑",
+      outlineMarkdown: "两章完整方案",
+      draft: firstDraft,
+      review: "修正时间线并压缩重复反应。",
+      chapterCount: 2,
+      charsPerChapter: 1000,
+    });
+
+    expect(revised.chapters[0]?.content).toBe(acceptedOne);
+    expect(revised.chapters[1]?.content).toBe(originalTwo);
+    expect(revised.storyTitle).toBe("新稿标题");
+    expect(chatSpy).toHaveBeenCalledTimes(3);
   });
 
   it("resolves cover generation from project cover config and stored cover secret", async () => {

@@ -1,3 +1,5 @@
+import { buildLengthSpec } from "../utils/length-metrics.js";
+
 export type ShortFictionLanguage = "zh" | "en";
 
 export interface ShortFictionReferencePromptInput {
@@ -376,6 +378,7 @@ export function buildShortFictionDraftRevisionFollowup(
 ): string {
   const chapters = requestedShortFictionChapters(input);
   const wholeDraft = chapters.length === input.chapterCount;
+  const length = buildLengthSpec(input.charsPerChapter, language);
   if (language === "en") {
     return [
       wholeDraft
@@ -393,7 +396,7 @@ export function buildShortFictionDraftRevisionFollowup(
       "- Fix the immersion-breaking problems: timeline, logic, relationships, evidence access, physical state.",
       "- Add real scenes to the back half; never close on result summaries.",
       "- Keep the title, opening, chapter titles, and main title consistent with the prose, though the title may be re-sharpened from the final draft for platform click appeal.",
-      "- Word count is calibration only: pad short chapters with real scenes; trim long ones by cutting explanation and repeated reactions.",
+      `- Each requested chapter must finish between ${length.hardMin} and ${length.hardMax} words, aiming for ${length.target}. Expand with real scenes when short; compress explanation and repeated reactions when long.`,
       "",
       "## Output Format",
       "=== SHORT_FICTION_TITLE ===",
@@ -426,7 +429,7 @@ export function buildShortFictionDraftRevisionFollowup(
     "- 修时间线、逻辑、人物关系、证据权限、身体状态等会让读者出戏的问题。",
     "- 补后半段有效场面，不要用结果摘要收尾。",
     "- 保持标题、开篇、章节标题和正文主标题一致，但标题可以基于正文重新压得更有平台点击感。",
-    "- 字数只做校准：偏短补有效场面，偏长删解释和重复反应。",
+    `- 本批每章必须落在 ${length.hardMin}-${length.hardMax} 字，目标约 ${length.target} 字。偏短补有效场面，偏长压缩解释、重复反应和无效转场。`,
     "",
     "## 输出格式",
     "=== SHORT_FICTION_TITLE ===",
