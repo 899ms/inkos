@@ -19,7 +19,7 @@ import {
   type LLMResponse,
   type OnStreamProgress,
 } from "../llm/provider.js";
-import { guardedPiStream } from "./pi-stream.js";
+import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
 import { isLlmStubEnabled, stubChatCompletion } from "./llm-stub.js";
 import { toPiApi } from "../llm/api-format.js";
 
@@ -341,14 +341,19 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   const agent = new Agent({
     initialState: { model, systemPrompt, tools: [tool], messages: [] },
     toolExecution: "sequential",
-    streamFn: (streamModel, context, streamOptions) => submitted
-      ? localStopStream(streamModel)
-      : guardedPiStream(streamModel, context, {
+    streamFn: (streamModel, context, streamOptions) => {
+      if (submitted) return localStopStream(streamModel);
+      const resultOptions = {
           ...streamOptions,
           ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
           ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
           signal: combineSignals(streamOptions?.signal, options.signal),
-        }),
+          toolChoice: { type: "function", function: { name: resultTool.name } },
+        };
+      return client.stream === false
+        ? guardedPiNonStreaming(streamModel, context, resultOptions, client.proxyUrl)
+        : guardedPiStream(streamModel, context, resultOptions);
+    },
     getApiKey: () => client._apiKey,
   });
   const abortAgent = () => agent.abort();
