@@ -579,7 +579,7 @@ function estimateShortFictionMaxTokens(
   return Math.min(requested, safeShortFictionOutputBudget(modelMaxOutput));
 }
 
-const MAX_SHORT_FICTION_CHAPTERS_PER_CALL = 4;
+const MAX_SHORT_FICTION_CHAPTERS_PER_CALL = 2;
 
 export function minimumShortFictionChapterLength(targetLength: number): number {
   // This is a corruption/truncation floor, not the editorial length target.
