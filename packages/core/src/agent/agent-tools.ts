@@ -345,7 +345,7 @@ const ProposeActionParams = Type.Object({
     aspectRatio: Type.Optional(Type.String({ description: "Confirmed aspect ratio, e.g. 9:16, 16:9, 1:1." })),
     granularity: Type.Optional(Type.String({ description: "Confirmed storyboard granularity." })),
     maxShots: Type.Optional(Type.Number({ description: "Optional max shot count." })),
-    projectId: Type.Optional(Type.String({ description: "Optional output id under storyboards/." })),
+    projectId: Type.Optional(Type.String({ description: "Optional stable Work ID." })),
   }, { description: "Structured execution args for action=storyboard_create." })),
   interactiveFilmCreate: Type.Optional(Type.Object({
     title: Type.String({ description: "Confirmed interactive-film project title." }),
@@ -358,7 +358,7 @@ const ProposeActionParams = Type.Object({
     episodeDuration: Type.Optional(Type.String({ description: "Optional per-episode/per-segment duration." })),
     budget: Type.Optional(Type.String({ description: "Optional budget or production constraints." })),
     referenceMode: Type.Optional(Type.String({ description: "Optional reference mode, e.g. 盛世天下-style multi-ending interactive drama." })),
-    projectId: Type.Optional(Type.String({ description: "Optional output id under interactive-films/." })),
+    projectId: Type.Optional(Type.String({ description: "Optional stable Work ID." })),
   }, { description: "Structured execution args for action=interactive_film_create." })),
   translationCreate: Type.Optional(Type.Object({
     filePath: Type.String({ description: "Project-relative EPUB/PDF/TXT/Markdown source file path to translate." }),
@@ -2298,7 +2298,7 @@ const StoryboardCreateParams = Type.Object({
     description: "Optional max shot count.",
   })),
   projectId: Type.Optional(Type.String({
-    description: "Optional output id under storyboards/.",
+    description: "Optional stable Work ID.",
   })),
 });
 
@@ -2316,7 +2316,7 @@ export function createStoryboardCreationTool(
     name: "storyboard_create",
     description:
       "Create a storyboard project and image prompts from a script, novel excerpt, idea, or scene list. " +
-      "Writes human-readable Markdown spec, storyboard, and image prompt files under storyboards/.",
+      "Writes human-readable Markdown spec, storyboard, and image prompt artifacts into a Storyboard Work.",
     label: "Storyboard Creation",
     parameters: StoryboardCreateParams,
     async execute(
@@ -2395,7 +2395,7 @@ const InteractiveFilmCreateParams = Type.Object({
     description: "Optional reference mode, e.g. 盛世天下-style multi-ending interactive drama.",
   })),
   projectId: Type.Optional(Type.String({
-    description: "Optional output id under interactive-films/.",
+    description: "Optional stable Work ID.",
   })),
 });
 
