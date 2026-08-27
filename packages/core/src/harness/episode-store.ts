@@ -161,6 +161,60 @@ export class CreativeEpisodeStore {
     }));
   }
 
+  recoverInterruptedEpisodes(
+    completedAt = new Date().toISOString(),
+    reason = "studio-process-restarted",
+  ): number {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const rows = this.db.prepare(`
+        SELECT episode_id AS episodeId, work_id AS workId
+        FROM creative_episodes
+        WHERE status = 'running'
+        ORDER BY started_at ASC, episode_id ASC
+      `).all() as unknown as ReadonlyArray<{ readonly episodeId: string; readonly workId: string | null }>;
+      for (const row of rows) {
+        const seqRow = this.db.prepare(
+          "SELECT COALESCE(MAX(seq), -1) + 1 AS seq FROM creative_episode_events WHERE episode_id = ?",
+        ).get(row.episodeId) as unknown as { readonly seq: number };
+        const event = CreativeEpisodeEventSchema.parse({
+          version: HARNESS_VERSION,
+          episodeId: row.episodeId,
+          seq: seqRow.seq,
+          timestamp: completedAt,
+          type: "episode-failed",
+          workId: row.workId,
+          payload: { reason },
+        });
+        this.db.prepare(`
+          INSERT INTO creative_episode_events (
+            episode_id, seq, timestamp, type, work_id,
+            capability_id, action_id, payload_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          event.episodeId,
+          event.seq,
+          event.timestamp,
+          event.type,
+          event.workId,
+          null,
+          null,
+          JSON.stringify(event.payload),
+        );
+        this.db.prepare(`
+          UPDATE creative_episodes
+          SET status = 'failed', completed_at = ?
+          WHERE episode_id = ? AND status = 'running'
+        `).run(completedAt, row.episodeId);
+      }
+      this.db.exec("COMMIT");
+      return rows.length;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   close(): void {
     this.db.close();
   }

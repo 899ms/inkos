@@ -2614,6 +2614,15 @@ async function probeServiceCapabilities(args: {
 export function createStudioServer(initialConfig: ProjectConfig, root: string, overrides: { readonly nodeImageGenerator?: NodeImageDeps } = {}) {
   const app = new Hono();
   const state = new StateManager(root);
+  const recoveryStore = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+  try {
+    const recovered = recoveryStore.recoverInterruptedEpisodes();
+    if (recovered > 0) {
+      console.warn(`[studio] Recovered ${recovered} interrupted creative episode${recovered === 1 ? "" : "s"}.`);
+    }
+  } finally {
+    recoveryStore.close();
+  }
   let cachedConfig = initialConfig;
   const activeConfirmedTasks = new Map<string, AbortController>();
   // 确认式生产任务的单任务名额（sessionId → taskId）。原来的检查是"await 读快照

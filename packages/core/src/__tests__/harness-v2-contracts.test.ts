@@ -184,6 +184,40 @@ describe("v2 harness contracts", () => {
     }
   });
 
+  it("recovers interrupted running episodes once and records the terminal cause", () => {
+    const store = new CreativeEpisodeStore(":memory:");
+    try {
+      store.create({
+        version: 2,
+        id: "episode-interrupted",
+        workId: "work-a",
+        profileId: "longform-novel",
+        status: "running",
+        startedAt: "2026-08-27T00:00:00.000Z",
+        completedAt: null,
+      });
+      store.append({
+        episodeId: "episode-interrupted",
+        type: "episode-started",
+        workId: "work-a",
+        payload: {},
+      }, "2026-08-27T00:00:00.000Z");
+
+      expect(store.recoverInterruptedEpisodes("2026-08-27T00:05:00.000Z")).toBe(1);
+      expect(store.requireEpisode("episode-interrupted")).toMatchObject({
+        status: "failed",
+        completedAt: "2026-08-27T00:05:00.000Z",
+      });
+      expect(store.listEvents("episode-interrupted").at(-1)).toMatchObject({
+        type: "episode-failed",
+        payload: { reason: "studio-process-restarted" },
+      });
+      expect(store.recoverInterruptedEpisodes("2026-08-27T00:06:00.000Z")).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+
   it("stores candidate revisions separately and promotes them explicitly", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-v2-revision-"));
     roots.push(root);
