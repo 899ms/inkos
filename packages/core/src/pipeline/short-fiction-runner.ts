@@ -83,6 +83,7 @@ export interface ShortFictionRunOptions {
 
 export interface ShortFictionRunResult {
   readonly storyId: string;
+  readonly status: "complete" | "needs-review";
   readonly outlinePath: string;
   readonly outlineReviewPath: string;
   readonly draftReviewPath: string;
@@ -140,7 +141,7 @@ export async function runShortFictionProduction(
     && await projectFileExists(root, join(shortWorkBaseDir(providedStoryId), "final", "full.md"))
     && await readShortRunStatus(root, join(shortWorkBaseDir(providedStoryId), "status.json")) === "complete"
   ) {
-    return buildShortRunResult(providedStoryId, shortWorkBaseDir(providedStoryId), { coverError: "already-complete" });
+    return buildShortRunResult(providedStoryId, shortWorkBaseDir(providedStoryId), "complete", { coverError: "already-complete" });
   }
 
   try {
@@ -478,23 +479,25 @@ async function produceShort(
     join(baseDir, "final", "cover-prompt.md"),
     ...(coverArtifacts.coverImagePath ? [coverArtifacts.coverImagePath] : []),
   ].map(projectPath);
+  const status = observations.some((observation) => observation.severity === "blocking")
+    ? "needs-review" as const
+    : "complete" as const;
   await writeShortRunSnapshot(root, baseDir, {
     storyId,
-    status: observations.some((observation) => observation.severity === "blocking")
-      ? "needs-review"
-      : "complete",
+    status,
     stage: "complete",
     artifacts,
     observations,
   });
   await syncWorkSourceArtifacts({ projectRoot: root, workId: storyId });
 
-  return buildShortRunResult(storyId, baseDir, { ...coverArtifacts, packageError: packageWarning });
+  return buildShortRunResult(storyId, baseDir, status, { ...coverArtifacts, packageError: packageWarning });
 }
 
 function buildShortRunResult(
   storyId: string,
   baseDir: string,
+  status: "complete" | "needs-review",
   coverArtifacts: {
     readonly coverImagePath?: string;
     readonly coverError?: string;
@@ -503,6 +506,7 @@ function buildShortRunResult(
 ): ShortFictionRunResult {
   return {
     storyId,
+    status,
     outlinePath: projectPath(join(baseDir, "outline", "v002.md")),
     outlineReviewPath: projectPath(join(baseDir, "reviews", "outline-v001.md")),
     draftReviewPath: projectPath(join(baseDir, "reviews", "draft-v001.md")),

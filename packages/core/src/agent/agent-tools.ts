@@ -2138,7 +2138,9 @@ export function createShortFictionRunTool(
 
       return textResult(
         [
-          `Short fiction "${result.storyId}" completed.`,
+          result.status === "complete"
+            ? `Short fiction "${result.storyId}" completed.`
+            : `Short fiction "${result.storyId}" was saved but still needs review.`,
           `Final: ${result.finalMarkdownPath}`,
           `Sales package: ${result.salesPackagePath}`,
           `Cover prompt: ${result.coverPromptPath}`,
@@ -2150,7 +2152,11 @@ export function createShortFictionRunTool(
                 "The short fiction draft, synopsis, selling points, and cover prompt were still written successfully.",
               ].join("\n"),
         ].join("\n"),
-        { kind: "short_fiction_created", ...result, skillIds: activatedSkillIds(activatedSkills) },
+        {
+          kind: result.status === "complete" ? "short_fiction_created" : "short_fiction_needs_review",
+          ...result,
+          skillIds: activatedSkillIds(activatedSkills),
+        },
       );
     },
   };

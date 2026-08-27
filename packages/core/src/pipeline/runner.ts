@@ -592,7 +592,16 @@ export class PipelineRunner {
         en: `Foundation rejected (${review.totalScore}/100), regenerating...`,
       });
 
-      foundation = await params.generate(this.buildFoundationReviewFeedback(review, params.language));
+      try {
+        foundation = await params.generate(this.buildFoundationReviewFeedback(review, params.language));
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.logWarn(params.stageLanguage, {
+          zh: `基础设定重生成失败，已保留并继续使用上一版完整设定：${detail}`,
+          en: `Foundation regeneration failed; preserving the previous complete foundation: ${detail}`,
+        });
+        return foundation;
+      }
     }
 
     // Final review

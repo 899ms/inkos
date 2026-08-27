@@ -707,6 +707,61 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("keeps the reviewed foundation when regeneration fails", async () => {
+    const { root, runner, bookId } = await createRunnerFixture();
+    const reviewer = new FoundationReviewerAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+      } as ConstructorParameters<typeof PipelineRunner>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+      bookId,
+    });
+    const foundation = {
+      storyBible: "# Story Bible",
+      volumeOutline: "# Volume Outline",
+      bookRules: "# Book Rules",
+      currentState: "# Current State",
+      pendingHooks: "# Pending Hooks",
+    };
+    const generate = vi.fn()
+      .mockResolvedValueOnce(foundation)
+      .mockRejectedValueOnce(new Error("524 openai_error"));
+    vi.mocked(FoundationReviewerAgent.prototype.review).mockResolvedValueOnce({
+      passed: false,
+      totalScore: 79,
+      dimensions: [],
+      overallFeedback: "Needs another pass.",
+    });
+
+    try {
+      const result = await (runner as unknown as {
+        generateAndReviewFoundation: (params: {
+          readonly generate: (reviewFeedback?: string) => Promise<typeof foundation>;
+          readonly reviewer: FoundationReviewerAgent;
+          readonly mode: "original";
+          readonly language: "zh";
+          readonly stageLanguage: "zh";
+          readonly maxRetries: number;
+        }) => Promise<typeof foundation>;
+      }).generateAndReviewFoundation({
+        generate,
+        reviewer,
+        mode: "original",
+        language: "zh",
+        stageLanguage: "zh",
+        maxRetries: 2,
+      });
+
+      expect(result).toBe(foundation);
+      expect(generate).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("honors configured foundation review retry count before accepting a rejected foundation", async () => {
     const { root, runner, bookId } = await createRunnerFixture({
       foundationReviewRetries: 4,

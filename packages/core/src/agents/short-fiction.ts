@@ -298,7 +298,12 @@ export class ShortFictionDraftReviserAgent extends BaseAgent {
     for (const chapterNumbers of batches) {
       const batchDraft = selectShortFictionChapters(input.draft, chapterNumbers);
       const messages = [
-        { role: "system" as const, content: buildShortFictionWriterSystemPrompt(input.language) },
+        {
+          role: "system" as const,
+          content: input.language === "en"
+            ? "You are a precision short-fiction reviser. Preserve the chapter's causal events and emotional payoff, but obey the requested word range exactly. Compress semantically by merging repeated reactions, exposition, and transitions; never truncate the ending. Output only the requested tagged blocks."
+            : "你是精确的短篇改稿编辑。保留本章因果事件、证据和情绪回报，但必须严格服从目标字数区间。过长时语义压缩重复反应、解释和转场，不能截断结尾；只输出规定标签块。",
+        },
         { role: "user" as const, content: buildShortFictionWriterUserPrompt({ ...input, chapterNumbers }, input.language) },
         { role: "assistant" as const, content: renderShortFictionDraftMarkdown(batchDraft, input.language) },
         { role: "user" as const, content: buildShortFictionDraftRevisionFollowup({ ...input, chapterNumbers }, input.language) },
@@ -317,19 +322,24 @@ export class ShortFictionDraftReviserAgent extends BaseAgent {
         language: input.language,
       });
       let candidate = revised.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
-      if (!candidate || isOutsideHardRange(candidate.charCount, length)) {
+      for (let correction = 0; correction < 2 && (!candidate || isOutsideHardRange(candidate.charCount, length)); correction += 1) {
         const actual = candidate?.charCount ?? 0;
+        const tooLong = actual > length.hardMax;
         response = await retryShortFictionCall(() => this.chat([
           ...messages,
           { role: "assistant", content: response.content },
           {
             role: "user",
             content: input.language === "en"
-              ? `The revision is ${actual} words. Rewrite the same chapter again at ${length.hardMin}-${length.hardMax} words (target ${length.target}). Preserve the events and evidence; compress or expand semantically. Output only the required blocks.`
-              : `这版是 ${actual} 字。请把同一章重新写到 ${length.hardMin}-${length.hardMax} 字（目标 ${length.target} 字）。保留事件与证据，用语义压缩或补完整场面，不要截断。只输出规定 block。`,
+              ? tooLong
+                ? `This version is ${actual} words, far above the ${length.hardMin}-${length.hardMax} range. Rewrite it to about ${length.target} words. Keep every indispensable event and clue, but remove repeated reactions, duplicate explanations, and non-causal transitions. Do not add scenes and do not cut off the ending. Output only the required blocks.`
+                : `This version is ${actual} words, below the ${length.hardMin}-${length.hardMax} range. Rewrite it to about ${length.target} words by completing one existing scene with action, dialogue, and evidence. Do not add a new subplot. Output only the required blocks.`
+              : tooLong
+                ? `这版有 ${actual} 字，明显超过 ${length.hardMin}-${length.hardMax} 字区间。重写到约 ${length.target} 字：保留不可缺的事件和证据，删除重复反应、重复解释和不推动因果的转场；不要新增场景，也不能截断结尾。只输出规定标签块。`
+                : `这版只有 ${actual} 字，低于 ${length.hardMin}-${length.hardMax} 字区间。重写到约 ${length.target} 字：只把现有一个场景用动作、对话和证据写完整，不要新增支线。只输出规定标签块。`,
           },
         ], {
-          temperature: 0.35,
+          temperature: correction === 0 ? 0.3 : 0.2,
           maxTokens: estimateShortFictionMaxTokens(1, input.charsPerChapter, this.ctx.client.defaults.maxTokens),
         }), this.name, this.log);
         revised = parseShortFictionBatchDraft(response.content, {
