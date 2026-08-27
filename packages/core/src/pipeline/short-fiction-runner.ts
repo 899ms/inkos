@@ -284,13 +284,35 @@ async function produceShort(
   try {
     options.onProgress?.("Writing full short fiction draft...");
     const writer = new ShortFictionWriterAgent(options.runtimes.writer);
-    let draftV1 = await writer.writeDraft({
+    const persistDraftBatch = async (
+      draft: ShortFictionBatchDraft,
+      completedChapterNumbers: ReadonlyArray<number>,
+    ) => {
+      await writeDraftArtifacts(root, baseDir, "v001-partial", draft, language);
+      options.onProgress?.(`Completed short fiction draft chapters: ${completedChapterNumbers.join(", ")}...`);
+    };
+    const resumedDraft = await tryReadShortFictionDraft(
+      root,
+      join(baseDir, "drafts", "v001-partial", "draft.json"),
+    );
+    let draftV1 = resumedDraft
+      ? await writer.continueDraft({
+          direction: options.direction,
+          outlineMarkdown,
+          chapterCount,
+          charsPerChapter,
+          language,
+          draft: resumedDraft,
+          onBatchComplete: persistDraftBatch,
+        })
+      : await writer.writeDraft({
       direction: options.direction,
       outlineMarkdown,
       chapterCount,
       charsPerChapter,
       language,
-    });
+          onBatchComplete: persistDraftBatch,
+        });
     const minimumChapterLength = minimumShortFictionChapterLength(charsPerChapter);
     let missingFromDraft = findIncompleteShortFictionChapters(draftV1, { minimumChapterLength });
     if (missingFromDraft.length > 0) {
@@ -517,6 +539,20 @@ async function isFailedShortRun(root: string, path: string): Promise<boolean> {
 async function tryReadProjectText(root: string, path: string): Promise<string | undefined> {
   try {
     return await readFile(safeChildPath(root, path), "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+async function tryReadShortFictionDraft(
+  root: string,
+  path: string,
+): Promise<ShortFictionBatchDraft | undefined> {
+  const raw = await tryReadProjectText(root, path);
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as ShortFictionBatchDraft;
+    return Array.isArray(parsed.chapters) && typeof parsed.rawContent === "string" ? parsed : undefined;
   } catch {
     return undefined;
   }

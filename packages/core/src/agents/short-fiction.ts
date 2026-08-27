@@ -4,7 +4,6 @@ import {
   type ShortFictionLanguage,
   buildShortFictionDraftReviewSystemPrompt,
   buildShortFictionDraftReviewUserPrompt,
-  buildShortFictionDraftContinuationUserPrompt,
   buildShortFictionDraftRevisionFollowup,
   buildShortFictionOutlineReviewSystemPrompt,
   buildShortFictionOutlineReviewUserPrompt,
@@ -94,6 +93,10 @@ export interface ShortFictionDraftInput {
   readonly charsPerChapter: number;
   readonly language?: ShortFictionLanguage;
   readonly chapterNumbers?: readonly number[];
+  readonly onBatchComplete?: (
+    draft: ShortFictionBatchDraft,
+    completedChapterNumbers: ReadonlyArray<number>,
+  ) => void | Promise<void>;
 }
 
 export interface ShortFictionDraftReviewInput extends ShortFictionDraftInput {
@@ -173,6 +176,8 @@ export class ShortFictionWriterAgent extends BaseAgent {
       this.ctx.client.defaults.maxTokens,
     );
     const outputs: string[] = [];
+    const completedChapterNumbers: number[] = [];
+    let currentDraft: ShortFictionBatchDraft | undefined;
     for (const chapterNumbers of batches) {
       const response = await retryShortFictionCall(() =>
         this.chat([
@@ -194,9 +199,15 @@ export class ShortFictionWriterAgent extends BaseAgent {
           ),
         }), this.name, this.log);
       outputs.push(response.content.trim());
+      completedChapterNumbers.push(...chapterNumbers);
+      currentDraft = parseShortFictionBatchDraft(outputs.join("\n\n"), {
+        expectedChapters: input.chapterCount,
+        language: input.language,
+      });
+      await input.onBatchComplete?.(currentDraft, completedChapterNumbers);
     }
 
-    return parseShortFictionBatchDraft(outputs.join("\n\n"), {
+    return currentDraft ?? parseShortFictionBatchDraft("", {
       expectedChapters: input.chapterCount,
       language: input.language,
     });
@@ -208,30 +219,40 @@ export class ShortFictionWriterAgent extends BaseAgent {
     });
     if (missingChapters.length === 0) return input.draft;
 
-    const response = await retryShortFictionCall(() =>
-      this.chat([
-        { role: "system", content: buildShortFictionWriterSystemPrompt(input.language) },
-        { role: "user", content: buildShortFictionDraftContinuationUserPrompt({
-          direction: input.direction,
-          outlineMarkdown: input.outlineMarkdown,
-          chapterCount: input.chapterCount,
-          charsPerChapter: input.charsPerChapter,
-          existingDraftMarkdown: renderShortFictionDraftMarkdown(input.draft, input.language),
-          missingChapters,
-        }, input.language) },
-      ], {
-        temperature: 0.68,
-        maxTokens: estimateShortFictionMaxTokens(
-          missingChapters.length,
-          input.charsPerChapter,
-          this.ctx.client.defaults.maxTokens,
-        ),
-      }), this.name, this.log);
-
-    return parseShortFictionBatchDraft(
-      `${input.draft.rawContent.trim()}\n\n${response.content.trim()}`,
-      { expectedChapters: input.chapterCount, language: input.language },
+    let currentDraft = input.draft;
+    const completedChapterNumbers = currentDraft.chapters
+      .filter((chapter) => chapter.content.trim())
+      .map((chapter) => chapter.number);
+    const batches = buildShortFictionChapterBatches(
+      missingChapters,
+      input.charsPerChapter,
+      this.ctx.client.defaults.maxTokens,
     );
+    for (const chapterNumbers of batches) {
+      const response = await retryShortFictionCall(() =>
+        this.chat([
+          { role: "system", content: buildShortFictionWriterSystemPrompt(input.language) },
+          { role: "user", content: buildShortFictionWriterUserPrompt({
+            ...input,
+            chapterNumbers,
+            previousDraftMarkdown: renderShortFictionDraftMarkdown(currentDraft, input.language),
+          }, input.language) },
+        ], {
+          temperature: 0.68,
+          maxTokens: estimateShortFictionMaxTokens(
+            chapterNumbers.length,
+            input.charsPerChapter,
+            this.ctx.client.defaults.maxTokens,
+          ),
+        }), this.name, this.log);
+      currentDraft = parseShortFictionBatchDraft(
+        `${currentDraft.rawContent.trim()}\n\n${response.content.trim()}`,
+        { expectedChapters: input.chapterCount, language: input.language },
+      );
+      completedChapterNumbers.push(...chapterNumbers);
+      await input.onBatchComplete?.(currentDraft, completedChapterNumbers);
+    }
+    return currentDraft;
   }
 }
 
@@ -579,7 +600,7 @@ function estimateShortFictionMaxTokens(
   return Math.min(requested, safeShortFictionOutputBudget(modelMaxOutput));
 }
 
-const MAX_SHORT_FICTION_CHAPTERS_PER_CALL = 2;
+const MAX_SHORT_FICTION_CHAPTERS_PER_CALL = 1;
 
 export function minimumShortFictionChapterLength(targetLength: number): number {
   // This is a corruption/truncation floor, not the editorial length target.

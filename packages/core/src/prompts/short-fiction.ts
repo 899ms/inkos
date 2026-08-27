@@ -34,11 +34,6 @@ export interface ShortFictionDraftPromptInput {
   readonly previousDraftMarkdown?: string;
 }
 
-export interface ShortFictionDraftContinuationPromptInput extends ShortFictionDraftPromptInput {
-  readonly existingDraftMarkdown: string;
-  readonly missingChapters: readonly number[];
-}
-
 export interface ShortFictionDraftReviewPromptInput extends ShortFictionDraftPromptInput {
   readonly draftMarkdown: string;
 }
@@ -319,65 +314,6 @@ export function buildShortFictionWriterUserPrompt(
         `第${chapter}章正文，写完整场面，不要梗概，不要作者备注`,
       ].join("\n");
     }),
-  ].join("\n");
-}
-
-export function buildShortFictionDraftContinuationUserPrompt(
-  input: ShortFictionDraftContinuationPromptInput,
-  language: ShortFictionLanguage = "zh",
-): string {
-  const missing = input.missingChapters.join(", ");
-  if (language === "en") {
-    return [
-      "## Task",
-      `The previous draft was truncated or skipped chapters. Write ONLY the missing chapters: ${missing}.`,
-      `Stay calibrated to the complete ${input.chapterCount}-chapter short at about ${input.charsPerChapter} words per chapter.`,
-      "Do not rewrite finished chapters, do not write summary notes, do not apologize, do not output review comments.",
-      "",
-      buildShortFictionCraftPrompt("en"),
-      "",
-      "## Creative Direction",
-      input.direction,
-      "",
-      "## Story Plan",
-      input.outlineMarkdown,
-      "",
-      "## Existing Draft (for continuity only — do not rewrite)",
-      input.existingDraftMarkdown,
-      "",
-      "## Output Format",
-      ...input.missingChapters.map((chapter) => [
-        `=== CHAPTER ${chapter} TITLE ===`,
-        "Chapter title — plain text only, no #, no \"Chapter N\" prefix",
-        `=== CHAPTER ${chapter} CONTENT ===`,
-        `Chapter ${chapter} prose — full scenes, no synopsis, no author notes`,
-      ].join("\n")),
-    ].join("\n");
-  }
-  return [
-    "## 任务",
-    `上一次正文被截断或漏章。现在只补写缺失章节：${missing}。`,
-    `仍然按完整短篇 ${input.chapterCount} 章、每章约 ${input.charsPerChapter} 字校准。`,
-    "不要重写已完成章节，不要写总结说明，不要道歉，不要输出审稿意见。",
-    "",
-    buildShortFictionCraftPrompt(),
-    "",
-    "## 创作方向",
-    input.direction,
-    "",
-    "## 故事方案",
-    input.outlineMarkdown,
-    "",
-    "## 已有正文（只用于承接，不要重写）",
-    input.existingDraftMarkdown,
-    "",
-    "## 输出格式",
-    ...input.missingChapters.map((chapter) => [
-      `=== CHAPTER ${chapter} TITLE ===`,
-      "章节标题，只写纯文本，不要 #，不要第几章前缀",
-      `=== CHAPTER ${chapter} CONTENT ===`,
-      `第${chapter}章正文，写完整场面，不要梗概，不要作者备注`,
-    ].join("\n")),
   ].join("\n");
 }
 

@@ -3,7 +3,6 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildShortFictionDraftContinuationUserPrompt,
   buildShortFictionDraftReviewSystemPrompt,
   buildShortFictionDraftReviewUserPrompt,
   buildShortFictionDraftRevisionFollowup,
@@ -63,10 +62,10 @@ describe("short-fiction English prompt branch", () => {
       }, "en"),
       writerSystem: buildShortFictionWriterSystemPrompt("en"),
       writerUser: buildShortFictionWriterUserPrompt(DRAFT_INPUT, "en"),
-      continuationUser: buildShortFictionDraftContinuationUserPrompt({
+      continuationUser: buildShortFictionWriterUserPrompt({
         ...DRAFT_INPUT,
-        existingDraftMarkdown: "# Existing Draft",
-        missingChapters: [3, 4],
+        previousDraftMarkdown: "# Existing Draft",
+        chapterNumbers: [3, 4],
       }, "en"),
       draftReviewSystem: buildShortFictionDraftReviewSystemPrompt("en"),
       draftReviewUser: buildShortFictionDraftReviewUserPrompt({

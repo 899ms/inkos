@@ -195,6 +195,39 @@ describe("short fiction resume + failure marker (C2)", () => {
     expect(final).toContain("第12章");
   });
 
+  it("resumes a persisted partial draft without regenerating completed chapters", async () => {
+    await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
+    await mkdir(join(root, "works", "elevator", "source", "drafts", "v001-partial"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲", "utf-8");
+    const partial = parseShortFictionBatchDraft(PARTIAL_DRAFT_MD, { expectedChapters: CH });
+    await writeFile(
+      join(root, "works", "elevator", "source", "drafts", "v001-partial", "draft.json"),
+      JSON.stringify(partial),
+      "utf-8",
+    );
+    const complete = parseShortFictionBatchDraft(DRAFT_MD, { expectedChapters: CH });
+    const writeDraft = vi.spyOn(ShortFictionWriterAgent.prototype, "writeDraft");
+    const continueDraft = vi.spyOn(ShortFictionWriterAgent.prototype, "continueDraft").mockResolvedValue(complete);
+    vi.spyOn(ShortFictionDraftReviewerAgent.prototype, "reviewDraft").mockResolvedValue("looks fine");
+    vi.spyOn(ShortFictionDraftReviserAgent.prototype, "reviseDraft").mockResolvedValue(complete);
+    vi.spyOn(ShortFictionPackagingAgent.prototype, "generatePackage").mockResolvedValue({
+      title: "电梯多一层", intro: "钩子", sellingPoints: ["反转"], coverPrompt: "", rawContent: "",
+    });
+
+    await runShortFictionProduction({
+      projectRoot: root, direction: "恐怖短篇", storyId: "elevator",
+      chapterCount: CH, charsPerChapter: 1000, cover: false, runtimes: runtimes(root),
+    });
+
+    expect(writeDraft).not.toHaveBeenCalled();
+    expect(continueDraft).toHaveBeenCalledWith(expect.objectContaining({
+      draft: expect.objectContaining({
+        chapters: expect.arrayContaining([expect.objectContaining({ number: 1, content: expect.stringContaining("深夜的电梯") })]),
+      }),
+      onBatchComplete: expect.any(Function),
+    }));
+  });
+
   it("keeps completing a draft when the first continuation fills only some missing middle chapters", async () => {
     await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
     await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲", "utf-8");
