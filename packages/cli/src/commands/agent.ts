@@ -61,6 +61,8 @@ export const agentCommand = new Command("agent")
             ? client._piModel
             : { provider: config.llm.provider ?? "openai", modelId: config.llm.model },
           apiKey: client._apiKey,
+          stream: client.stream,
+          proxyUrl: client.proxyUrl,
         },
         fullInstruction,
       );

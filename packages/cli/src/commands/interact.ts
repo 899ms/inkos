@@ -100,6 +100,8 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
           ? client._piModel
           : { provider: config.llm.provider ?? "openai", modelId: config.llm.model },
         apiKey: client._apiKey,
+        stream: client.stream,
+        proxyUrl: client.proxyUrl,
       }, input);
 
       const responseText = result.responseText;

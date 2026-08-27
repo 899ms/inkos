@@ -61,7 +61,7 @@ import {
   type ActivatedSkillGuidance,
 } from "./skill-tool.js";
 import { opaqueConversationId, runWithAgentTrajectory } from "../llm/agent-trajectory.js";
-import { guardedPiStream } from "./pi-stream.js";
+import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -100,6 +100,10 @@ export interface AgentSessionConfig {
   model: Model<Api> | { provider: string; modelId: string };
   /** Optional API key. When omitted, falls back to env-based key lookup. */
   apiKey?: string;
+  /** Use SSE when true; adapt a complete response into Pi events when false. */
+  stream?: boolean;
+  /** Optional HTTP proxy shared with the project LLM client. */
+  proxyUrl?: string;
   /** Allow the read tool to read absolute paths outside projectRoot/books. Defaults to false; set INKOS_AGENT_ALLOW_SYSTEM_READ=1 to enable. */
   allowSystemFileRead?: boolean;
   /** Optional listener for streaming events (for SSE forwarding). */
@@ -840,7 +844,7 @@ async function runAgentSessionUnlocked(
   });
   const skillResolutionKey = skillResolutionCacheKey(skillResolution);
   const model = resolveModel(config.model);
-  const requestedModelIdentity = agentModelIdentity(model);
+  const requestedModelIdentity = `${agentModelIdentity(model)}|stream:${config.stream ?? true}|proxy:${config.proxyUrl ?? ""}`;
   const allowSystemFileRead = config.allowSystemFileRead ?? envFlagEnabled(process.env.INKOS_AGENT_ALLOW_SYSTEM_READ, false);
   const suppressProductionTools = config.suppressProductionTools ?? false;
   const profiles = createBuiltInWorkProfileRegistry();
@@ -1063,7 +1067,9 @@ async function runAgentSessionUnlocked(
           return localAssistantStopStream(streamModel);
         }
         if (isLlmStubEnabled()) return stubAgentStream(streamModel, context);
-        return guardedPiStream(streamModel, context, options);
+        return config.stream === false
+          ? guardedPiNonStreaming(streamModel, context, options, config.proxyUrl)
+          : guardedPiStream(streamModel, context, options);
       },
       getApiKey: (provider: string) => {
         if (config.apiKey) return config.apiKey;

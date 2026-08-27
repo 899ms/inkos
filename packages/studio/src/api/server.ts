@@ -5276,6 +5276,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         {
           model,
           apiKey: agentApiKey,
+          stream: pipelineClient.stream,
+          proxyUrl: pipelineClient.proxyUrl,
           pipeline,
           ...(backgroundTask
             ? {
