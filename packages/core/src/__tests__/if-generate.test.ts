@@ -87,5 +87,29 @@ describe("generateStoryGraph structured worker", () => {
       title: "T",
       premise: "P",
     })).rejects.toThrow("Generated story graph is not playable");
+    expect(runWorkerAgentToolMock).toHaveBeenCalledTimes(2);
+    expect(runWorkerAgentToolMock.mock.calls[1]?.[2].at(-1)?.content).toContain("死路");
+  });
+
+  it("repairs a rejected graph through a second structured submission", async () => {
+    runWorkerAgentToolMock
+      .mockResolvedValueOnce({
+        nodes: [
+          { id: "s", type: "start", choices: [] },
+          { id: "n", type: "normal", choices: [] },
+          { id: "e", type: "ending", choices: [] },
+        ],
+        endings: [{ id: "ending", nodeId: "e", title: "End", type: "neutral" }],
+      })
+      .mockResolvedValueOnce(playableGraphContent());
+
+    const graph = await generateStoryGraph(client, "m", {
+      projectId: "p",
+      title: "T",
+      premise: "P",
+    }, { language: "en" });
+
+    expect(graph.nodes).toHaveLength(5);
+    expect(runWorkerAgentToolMock).toHaveBeenCalledTimes(2);
   });
 });

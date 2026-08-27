@@ -52,7 +52,9 @@ const NodeTypeToolSchema = Type.Union([
   Type.Literal("merge"),
   Type.Literal("ending"),
   Type.Literal("explore"),
-]);
+], {
+  description: "Exactly one node is start. Nodes that present choices are branch. Terminal outcome nodes are ending. Other scene nodes are normal/explore/merge.",
+});
 
 const StoryNodeFields = {
   title: Type.Optional(Type.String()),
@@ -131,8 +133,8 @@ export const StoryGraphContentToolSchema = Type.Object({
   worldAnchor: Type.Optional(WorldAnchorToolSchema),
   characters: Type.Optional(Type.Array(CharacterToolSchema)),
   variables: Type.Optional(Type.Array(VariableToolSchema)),
-  nodes: Type.Array(StoryNodeToolSchema, { minItems: 5 }),
-  endings: Type.Array(EndingToolSchema, { minItems: 2 }),
+  nodes: Type.Array(StoryNodeToolSchema, { minItems: 3 }),
+  endings: Type.Array(EndingToolSchema, { minItems: 1 }),
 }, { additionalProperties: false });
 
 export const StoryStructureToolSchema = Type.Object({
