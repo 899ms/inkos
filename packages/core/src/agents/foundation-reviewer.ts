@@ -3,10 +3,9 @@ import type { ArchitectOutput } from "./architect.js";
 
 export interface FoundationReviewResult {
   readonly passed: boolean;
-  readonly totalScore: number;
   readonly dimensions: ReadonlyArray<{
     readonly name: string;
-    readonly score: number;
+    readonly passed: boolean;
     readonly feedback: string;
   }>;
   readonly overallFeedback: string;
@@ -18,9 +17,6 @@ export class FoundationReviewParseError extends Error {
     this.name = "FoundationReviewParseError";
   }
 }
-
-const PASS_THRESHOLD = 80;
-const DIMENSION_FLOOR = 60;
 
 export class FoundationReviewerAgent extends BaseAgent {
   get name(): string {
@@ -112,33 +108,31 @@ export class FoundationReviewerAgent extends BaseAgent {
   ): string {
     return `你是一位资深小说编辑，正在审核一本新书的基础设定（世界观 + 大纲 + 规则）。
 
-你需要从以下维度逐项打分（0-100），并给出具体意见：
+你需要逐项判断以下维度是否可以直接进入写作，并给出具体意见：
 
 ${dimensions.map((dim, i) => `${i + 1}. ${dim}`).join("\n")}
 
-## 评分标准
-- 80+ 通过，可以开始写作
-- 60-79 有明显问题，需要修改
-- <60 方向性错误，需要重新设计
+## 判断标准
+- 通过：这一维度没有会妨碍实际写作的明确问题
+- 修改：存在具体、可执行的缺口；必须说明要改什么，不能只说“不够好”
 
 ## 输出格式（严格遵守）
 === DIMENSION: 1 ===
-分数：{0-100}
+结论：{通过/修改}
 意见：{具体反馈}
 
 === DIMENSION: 2 ===
-分数：{0-100}
+结论：{通过/修改}
 意见：{具体反馈}
 
 ...（每个维度一个 block）
 
 === OVERALL ===
-总分：{加权平均}
-通过：{是/否}
+结论：{通过/修改}
 总评：{1-2段总结，指出最大的问题和最值得保留的优点}
 ${canonBlock}${styleBlock}
 
-审核时要严格。不要因为"还行"就给高分。80分意味着"可以直接开写，不需要改"。`;
+审核时要严格，但不要制造抽象门槛。只有存在明确、可执行的问题时才判“修改”。`;
   }
 
   private buildEnglishReviewPrompt(
@@ -148,33 +142,31 @@ ${canonBlock}${styleBlock}
   ): string {
     return `You are a senior fiction editor reviewing a new book's foundation (worldbuilding + outline + rules).
 
-Score each dimension (0-100) with specific feedback:
+Decide whether each dimension is ready for writing and give specific feedback:
 
 ${dimensions.map((dim, i) => `${i + 1}. ${dim}`).join("\n")}
 
-## Scoring
-- 80+ Pass — ready to write
-- 60-79 Needs revision
-- <60 Fundamental direction problem
+## Decision standard
+- Accept: no concrete issue in this dimension would block actual writing
+- Revise: a specific, actionable gap exists; state exactly what must change
 
 ## Output format (strict)
 === DIMENSION: 1 ===
-Score: {0-100}
+Verdict: {accept/revise}
 Feedback: {specific feedback}
 
 === DIMENSION: 2 ===
-Score: {0-100}
+Verdict: {accept/revise}
 Feedback: {specific feedback}
 
 ...
 
 === OVERALL ===
-Total: {weighted average}
-Passed: {yes/no}
+Verdict: {accept/revise}
 Summary: {1-2 paragraphs — biggest problem and best quality}
 ${canonBlock}${styleBlock}
 
-Be strict. 80 means "ready to write without changes."`;
+Be strict without inventing an abstract quality bar. Choose revise only for concrete, actionable problems.`;
   }
 
   private buildFoundationExcerpt(foundation: ArchitectOutput, language: "zh" | "en"): string {
@@ -187,12 +179,13 @@ Be strict. 80 means "ready to write without changes."`;
     content: string,
     dimensions: ReadonlyArray<string>,
   ): FoundationReviewResult {
-    const parsedDimensions: Array<{ readonly name: string; readonly score: number; readonly feedback: string }> = [];
+    const parsedDimensions: Array<{ readonly name: string; readonly passed: boolean; readonly feedback: string }> = [];
     const missingDimensions: number[] = [];
 
     for (let i = 0; i < dimensions.length; i++) {
       const regex = new RegExp(
-        `=== DIMENSION: ${i + 1} ===\\s*[\\s\\S]*?(?:分数|Score)[：:]\\s*(\\d+)[\\s\\S]*?(?:意见|Feedback)[：:]\\s*([\\s\\S]*?)(?==== |$)`,
+        `=== DIMENSION: ${i + 1} ===\\s*[\\s\\S]*?(?:结论|Verdict)[：:]\\s*(通过|修改|accept|revise)[\\s\\S]*?(?:意见|Feedback)[：:]\\s*([\\s\\S]*?)(?==== |$)`,
+        "i",
       );
       const match = content.match(regex);
       if (!match) {
@@ -201,7 +194,7 @@ Be strict. 80 means "ready to write without changes."`;
       }
       parsedDimensions.push({
         name: dimensions[i]!,
-        score: parseInt(match[1]!, 10),
+        passed: /^(?:通过|accept)$/i.test(match[1]!.trim()),
         feedback: match[2]!.trim(),
       });
     }
@@ -210,17 +203,13 @@ Be strict. 80 means "ready to write without changes."`;
       throw new FoundationReviewParseError(missingDimensions);
     }
 
-    const totalScore = parsedDimensions.length > 0
-      ? Math.round(parsedDimensions.reduce((sum, d) => sum + d.score, 0) / parsedDimensions.length)
-      : 0;
-    const anyBelowFloor = parsedDimensions.some((d) => d.score < DIMENSION_FLOOR);
-    const passed = totalScore >= PASS_THRESHOLD && !anyBelowFloor;
+    const passed = parsedDimensions.every((dimension) => dimension.passed);
 
     const overallMatch = content.match(
       /=== OVERALL ===[\s\S]*?(?:总评|Summary)[：:]\s*([\s\S]*?)$/,
     );
     const overallFeedback = overallMatch ? overallMatch[1]!.trim() : "(parse failed)";
 
-    return { passed, totalScore, dimensions: parsedDimensions, overallFeedback };
+    return { passed, dimensions: parsedDimensions, overallFeedback };
   }
 }

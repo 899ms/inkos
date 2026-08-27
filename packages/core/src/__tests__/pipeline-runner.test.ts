@@ -363,7 +363,6 @@ describe("PipelineRunner", () => {
     });
     vi.spyOn(FoundationReviewerAgent.prototype, "review").mockResolvedValue({
       passed: true,
-      totalScore: 85,
       dimensions: [],
       overallFeedback: "auto-pass for test",
     });
@@ -605,16 +604,15 @@ describe("PipelineRunner", () => {
     reviewMock
       .mockResolvedValueOnce({
         passed: false,
-        totalScore: 68,
         dimensions: [
           {
             name: "核心冲突",
-            score: 58,
+            passed: false,
             feedback: "核心冲突不够集中，主线悬念没有站稳。",
           },
           {
             name: "开篇节奏",
-            score: 76,
+            passed: false,
             feedback: "前五章起势偏慢，爆点不够前置。",
           },
         ],
@@ -622,7 +620,6 @@ describe("PipelineRunner", () => {
       })
       .mockResolvedValueOnce({
         passed: true,
-        totalScore: 88,
         dimensions: [],
         overallFeedback: "通过",
       });
@@ -731,7 +728,6 @@ describe("PipelineRunner", () => {
       .mockRejectedValueOnce(new Error("524 openai_error"));
     vi.mocked(FoundationReviewerAgent.prototype.review).mockResolvedValueOnce({
       passed: false,
-      totalScore: 79,
       dimensions: [],
       overallFeedback: "Needs another pass.",
     });
@@ -793,7 +789,6 @@ describe("PipelineRunner", () => {
     reviewMock.mockReset();
     reviewMock.mockResolvedValue({
       passed: false,
-      totalScore: 72,
       dimensions: [],
       overallFeedback: "仍未达到可开写标准。",
     });
@@ -816,7 +811,7 @@ describe("PipelineRunner", () => {
       });
 
       expect(generate).toHaveBeenCalledTimes(5);
-      expect(reviewMock).toHaveBeenCalledTimes(5);
+      expect(reviewMock).toHaveBeenCalledTimes(4);
       expect(generate.mock.calls[1]?.[0]).toContain("仍未达到可开写标准");
       expect(generate.mock.calls[4]?.[0]).toContain("仍未达到可开写标准");
     } finally {

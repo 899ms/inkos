@@ -31,23 +31,22 @@ describe("FoundationReviewerAgent", () => {
     ).mockResolvedValue({
       content: [
         "=== DIMENSION: 1 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== DIMENSION: 2 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== DIMENSION: 3 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== DIMENSION: 4 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== DIMENSION: 5 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== OVERALL ===",
-        "总分：80",
-        "通过：是",
+        "结论：通过",
         "总评：可开写。",
       ].join("\n"),
       usage: ZERO_USAGE,
@@ -87,23 +86,22 @@ describe("FoundationReviewerAgent", () => {
     ).mockResolvedValue({
       content: [
         "=== DIMENSION: 1 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== DIMENSION: 2 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== DIMENSION: 3 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== DIMENSION: 4 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== DIMENSION: 5 ===",
-        "分数：80",
+        "结论：通过",
         "意见：可用",
         "=== OVERALL ===",
-        "总分：80",
-        "通过：是",
+        "结论：通过",
         "总评：可开写。",
       ].join("\n"),
       usage: ZERO_USAGE,
@@ -133,7 +131,7 @@ describe("FoundationReviewerAgent", () => {
     expect(messages[1]?.content).toContain("PENDING_HOOKS_TAIL_MARKER");
   });
 
-  it("does not turn a malformed review into fake 50-point quality scores", async () => {
+  it("does not turn a malformed review into a fake qualitative decision", async () => {
     const agent = new FoundationReviewerAgent({
       client: TEST_CLIENT,
       model: "test-model",
@@ -146,7 +144,7 @@ describe("FoundationReviewerAgent", () => {
     ).mockResolvedValue({
       content: [
         "### 核心冲突",
-        "分数：82",
+        "结论：通过",
         "意见：主线清楚，但模型没有遵守约定的分项边界。",
       ].join("\n"),
       usage: ZERO_USAGE,

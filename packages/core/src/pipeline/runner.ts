@@ -577,10 +577,10 @@ export class PipelineRunner {
       }
 
       this.config.logger?.info(
-        `Foundation review: ${review.totalScore}/100 ${review.passed ? "PASSED" : "REJECTED"}`,
+        `Foundation review: ${review.passed ? "ACCEPT" : "REVISE"}`,
       );
       for (const dim of review.dimensions) {
-        this.config.logger?.info(`  [${dim.score}] ${dim.name.slice(0, 40)}`);
+        this.config.logger?.info(`  [${dim.passed ? "ACCEPT" : "REVISE"}] ${dim.name.slice(0, 40)}`);
       }
 
       if (review.passed) {
@@ -588,8 +588,8 @@ export class PipelineRunner {
       }
 
       this.logWarn(params.stageLanguage, {
-        zh: `基础设定未通过审核（${review.totalScore}分），正在重新生成...`,
-        en: `Foundation rejected (${review.totalScore}/100), regenerating...`,
+        zh: "基础设定存在明确问题，正在按审核意见重新生成...",
+        en: "Foundation has concrete issues; regenerating from the review feedback...",
       });
 
       try {
@@ -604,29 +604,10 @@ export class PipelineRunner {
       }
     }
 
-    // Final review
-    let finalReview;
-    try {
-      finalReview = await params.reviewer.review({
-        foundation,
-        mode: params.mode,
-        sourceCanon: params.sourceCanon,
-        styleGuide: params.styleGuide,
-        language: params.language,
-        targetChapters: params.targetChapters,
-      });
-    } catch (error) {
-      if (!(error instanceof FoundationReviewParseError)) throw error;
-      this.logWarn(params.stageLanguage, {
-        zh: `基础设定最终审核输出无法解析，已保留当前版本：${error.message}`,
-        en: `Final foundation review output could not be parsed; keeping the current version: ${error.message}`,
-      });
-      return foundation;
-    }
-    this.config.logger?.info(
-      `Foundation final review: ${finalReview.totalScore}/100 ${finalReview.passed ? "PASSED" : "ACCEPTED (max retries)"}`,
-    );
-
+    this.logWarn(params.stageLanguage, {
+      zh: "基础设定修订预算已用完，保留最后一版完整设定并继续。",
+      en: "Foundation revision budget is exhausted; preserving the latest complete version.",
+    });
     return foundation;
   }
 
@@ -634,7 +615,7 @@ export class PipelineRunner {
     review: {
       readonly dimensions: ReadonlyArray<{
         readonly name: string;
-        readonly score: number;
+        readonly passed: boolean;
         readonly feedback: string;
       }>;
       readonly overallFeedback: string;
@@ -644,8 +625,8 @@ export class PipelineRunner {
     const dimensionLines = review.dimensions
       .map((dimension) => (
         language === "en"
-          ? `- ${dimension.name} [${dimension.score}]: ${dimension.feedback}`
-          : `- ${dimension.name}（${dimension.score}分）：${dimension.feedback}`
+          ? `- ${dimension.name}: ${dimension.feedback}`
+          : `- ${dimension.name}：${dimension.feedback}`
       ))
       .join("\n");
 
