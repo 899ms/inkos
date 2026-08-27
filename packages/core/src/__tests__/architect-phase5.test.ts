@@ -283,7 +283,7 @@ describe("ArchitectAgent — Phase 5 prose output", () => {
     }
   });
 
-  it("repairs missing architect sections once before failing the book creation flow", async () => {
+  it("completes missing architect sections through the bounded second stage", async () => {
     const agent = buildAgent();
     const chat = vi.spyOn(agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> }, "chat")
       .mockResolvedValueOnce({
@@ -302,9 +302,11 @@ describe("ArchitectAgent — Phase 5 prose output", () => {
     const out = await agent.generateFoundation(baseBook());
 
     expect(chat).toHaveBeenCalledTimes(2);
-    const repairMessages = chat.mock.calls[1]?.[0] as Array<{ role: string; content: string }>;
-    expect(repairMessages[0]?.content).toContain("修复 InkOS architect");
-    expect(repairMessages[1]?.content).toContain("缺失 section");
+    const secondStageMessages = chat.mock.calls[1]?.[0] as Array<{ role: string; content: string }>;
+    expect(secondStageMessages[0]?.content).toContain("分段交付覆盖指令");
+    expect(secondStageMessages[0]?.content).toContain("roles、book_rules、pending_hooks");
+    expect(secondStageMessages[1]?.content).toContain("<accepted_foundation_part_1>");
+    expect(secondStageMessages[1]?.content).toContain("=== SECTION: story_frame ===");
     expect(out.storyFrame).toContain("这本书讲的是");
     expect(out.bookRules).toContain("version");
     expect(out.roles?.length).toBeGreaterThan(0);

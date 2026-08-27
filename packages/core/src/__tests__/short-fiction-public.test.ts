@@ -235,7 +235,7 @@ ${originalTwo}
     expect(revised.chapters[0]?.content).toBe(acceptedOne);
     expect(revised.chapters[1]?.content).toBe(originalTwo);
     expect(revised.storyTitle).toBe("新稿标题");
-    expect(chatSpy).toHaveBeenCalledTimes(3);
+    expect(chatSpy).toHaveBeenCalledTimes(4);
   });
 
   it("resolves cover generation from project cover config and stored cover secret", async () => {
