@@ -138,7 +138,7 @@ export async function runShortFictionProduction(
   if (
     providedStoryId
     && await projectFileExists(root, join(shortWorkBaseDir(providedStoryId), "final", "full.md"))
-    && !await isFailedShortRun(root, join(shortWorkBaseDir(providedStoryId), "status.json"))
+    && await readShortRunStatus(root, join(shortWorkBaseDir(providedStoryId), "status.json")) === "complete"
   ) {
     return buildShortRunResult(providedStoryId, shortWorkBaseDir(providedStoryId), { coverError: "already-complete" });
   }
@@ -525,14 +525,14 @@ async function projectFileExists(root: string, path: string): Promise<boolean> {
   }
 }
 
-async function isFailedShortRun(root: string, path: string): Promise<boolean> {
+async function readShortRunStatus(root: string, path: string): Promise<string | undefined> {
   const raw = await tryReadProjectText(root, path);
-  if (!raw) return false;
+  if (!raw) return undefined;
   try {
     const parsed = JSON.parse(raw) as { status?: unknown };
-    return parsed.status === "failed";
+    return typeof parsed.status === "string" ? parsed.status : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 

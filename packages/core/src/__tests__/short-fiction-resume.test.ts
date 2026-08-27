@@ -280,6 +280,7 @@ describe("short fiction resume + failure marker (C2)", () => {
   it("returns the existing short untouched when final/full.md already exists (idempotent)", async () => {
     await mkdir(join(root, "works", "elevator", "source", "final"), { recursive: true });
     await writeFile(join(root, "works", "elevator", "source", "final", "full.md"), "# done", "utf-8");
+    await writeFile(join(root, "works", "elevator", "source", "status.json"), JSON.stringify({ status: "complete" }), "utf-8");
     const writeDraft = vi.spyOn(ShortFictionWriterAgent.prototype, "writeDraft");
 
     const result = await runShortFictionProduction({
@@ -289,6 +290,33 @@ describe("short fiction resume + failure marker (C2)", () => {
 
     expect(writeDraft).not.toHaveBeenCalled();       // nothing regenerated
     expect(result.coverError).toBe("already-complete");
+  });
+
+  it("reprocesses a needs-review short from its persisted outline and draft", async () => {
+    await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
+    await mkdir(join(root, "works", "elevator", "source", "drafts", "v001-partial"), { recursive: true });
+    await mkdir(join(root, "works", "elevator", "source", "final"), { recursive: true });
+    await writeFile(join(root, "works", "elevator", "source", "outline", "v002.md"), "## 既有大纲", "utf-8");
+    const complete = parseShortFictionBatchDraft(DRAFT_MD, { expectedChapters: CH });
+    await writeFile(join(root, "works", "elevator", "source", "drafts", "v001-partial", "draft.json"), JSON.stringify(complete), "utf-8");
+    await writeFile(join(root, "works", "elevator", "source", "final", "full.md"), "# needs review", "utf-8");
+    await writeFile(join(root, "works", "elevator", "source", "status.json"), JSON.stringify({ status: "needs-review" }), "utf-8");
+    const continueDraft = vi.spyOn(ShortFictionWriterAgent.prototype, "continueDraft").mockResolvedValue(complete);
+    vi.spyOn(ShortFictionDraftReviewerAgent.prototype, "reviewDraft").mockResolvedValue("looks fine");
+    vi.spyOn(ShortFictionDraftReviserAgent.prototype, "reviseDraft").mockResolvedValue(complete);
+    vi.spyOn(ShortFictionPackagingAgent.prototype, "generatePackage").mockResolvedValue({
+      title: "电梯多一层", intro: "钩子", sellingPoints: ["反转"], coverPrompt: "", rawContent: "",
+    });
+
+    const result = await runShortFictionProduction({
+      projectRoot: root, direction: "恐怖短篇", storyId: "elevator",
+      chapterCount: CH, charsPerChapter: 1000, cover: false, runtimes: runtimes(root),
+    });
+
+    expect(continueDraft).toHaveBeenCalled();
+    expect(result.coverError).toBe("disabled");
+    const status = JSON.parse(await readFile(join(root, "works", "elevator", "source", "status.json"), "utf-8"));
+    expect(status.status).toBe("complete");
   });
 
   it("does not skip a previously failed run just because final/full.md exists", async () => {
