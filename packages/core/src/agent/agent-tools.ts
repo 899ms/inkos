@@ -334,7 +334,7 @@ const ProposeActionParams = Type.Object({
     requirements: Type.Optional(Type.String({ description: "Confirmed script format, production constraints, tone, episode structure, or user preferences." })),
     episodeCount: Type.Optional(Type.Number({ description: "Optional target episode/segment count." })),
     episodeDuration: Type.Optional(Type.String({ description: "Optional per-episode/per-segment duration." })),
-    projectId: Type.Optional(Type.String({ description: "Optional output id under dramas/." })),
+    projectId: Type.Optional(Type.String({ description: "Optional stable Script Work ID." })),
   }, { description: "Structured execution args for action=script_create." })),
   storyboardCreate: Type.Optional(Type.Object({
     title: Type.String({ description: "Confirmed storyboard project title." }),
@@ -2214,7 +2214,7 @@ const ScriptCreateParams = Type.Object({
     description: "Optional per-episode/per-segment duration.",
   })),
   projectId: Type.Optional(Type.String({
-    description: "Optional output id under dramas/.",
+    description: "Optional stable Script Work ID.",
   })),
 });
 
@@ -2232,7 +2232,7 @@ export function createScriptCreationTool(
     name: "script_create",
     description:
       "Create a script project from a novel excerpt, idea, outline, or existing script. " +
-      "Writes human-readable Markdown spec and script files under dramas/.",
+      "Writes human-readable Markdown spec and script artifacts into a Script Work.",
     label: "Script Creation",
     parameters: ScriptCreateParams,
     async execute(
