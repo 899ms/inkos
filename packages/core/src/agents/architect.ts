@@ -151,12 +151,12 @@ export class ArchitectAgent extends BaseAgent {
       ? `Generate the complete foundation for a ${gp.name} novel titled "${book.title}". Write everything in English.`
       : `请为标题为"${book.title}"的${gp.name}小说生成完整基础设定。`;
 
-    const response = await this.chat([
-      { role: "system", content: langPrefix + systemPrompt + revisePrompt },
-      { role: "user", content: userMessage },
-    ], { temperature: 0.8 });
-
-    return this.parseSectionsWithRepair(response.content, resolvedLanguage);
+    return this.generateFoundationInStages({
+      systemPrompt: langPrefix + systemPrompt + revisePrompt,
+      userMessage,
+      language: resolvedLanguage,
+      temperature: 0.8,
+    });
   }
 
   private buildRevisePrompt(reviseFrom: {
@@ -751,7 +751,9 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
     // sentence on the same line before the first marker; do not discard an
     // otherwise complete foundation only because that sentence lacks a line
     // break.
-    const sectionPattern = /(?:#{1,6}\s*)?===\s*SECTION\s*[：:]\s*([^\n=]+?)\s*===\s*(?:#+\s*)?/gim;
+    // Horizontal whitespace only: using \s here consumed the Markdown heading
+    // on the line after a marker ("=== SECTION ===\n# Heading").
+    const sectionPattern = /(?:#{1,6}[ \t]*)?===[ \t]*SECTION[ \t]*[：:][ \t]*([^\n=]+?)[ \t]*===[ \t]*(?:#+[ \t]*)?/gim;
     const markerMatches = [...content.matchAll(sectionPattern)].map((match) => ({
       name: this.normalizeSectionName(match[1] ?? ""),
       index: match.index ?? 0,
@@ -1091,12 +1093,12 @@ ${continuationDirective}
       ? `Generate the complete foundation for an imported ${gp.name} novel titled "${book.title}". Write everything in English.\n\n${chaptersText}`
       : `以下是《${book.title}》的已有正文资料包，请从中反向推导完整基础设定：\n\n${chaptersText}`;
 
-    const response = await this.chat([
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userMessage },
-    ], { temperature: 0.5 });
-
-    return this.parseSectionsWithRepair(response.content, resolvedLanguage);
+    return this.generateFoundationInStages({
+      systemPrompt,
+      userMessage,
+      language: resolvedLanguage,
+      temperature: 0.5,
+    });
   }
 
   async generateFanficFoundation(
@@ -1145,15 +1147,66 @@ ${genreBody}
 - 主角弧线只写在 roles/主要角色/<主角>.md，不在 story_frame 重复
 - 所有 outline 必须是散文密度`;
 
-    const response = await this.chat([
-      { role: "system", content: systemPrompt },
-      {
-        role: "user",
-        content: `请为标题为"${book.title}"的${fanficMode}模式同人小说生成基础设定。目标${book.targetChapters}章，每章${book.chapterWordCount}字。`,
-      },
-    ], { temperature: 0.7 });
+    return this.generateFoundationInStages({
+      systemPrompt,
+      userMessage: `请为标题为"${book.title}"的${fanficMode}模式同人小说生成基础设定。目标${book.targetChapters}章，每章${book.chapterWordCount}字。`,
+      language: book.language ?? "zh",
+      temperature: 0.7,
+    });
+  }
 
-    return this.parseSectionsWithRepair(response.content, book.language ?? "zh");
+  private async generateFoundationInStages(input: {
+    readonly systemPrompt: string;
+    readonly userMessage: string;
+    readonly language: "zh" | "en";
+    readonly temperature: number;
+  }): Promise<ArchitectOutput> {
+    const firstStageDirective = input.language === "en"
+      ? [
+          "## Staged delivery override",
+          "The foundation is delivered in two bounded calls. In THIS call output ONLY these SECTION blocks, in order: story_frame, volume_map.",
+          "Do not output roles, book_rules, or pending_hooks yet. End immediately after volume_map.",
+        ].join("\n")
+      : [
+          "## 分段交付覆盖指令",
+          "基础设定分两次有界交付。本次只输出以下 SECTION，顺序固定：story_frame、volume_map。",
+          "暂时不要输出 roles、book_rules、pending_hooks；volume_map 结束后立即停止。",
+        ].join("\n");
+    const first = await this.chat([
+      { role: "system", content: `${input.systemPrompt}\n\n${firstStageDirective}` },
+      { role: "user", content: input.userMessage },
+    ], { temperature: input.temperature });
+    try {
+      // Some fast/strict models may still return the complete legacy contract
+      // despite the staged instruction. Accept that complete result directly
+      // instead of paying for a redundant second call.
+      return this.parseSections(first.content, input.language);
+    } catch (error) {
+      if (!(error instanceof MissingArchitectSectionsError)) throw error;
+    }
+
+    const secondStageDirective = input.language === "en"
+      ? [
+          "## Staged delivery override",
+          "The accepted story_frame and volume_map are supplied by the user below.",
+          "In THIS call output ONLY these SECTION blocks, in order: roles, book_rules, pending_hooks.",
+          "Do not repeat story_frame or volume_map. Preserve their facts and finish immediately after pending_hooks.",
+        ].join("\n")
+      : [
+          "## 分段交付覆盖指令",
+          "用户消息会附上已经接受的 story_frame 与 volume_map。",
+          "本次只输出以下 SECTION，顺序固定：roles、book_rules、pending_hooks。",
+          "不要重复 story_frame 或 volume_map；必须服从其中的事实，pending_hooks 结束后立即停止。",
+        ].join("\n");
+    const secondUserMessage = input.language === "en"
+      ? `${input.userMessage}\n\n<accepted_foundation_part_1>\n${first.content}\n</accepted_foundation_part_1>\n\nComplete part 2 now.`
+      : `${input.userMessage}\n\n<accepted_foundation_part_1>\n${first.content}\n</accepted_foundation_part_1>\n\n现在完成第 2 部分。`;
+    const second = await this.chat([
+      { role: "system", content: `${input.systemPrompt}\n\n${secondStageDirective}` },
+      { role: "user", content: secondUserMessage },
+    ], { temperature: input.temperature });
+
+    return this.parseSectionsWithRepair(`${first.content}\n\n${second.content}`, input.language);
   }
 
   // -------------------------------------------------------------------------

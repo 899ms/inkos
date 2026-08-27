@@ -863,6 +863,51 @@ describe("ArchitectAgent", () => {
     expect(output.roles![1]).toMatchObject({ tier: "minor", name: "配角A" });
   });
 
+  it("delivers a large foundation in two bounded section stages", async () => {
+    const agent = buildPhase5Agent();
+    const book = phase5Book();
+    const chat = vi.spyOn(agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> }, "chat")
+      .mockResolvedValueOnce({
+        content: [
+          "=== SECTION: story_frame ===",
+          "## 主题与基调",
+          "港城追查一份被篡改的潮位记录。",
+          "=== SECTION: volume_map ===",
+          "## 第一卷",
+          "从气象站追到旧防波堤。",
+        ].join("\n"),
+        usage: ZERO_USAGE,
+      })
+      .mockResolvedValueOnce({
+        content: [
+          "=== SECTION: roles ===",
+          "---ROLE---",
+          "tier: major",
+          "name: 林潮",
+          "---CONTENT---",
+          "## 当前现状",
+          "她在气象站值夜。",
+          "=== SECTION: book_rules ===",
+          "## 主角",
+          "- 名字：林潮",
+          "=== SECTION: pending_hooks ===",
+          "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | notes |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          "| H01 | 0 | mystery | deferred | 0 | 找到原始记录 | near-term | none | 第一卷末 | true | 10 | 红色潮位笔记 |",
+        ].join("\n"),
+        usage: ZERO_USAGE,
+      });
+
+    const result = await agent.generateFoundation(book);
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect((chat.mock.calls[0]?.[0] as Array<{ content: string }>)[0]?.content).toContain("本次只输出以下 SECTION");
+    expect((chat.mock.calls[1]?.[0] as Array<{ content: string }>)[0]?.content).toContain("本次只输出以下 SECTION");
+    expect(result.storyFrame).toContain("潮位记录");
+    expect(result.roles?.[0]?.name).toBe("林潮");
+    expect(result.pendingHooks).toContain("H01");
+  });
+
   it("writeFoundationFiles writes outline/ and roles/ when Phase 5 fields present", async () => {
     const { mkdtemp, rm, access } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
