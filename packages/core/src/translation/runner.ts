@@ -62,6 +62,7 @@ export async function runTranslationProject(
       segments: [],
     } satisfies TranslationChapterFile));
     const translatedByIndex = new Map(translated.segments.map((segment) => [segment.index, segment]));
+    let translatedTitle = translated.title;
     const pending = source.segments.filter((segment) => !translatedByIndex.get(segment.index)?.target?.trim());
 
     for (let offset = 0; offset < pending.length; offset += batchSize) {
@@ -73,6 +74,7 @@ export async function runTranslationProject(
         segments: batch,
         glossary,
       });
+      if (result.chapterTitle?.trim()) translatedTitle = result.chapterTitle.trim();
       for (const item of result.segments) {
         const original = source.segments.find((segment) => segment.index === item.index);
         if (!original) continue;
@@ -88,6 +90,7 @@ export async function runTranslationProject(
       }
       await saveTranslationProgress(projectRoot, projectId, chapterInfo.translatedPath, {
         ...source,
+        title: translatedTitle,
         segments: orderedTranslatedSegments(source.segments, translatedByIndex),
       }, glossary);
       await writeProductionRunSnapshot({
@@ -111,19 +114,19 @@ export async function runTranslationProject(
       const review = await options.model.reviewChapter({
         sourceLanguage: manifest.sourceLanguage,
         targetLanguage: manifest.targetLanguage,
-        chapterTitle: source.title,
+        chapterTitle: completedChapter.title,
         segments: completedChapter.segments,
         glossary,
       });
       reviewedChapters++;
       status = review.passed ? "reviewed" : "translated";
-      reportLines.push(`## ${source.title}`, "", `- passed: ${review.passed ? "yes" : "no"}`, `- summary: ${review.summary}`, "");
+      reportLines.push(`## ${completedChapter.title}`, "", `- passed: ${review.passed ? "yes" : "no"}`, `- summary: ${review.summary}`, "");
       for (const issue of review.issues) {
         reportLines.push(`- issue: ${issue}`);
       }
       reportLines.push("");
     }
-    manifest = updateChapterStatus(manifest, chapterInfo.number, status);
+    manifest = updateChapterStatus(manifest, chapterInfo.number, status, completedChapter.title);
     await saveTranslationManifest(projectRoot, manifest);
   }
 
@@ -186,12 +189,13 @@ function updateChapterStatus(
   manifest: TranslationProjectManifest,
   chapterNumber: number,
   status: "translated" | "reviewed",
+  translatedTitle: string,
 ): TranslationProjectManifest {
   return {
     ...manifest,
     updatedAt: new Date().toISOString(),
     chapters: manifest.chapters.map((chapter) =>
-      chapter.number === chapterNumber ? { ...chapter, status } : chapter,
+      chapter.number === chapterNumber ? { ...chapter, title: translatedTitle, status } : chapter,
     ),
   };
 }

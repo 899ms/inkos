@@ -72,6 +72,7 @@ export interface TranslationModelPort {
     readonly segments: ReadonlyArray<TranslationSegment>;
     readonly glossary: ReadonlyArray<TranslationGlossaryTerm>;
   }) => Promise<{
+    readonly chapterTitle?: string;
     readonly segments: ReadonlyArray<{
       readonly index: number;
       readonly target: string;

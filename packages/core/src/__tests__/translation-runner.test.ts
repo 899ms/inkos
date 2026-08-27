@@ -36,6 +36,7 @@ describe("translation runner", () => {
       targetLanguage: "en",
     });
     const translateSegments = vi.fn<TranslationModelPort["translateSegments"]>(async ({ segments }) => ({
+      chapterTitle: "Rainy Night",
       segments: segments.map((segment) => ({
         index: segment.index,
         target: `EN:${segment.source}`,
@@ -63,7 +64,7 @@ describe("translation runner", () => {
 
     const report = await readFile(join(root, first.reportPath), "utf-8");
     expect(report).toContain("ok");
-    expect(report).toContain("雨夜");
+    expect(report).toContain("Rainy Night");
 
     const second = await runTranslationProject(root, created.manifest.id, {
       model: { translateSegments, reviewChapter },
@@ -76,6 +77,7 @@ describe("translation runner", () => {
     const markdown = await readFile(exported.outputPath, "utf-8");
     expect(markdown).toContain("EN:第一段。");
     expect(markdown).toContain("EN:第二段。");
+    expect(markdown).toContain("## Rainy Night");
     expect(markdown).not.toContain("\n第一段。\n");
     const workAfterExport = await loadWorkManifest(root, created.manifest.id);
     expect(workAfterExport.artifacts.some((artifact) => (

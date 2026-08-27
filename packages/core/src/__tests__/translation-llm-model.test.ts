@@ -15,7 +15,7 @@ describe("LLM translation model", () => {
   it("injects the translation Skill into translation and review calls", async () => {
     chatCompletionMock
       .mockResolvedValueOnce({
-        content: JSON.stringify({ segments: [{ index: 1, target: "The rain fell." }], glossary: [] }),
+        content: JSON.stringify({ chapterTitle: "Rainy Night", segments: [{ index: 1, target: "The rain fell." }], glossary: [] }),
         usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
       })
       .mockResolvedValueOnce({
@@ -44,7 +44,7 @@ describe("LLM translation model", () => {
       glossary: [],
       segments: [{ index: 1, source: "雨落下来。" }],
     };
-    await model.translateSegments(request);
+    await expect(model.translateSegments(request)).resolves.toMatchObject({ chapterTitle: "Rainy Night" });
     await model.reviewChapter?.({
       ...request,
       segments: [{ index: 1, source: "雨落下来。", target: "The rain fell." }],

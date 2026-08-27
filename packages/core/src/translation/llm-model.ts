@@ -21,7 +21,8 @@ export function createLLMTranslationModel(input: {
             "Translate faithfully between the requested languages.",
             "Preserve paragraph order, scene meaning, names, tone, and terminology.",
             "Do not summarize. Do not add commentary outside JSON.",
-            "Return JSON only: {\"segments\":[{\"index\":1,\"target\":\"...\",\"notes\":\"optional\"}],\"glossary\":[{\"source\":\"...\",\"target\":\"...\",\"note\":\"optional\"}]}",
+            "Translate the chapter title as well as every segment.",
+            "Return JSON only: {\"chapterTitle\":\"...\",\"segments\":[{\"index\":1,\"target\":\"...\",\"notes\":\"optional\"}],\"glossary\":[{\"source\":\"...\",\"target\":\"...\",\"note\":\"optional\"}]}",
           ].join("\n"),
         },
         {
@@ -40,6 +41,9 @@ export function createLLMTranslationModel(input: {
       ], input.activatedSkills), { temperature: 0.2, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
       const parsed = parseJsonObject(response.content);
       return {
+        ...(typeof parsed.chapterTitle === "string" && parsed.chapterTitle.trim()
+          ? { chapterTitle: parsed.chapterTitle.trim() }
+          : {}),
         segments: parseTranslatedSegments(parsed.segments, request.segments),
         glossary: parseGlossary(parsed.glossary),
       };
