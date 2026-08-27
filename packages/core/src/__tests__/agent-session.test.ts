@@ -285,6 +285,7 @@ async function writeLongformWork(root: string, workId: string, truth: string): P
 const WORKSPACE_TOOL_NAMES = [
   "workspace__propose_action",
   "workspace__read",
+  "workspace__list_works",
   "workspace__research_web",
   "workspace__ingest_material",
   "workspace__retrieve_material",
@@ -312,6 +313,7 @@ const LONGFORM_TOOL_NAMES = [
 const LONGFORM_READ_TOOL_NAMES = [
   "workspace__propose_action",
   "workspace__read",
+  "workspace__list_works",
   "workspace__research_web",
   "workspace__retrieve_material",
   "workspace__use_skill",

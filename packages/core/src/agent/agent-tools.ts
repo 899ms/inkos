@@ -52,6 +52,7 @@ import {
   activatedSkillIds,
   mergeActivatedSkillGuidance,
 } from "../skills/activations.js";
+import { listWorkManifests } from "../harness/work-store.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -3508,8 +3509,39 @@ export function createWriteFileTool(projectRoot: string): AgentTool<typeof Write
 }
 
 // ---------------------------------------------------------------------------
-// 5. Grep Tool
+// 5. Work Catalog / Grep Tools
 // ---------------------------------------------------------------------------
+
+const ListWorksParams = Type.Object({
+  profileId: Type.Optional(Type.String({
+    description: "Optional Work Profile ID filter, for example longform-novel, short-fiction, or translation.",
+  })),
+});
+
+export function createListWorksTool(projectRoot: string): AgentTool<typeof ListWorksParams> {
+  return {
+    name: "list_works",
+    description:
+      "List usable creative Works from the canonical works/ catalog. " +
+      "Use this before deriving from an existing work when the user gives a title but not an exact Work ID; never guess legacy paths such as .inkos/books.",
+    label: "List Works",
+    parameters: ListWorksParams,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof ListWorksParams>,
+    ): Promise<AgentToolResult<undefined>> {
+      const works = await listWorkManifests(projectRoot, params.profileId?.trim() || undefined);
+      if (works.length === 0) {
+        return textResult(params.profileId
+          ? `No usable Works found for profile "${params.profileId}".`
+          : "No usable Works found.");
+      }
+      return textResult(works.map((work) => (
+        `- title=${JSON.stringify(work.title)} | id=${JSON.stringify(work.id)} | profile=${work.profileId} | status=${work.status}`
+      )).join("\n"));
+    },
+  };
+}
 
 const GrepParams = Type.Object({
   bookId: Type.String({ description: "Book ID to search within" }),

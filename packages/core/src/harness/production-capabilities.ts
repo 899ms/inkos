@@ -13,6 +13,7 @@ import {
   createImportChaptersTool,
   createIngestMaterialTool,
   createInteractiveFilmCreationTool,
+  createListWorksTool,
   createLsTool,
   createManageBookReferenceTool,
   createPlayEditTool,
@@ -94,6 +95,7 @@ export interface ProductionCapabilityEnvironment {
 const READ_TOOLS = new Set([
   "propose_action",
   "read",
+  "list_works",
   "grep",
   "ls",
   "research_web",
@@ -182,6 +184,7 @@ export function createProductionCapabilityRegistry(
       scope: "project",
       allowSystemPaths: environment.allowSystemFileRead,
     }),
+    createListWorksTool(environment.projectRoot),
     createResearchWebTool(environment.projectRoot),
     createIngestMaterialTool(environment.projectRoot),
     createRetrieveMaterialTool(environment.projectRoot),

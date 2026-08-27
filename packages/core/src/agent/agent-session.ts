@@ -104,7 +104,7 @@ export interface AgentSessionConfig {
   stream?: boolean;
   /** Optional HTTP proxy shared with the project LLM client. */
   proxyUrl?: string;
-  /** Allow the read tool to read absolute paths outside projectRoot/books. Defaults to false; set INKOS_AGENT_ALLOW_SYSTEM_READ=1 to enable. */
+  /** Allow the read tool to read absolute paths outside projectRoot/works. Defaults to false; set INKOS_AGENT_ALLOW_SYSTEM_READ=1 to enable. */
   allowSystemFileRead?: boolean;
   /** Optional listener for streaming events (for SSE forwarding). */
   onEvent?: (event: AgentEvent) => void;

@@ -6,6 +6,7 @@ import { StateManager } from "../state/manager.js";
 import { ArchitectIncompleteFoundationError } from "../agents/architect.js";
 import {
   createReadTool,
+  createListWorksTool,
   createGenerateCoverTool,
   createSubAgentTool,
   createShortFictionRunTool,
@@ -31,6 +32,7 @@ import {
 import { ingestMaterial } from "../materials/ingest.js";
 import { createPlayDB } from "../play/play-db-factory.js";
 import { PlayStore } from "../play/play-store.js";
+import { createWorkManifest, saveWorkManifest } from "../harness/work-store.js";
 
 function contextPipeline<T extends object>(pipeline: T): T & {
   readonly runWithAgentContext: ReturnType<typeof vi.fn>;
@@ -89,6 +91,23 @@ describe("agent deterministic writing tools", () => {
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("lists canonical Works so agents do not guess legacy storage paths", async () => {
+    await saveWorkManifest(root, createWorkManifest({
+      id: "harbor-work",
+      title: "潮汐档案验收",
+      profileId: "longform-novel",
+      language: "zh",
+    }));
+    const tool = createListWorksTool(root);
+
+    const result = await tool.execute("list-works", { profileId: "longform-novel" });
+    const content = result.content.find((item) => item.type === "text")?.text ?? "";
+
+    expect(content).toContain('title="潮汐档案验收"');
+    expect(content).toContain('id="harbor-work"');
+    expect(content).not.toContain(".inkos/books");
   });
 
   it("writes truth files through the deterministic tool path", async () => {
