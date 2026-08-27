@@ -2894,7 +2894,8 @@ Base the analysis on the text's actual features, not generalities. Support each 
 
   /**
    * Import canon from parent book for spinoff writing.
-   * Reads parent's truth files, uses LLM to generate parent_canon.md in target book.
+   * Projects the parent's accepted truth files into parent_canon.md without
+   * asking an LLM to reinterpret facts the host already owns.
    */
   async importCanon(targetBookId: string, parentBookId: string): Promise<string> {
     // Validate both books exist
@@ -2924,101 +2925,53 @@ Base the analysis on the text's actual features, not generalities. Support each 
       return readSafe(join(parentDir, "story", legacyRel));
     };
 
-    const [storyBible, currentState, ledger, hooks, summaries, subplots, emotions, matrix] =
+    const [storyFrame, volumeMap, bookRules, currentState, ledger, hooks, summaries, subplots, emotions, characters, styleGuide] =
       await Promise.all([
         readParentOutline("outline/story_frame.md", "story_bible.md"),
+        readParentOutline("outline/volume_map.md", "volume_outline.md"),
+        readSafe(join(parentDir, "story/book_rules.md")),
         readSafe(join(parentDir, "story/current_state.md")),
         readSafe(join(parentDir, "story/particle_ledger.md")),
         readSafe(join(parentDir, "story/pending_hooks.md")),
         readSafe(join(parentDir, "story/chapter_summaries.md")),
         readSafe(join(parentDir, "story/subplot_board.md")),
         readSafe(join(parentDir, "story/emotional_arcs.md")),
-        readSafe(join(parentDir, "story/character_matrix.md")),
+        readCharacterContext(parentDir),
+        readSafe(join(parentDir, "story/style_guide.md")),
       ]);
 
-    const response = await runWorkerAgent(this.config.client, this.config.model, appendActivatedSkillGuidance([
-      {
-        role: "system",
-        content: `你是一位网络小说架构师。基于正传的全部设定和状态文件，生成一份完整的"正传正典参照"文档，供番外写作和审计使用。
-
-输出格式（Markdown）：
-# 正传正典（《{正传书名}》）
-
-## 世界规则（完整，来自正传设定）
-（力量体系、地理设定、阵营关系、核心规则——完整复制，不压缩）
-
-## 正典约束（不可违反的事实）
-| 约束ID | 类型 | 约束内容 | 严重性 |
-|---|---|---|---|
-| C01 | 人物存亡 | ... | critical |
-（列出所有硬性约束：谁活着、谁死了、什么事件已经发生、什么规则不可违反）
-
-## 角色快照
-| 角色 | 当前状态 | 性格底色 | 对话特征 | 已知信息 | 未知信息 |
-|---|---|---|---|---|---|
-（从状态卡和角色矩阵中提取每个重要角色的完整快照）
-
-## 角色双态处理原则
-- 未来会变强的角色：写潜力暗示
-- 未来会黑化的角色：写微小裂痕
-- 未来会死的角色：写导致死亡的性格底色
-
-## 关键事件时间线
-| 章节 | 事件 | 涉及角色 | 对番外的约束 |
-|---|---|---|---|
-（从章节摘要中提取关键事件）
-
-## 伏笔状态
-| Hook ID | 类型 | 状态 | 内容 | 预期回收 |
-|---|---|---|---|---|
-
-## 资源账本快照
-（当前资源状态）
-
----
-meta:
-  parentBookId: "{parentBookId}"
-  parentTitle: "{正传书名}"
-  generatedAt: "{ISO timestamp}"
-
-要求：
-1. 世界规则完整复制，不压缩——准确性优先
-2. 正典约束必须穷尽，遗漏会导致番外与正传矛盾
-3. 角色快照必须包含信息边界（已知/未知），防止番外中角色引用不该知道的信息`,
-      },
-      {
-        role: "user",
-        content: `正传书名：${parentBook.title}
-正传ID：${parentBookId}
-
-## 正传世界设定
-${storyBible}
-
-## 正传当前状态卡
-${currentState}
-
-## 正传资源账本
-${ledger}
-
-## 正传伏笔池
-${hooks}
-
-## 正传章节摘要
-${summaries}
-
-## 正传支线进度
-${subplots}
-
-## 正传情感弧线
-${emotions}
-
-## 正传角色矩阵
-${matrix}`,
-      },
-    ], this.currentActivatedSkills()), { temperature: 0.3, signal: this.currentAbortSignal() });
-
-    // Append deterministic meta block (LLM may hallucinate timestamps)
-    const metaBlock = [
+    const isEn = parentBook.language === "en";
+    const section = (title: string, content: string): string => [
+      `## ${title}`,
+      "",
+      content.trim() && content !== "(无)" ? content.trim() : (isEn ? "(not present)" : "（无）"),
+    ].join("\n");
+    const canon = [
+      isEn ? `# Parent Canon (${parentBook.title})` : `# 正传正典（《${parentBook.title}》）`,
+      "",
+      isEn
+        ? "> Deterministic projection of accepted parent Work artifacts. Content is copied, not reinterpreted by a model."
+        : "> 由宿主从母本 Work 的已接受产物确定性投影；内容原样复制，不经过模型重述。",
+      "",
+      section(isEn ? "Story Frame" : "故事框架", storyFrame),
+      "",
+      section(isEn ? "Volume Map" : "分卷地图", volumeMap),
+      "",
+      section(isEn ? "Book Rules" : "本书规则", bookRules),
+      "",
+      section(isEn ? "Character Canon" : "角色正典", characters),
+      "",
+      section(isEn ? "Current State" : "当前状态", currentState),
+      "",
+      section(isEn ? "Pending Hooks" : "伏笔状态", hooks),
+      "",
+      section(isEn ? "Chapter Summaries" : "章节摘要", summaries),
+      "",
+      section(isEn ? "Subplot Progress" : "支线进度", subplots),
+      "",
+      section(isEn ? "Emotional Arcs" : "情感弧线", emotions),
+      "",
+      section(isEn ? "Resource Ledger" : "资源账本", ledger),
       "",
       "---",
       "meta:",
@@ -3026,39 +2979,18 @@ ${matrix}`,
       `  parentTitle: "${parentBook.title}"`,
       `  generatedAt: "${new Date().toISOString()}"`,
     ].join("\n");
-    const canon = response.content + metaBlock;
 
-    await writeFile(join(storyDir, "parent_canon.md"), canon, "utf-8");
-
-    // Also generate style guide from parent's chapter text if available
-    const parentChaptersDir = join(parentDir, "chapters");
-    const parentChapterText = await this.readParentChapterSample(parentChaptersDir);
-    if (parentChapterText.length >= 500) {
-      await this.tryGenerateStyleGuide(targetBookId, parentChapterText, parentBook.title);
-    }
+    await commitAtomicFileSet({
+      rootDir: targetDir,
+      writes: [
+        { relativePath: "story/parent_canon.md", content: canon },
+        ...(styleGuide.trim() && styleGuide !== "(无)"
+          ? [{ relativePath: "story/style_guide.md", content: styleGuide }]
+          : []),
+      ],
+    });
 
     return canon;
-  }
-
-  private async readParentChapterSample(chaptersDir: string): Promise<string> {
-    try {
-      const entries = await readdir(chaptersDir);
-      const mdFiles = entries
-        .filter((file) => file.endsWith(".md"))
-        .sort()
-        .slice(0, 5);
-      const chunks: string[] = [];
-      let totalLength = 0;
-      for (const file of mdFiles) {
-        if (totalLength >= 20000) break;
-        const content = await readFile(join(chaptersDir, file), "utf-8");
-        chunks.push(content);
-        totalLength += content.length;
-      }
-      return chunks.join("\n\n---\n\n");
-    } catch {
-      return "";
-    }
   }
 
   // ---------------------------------------------------------------------------

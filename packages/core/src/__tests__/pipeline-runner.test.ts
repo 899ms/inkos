@@ -3360,7 +3360,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("keeps canon import running when style guide extraction fails", async () => {
+  it("projects parent canon and style deterministically without another LLM call", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const parentBookId = "parent-book";
     const now = "2026-03-19T00:00:00.000Z";
@@ -3383,6 +3383,8 @@ describe("PipelineRunner", () => {
     await mkdir(parentChaptersDir, { recursive: true });
     await Promise.all([
       writeFile(join(parentStoryDir, "story_bible.md"), "# Story Bible\n", "utf-8"),
+      writeFile(join(parentStoryDir, "volume_outline.md"), "# Volume Outline\n", "utf-8"),
+      writeFile(join(parentStoryDir, "book_rules.md"), "# Book Rules\n", "utf-8"),
       writeFile(join(parentStoryDir, "current_state.md"), createStateCard({
         chapter: 3,
         location: "North watchtower",
@@ -3393,19 +3395,21 @@ describe("PipelineRunner", () => {
       writeFile(join(parentStoryDir, "particle_ledger.md"), "# Ledger\n", "utf-8"),
       writeFile(join(parentStoryDir, "pending_hooks.md"), "# Pending Hooks\n", "utf-8"),
       writeFile(join(parentStoryDir, "chapter_summaries.md"), "# Chapter Summaries\n", "utf-8"),
+      writeFile(join(parentStoryDir, "style_guide.md"), "# Parent Style Guide\n", "utf-8"),
       writeFile(join(parentChaptersDir, "0001_Parent.md"), `# Chapter 1\n\n${"Parent text. ".repeat(60)}`, "utf-8"),
     ]);
 
-    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
-      content: "# Parent Canon\n\nImported canon body.",
-    } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
-    vi.spyOn(runner, "generateStyleGuide").mockRejectedValue(new Error("style failed"));
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockRejectedValue(new Error("canon projection must not call llm"));
 
     try {
       const canon = await runner.importCanon(bookId, parentBookId);
 
-      expect(canon).toContain("# Parent Canon");
-      await expect(readFile(join(state.bookDir(bookId), "story", "parent_canon.md"), "utf-8")).resolves.toContain("Imported canon body.");
+      expect(chatSpy).not.toHaveBeenCalled();
+      expect(canon).toContain("# 正传正典（《Parent Book》）");
+      expect(canon).toContain("# Story Bible");
+      expect(canon).toContain("North watchtower");
+      await expect(readFile(join(state.bookDir(bookId), "story", "parent_canon.md"), "utf-8")).resolves.toContain("由宿主从母本 Work");
+      await expect(readFile(join(state.bookDir(bookId), "story", "style_guide.md"), "utf-8")).resolves.toContain("Parent Style Guide");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
