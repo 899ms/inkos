@@ -1753,6 +1753,12 @@ function resolveCreatedBookIdFromDetails(details: Readonly<Record<string, unknow
   return null;
 }
 
+function resolveCreatedWorkIdFromToolExec(exec: CollectedToolExec): string | null {
+  if (exec.status !== "completed" || !exec.details || typeof exec.details !== "object") return null;
+  const workId = (exec.details as { workId?: unknown }).workId;
+  return typeof workId === "string" && workId.trim() ? workId.trim() : null;
+}
+
 async function loadStudioBookListSummary(
   state: StateManager,
   bookId: string,
@@ -5171,6 +5177,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 ...(book ? { book } : {}),
               });
             }
+
+            if (!createdBookId && !bookSession.workId) {
+              const createdWorkId = resolveCreatedWorkIdFromToolExec(exec);
+              const createdWork = createdWorkId
+                ? await loadWorkManifest(root, createdWorkId).catch(() => null)
+                : null;
+              if (createdWork) {
+                bookSession = await createAndPersistBookSession(
+                  root,
+                  bookSession.bookId,
+                  bookSession.sessionId,
+                  bookSession.sessionKind,
+                  {
+                    ...(bookSession.playMode ? { playMode: bookSession.playMode } : {}),
+                    profileId: createdWork.profileId,
+                    workId: createdWork.id,
+                  },
+                );
+              }
+            }
           }
 
           const responseText = exec.result ?? pick(surfaceLanguage, "已完成。", "Done.");
@@ -5191,7 +5217,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             details: { toolExecutions: [exec] },
             session: {
               sessionId: bookSession.sessionId,
-              sessionKind,
+              sessionKind: bookSession.sessionKind,
+              profileId: bookSession.profileId,
+              workId: bookSession.workId,
               ...(createdBookId ?? agentBookId ? { activeBookId: createdBookId ?? agentBookId } : {}),
             },
           });

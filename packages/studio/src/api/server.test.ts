@@ -418,6 +418,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     DetectionConfigSchema: actual.DetectionConfigSchema,
     normalizeActionSource: actual.normalizeActionSource,
     normalizeActionPayload: actual.normalizeActionPayload,
+    capabilityActionId: actual.capabilityActionId,
     normalizePlayMode: actual.normalizePlayMode,
     normalizeRequestedIntent: actual.normalizeRequestedIntent,
     toPosixPath: actual.toPosixPath,
@@ -3707,6 +3708,95 @@ describe("createStudioServer daemon lifecycle", () => {
       });
       expect(migrateBookSessionMock).toHaveBeenCalledWith(root, `derivative-session-${index}`, item.bookId);
     }
+  });
+
+  it("binds a confirmed non-book creation to its real Work profile", async () => {
+    const sourcePath = ".inkos/uploads/translation-source.md";
+    await mkdir(join(root, ".inkos", "uploads"), { recursive: true });
+    await writeFile(join(root, sourcePath), "# Harbor Letter\n\nA bell rang once.\n");
+    let translationSession: {
+      sessionId: string;
+      bookId: string | null;
+      sessionKind: string;
+      profileId: string;
+      workId: string | null;
+      title: string | null;
+      messages: unknown[];
+      events: unknown[];
+      draftRounds: unknown[];
+      createdAt: number;
+      updatedAt: number;
+    } = {
+      sessionId: "translation-session",
+      bookId: null,
+      sessionKind: "chat",
+      profileId: "workspace-default",
+      workId: null,
+      title: null,
+      messages: [],
+      events: [],
+      draftRounds: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    loadBookSessionMock.mockImplementation(async () => translationSession);
+    createAndPersistBookSessionMock.mockImplementation(async (
+      _projectRoot: string,
+      bookId: string | null,
+      sessionId?: string,
+      sessionKind?: string,
+      options?: { profileId?: string; workId?: string | null },
+    ) => {
+      translationSession = {
+        ...translationSession,
+        sessionId: sessionId ?? translationSession.sessionId,
+        bookId,
+        sessionKind: sessionKind ?? translationSession.sessionKind,
+        profileId: options?.profileId ?? translationSession.profileId,
+        workId: options && "workId" in options ? options.workId ?? null : translationSession.workId,
+      };
+      return translationSession;
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "Create the translation Work.",
+        sessionId: "translation-session",
+        sessionKind: "chat",
+        actionSource: "button",
+        requestedIntent: "translation_create",
+        actionPayload: {
+          translationCreate: {
+            filePath: sourcePath,
+            sourceLanguage: "English",
+            targetLanguage: "Chinese (Simplified)",
+            title: "Harbor Letter Chinese",
+          },
+        },
+      }),
+    });
+
+    const body = await response.json() as {
+      session?: { sessionKind?: string; profileId?: string; workId?: string };
+    };
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    expect(createAndPersistBookSessionMock.mock.calls, JSON.stringify(body)).toHaveLength(1);
+    expect(body.session, JSON.stringify(body)).toMatchObject({
+      sessionKind: "chat",
+      profileId: "translation",
+      workId: expect.any(String),
+    });
+    expect(createAndPersistBookSessionMock).toHaveBeenLastCalledWith(
+      root,
+      null,
+      "translation-session",
+      "chat",
+      expect.objectContaining({ profileId: "translation", workId: body.session?.workId }),
+    );
   });
 
   it("does not bind a confirmed derivative result when its book artifact is missing", async () => {
