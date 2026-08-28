@@ -71,8 +71,8 @@ describe("translation capability tools", () => {
     await expect(readFile(outputPath, "utf-8")).resolves.toContain("译：The rain began.");
 
     const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
-    expect(episodes.listEpisodes({ workId })).toHaveLength(2);
-    expect(episodes.requireEpisode("episode-translation-create").workId).toBeNull();
+    expect(episodes.listEpisodes({ workId })).toHaveLength(3);
+    expect(episodes.requireEpisode("episode-translation-create").workId).toBe(workId);
     episodes.close();
   });
 });

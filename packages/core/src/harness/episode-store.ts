@@ -120,6 +120,72 @@ export class CreativeEpisodeStore {
     return episode;
   }
 
+  bindWork(
+    episodeId: string,
+    workId: string,
+    timestamp = new Date().toISOString(),
+  ): CreativeEpisode {
+    const id = HarnessIdSchema.parse(episodeId);
+    const boundWorkId = WorkResourceIdSchema.parse(workId);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.prepare(`
+        SELECT work_id AS workId, status
+        FROM creative_episodes
+        WHERE episode_id = ?
+      `).get(id) as unknown as { readonly workId: string | null; readonly status: EpisodeStatus } | undefined;
+      if (!row) throw new Error(`Unknown creative episode: ${id}`);
+      if (row.workId !== null && row.workId !== boundWorkId) {
+        throw new Error(`Creative episode "${id}" is already bound to Work "${row.workId}"`);
+      }
+      if (row.workId === boundWorkId) {
+        this.db.exec("COMMIT");
+        return this.requireEpisode(id);
+      }
+      if (row.status !== "running") {
+        throw new Error(`Cannot bind terminal creative episode: ${id}`);
+      }
+
+      const seqRow = this.db.prepare(
+        "SELECT COALESCE(MAX(seq), -1) + 1 AS seq FROM creative_episode_events WHERE episode_id = ?",
+      ).get(id) as unknown as { readonly seq: number };
+      const event = CreativeEpisodeEventSchema.parse({
+        version: HARNESS_VERSION,
+        episodeId: id,
+        seq: seqRow.seq,
+        timestamp,
+        type: "episode-work-bound",
+        workId: boundWorkId,
+        payload: {},
+      });
+      this.db.prepare(`
+        UPDATE creative_episodes
+        SET work_id = ?
+        WHERE episode_id = ? AND work_id IS NULL AND status = 'running'
+      `).run(boundWorkId, id);
+      this.db.prepare(`
+        INSERT INTO creative_episode_events (
+          episode_id, seq, timestamp, type, work_id,
+          capability_id, action_id, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        event.episodeId,
+        event.seq,
+        event.timestamp,
+        event.type,
+        event.workId,
+        null,
+        null,
+        JSON.stringify(event.payload),
+      );
+      this.db.exec("COMMIT");
+      return this.requireEpisode(id);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   listEpisodes(options: {
     readonly workId?: string;
     readonly profileId?: string;

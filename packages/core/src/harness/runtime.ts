@@ -132,9 +132,10 @@ export class CreativeHarnessRuntime {
             `${this.projectRoot}\0${input.handle.work.id}`,
             invoke,
           );
+      const episodeWorkId = bindCreatedWork(this.episodes, input.handle, result);
       this.episodes.append({
         episodeId: input.handle.episode.id,
-        workId: input.handle.episode.workId,
+        workId: episodeWorkId,
         type: "action-completed",
         capabilityId: capability.id,
         actionId: action.id,
@@ -164,14 +165,26 @@ export class CreativeHarnessRuntime {
     status: "completed" | "failed" | "cancelled",
     completedAt?: string,
   ): CreativeEpisode {
+    const episode = this.episodes.requireEpisode(handle.episode.id);
     this.episodes.append({
-      episodeId: handle.episode.id,
-      workId: handle.episode.workId,
+      episodeId: episode.id,
+      workId: episode.workId,
       type: `episode-${status}`,
       payload: {},
     }, completedAt);
-    return this.episodes.finish(handle.episode.id, status, completedAt);
+    return this.episodes.finish(episode.id, status, completedAt);
   }
+}
+
+function bindCreatedWork(
+  episodes: CreativeEpisodeStore,
+  handle: HarnessEpisodeHandle,
+  result: ActionResult,
+): string | null {
+  if (handle.episode.workId) return handle.episode.workId;
+  const workIds = new Set(result.artifacts.map((artifact) => artifact.workId));
+  if (workIds.size !== 1) return null;
+  return episodes.bindWork(handle.episode.id, [...workIds][0]!).workId;
 }
 
 async function runInWorkMutationQueue<T>(key: string, task: () => Promise<T>): Promise<T> {

@@ -112,6 +112,63 @@ describe("v2 creative harness runtime", () => {
     });
   });
 
+  it("binds a creation Episode to the single Work produced by its artifacts", async () => {
+    const capabilities = new CapabilityRegistry();
+    capabilities.register({
+      id: "longform",
+      title: "Long-form",
+      description: "",
+      actions: [defineCapabilityAction({
+        id: "create",
+        title: "Create",
+        description: "Create a Work.",
+        risk: "recoverable-write",
+        parameters: Type.Object({}),
+        async execute() {
+          return ActionResultSchema.parse({
+            status: "success",
+            summary: "created",
+            artifacts: [{ workId: "created-work", artifactId: "foundation" }],
+          });
+        },
+      })],
+    });
+    const episodes = new CreativeEpisodeStore(":memory:");
+    const runtime = new CreativeHarnessRuntime(
+      "/tmp/create",
+      capabilities,
+      createBuiltInWorkProfileRegistry(),
+      episodes,
+    );
+    const handle = runtime.startEpisode({
+      episodeId: "episode-create",
+      profileId: "longform-novel",
+      startedAt: "2026-08-26T00:00:00.000Z",
+    });
+
+    await runtime.executeAction({
+      handle,
+      capabilityId: "longform",
+      actionId: "create",
+      parameters: {},
+      source: "explicit",
+    });
+    runtime.finishEpisode(handle, "completed", "2026-08-26T00:01:00.000Z");
+
+    expect(episodes.requireEpisode("episode-create")).toMatchObject({
+      workId: "created-work",
+      status: "completed",
+    });
+    expect(episodes.listEvents("episode-create").map((event) => [event.type, event.workId])).toEqual([
+      ["episode-started", null],
+      ["action-started", null],
+      ["episode-work-bound", "created-work"],
+      ["action-completed", "created-work"],
+      ["episode-completed", "created-work"],
+    ]);
+    episodes.close();
+  });
+
   it("serializes mutating actions for the same Work while preserving their order", async () => {
     const capabilities = new CapabilityRegistry();
     let active = 0;
