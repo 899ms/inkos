@@ -67,6 +67,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
   }
 
   return {
+    ...actual,
     StateManager: MockStateManager,
     PipelineRunner: MockPipelineRunner,
     Scheduler: MockScheduler,
