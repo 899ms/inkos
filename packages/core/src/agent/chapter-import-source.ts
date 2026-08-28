@@ -1,5 +1,5 @@
 import { readFile, readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { splitChapters, type SplitChapter } from "../utils/chapter-splitter.js";
 
 const CHAPTER_FILENAME_COLLATOR = new Intl.Collator("en", {
@@ -18,7 +18,9 @@ export function compareChapterSourceNames(left: string, right: string): number {
  *   natural numeric order. The chapter title is the filename without its extension and
  *   without a leading numeric prefix (e.g. `03_风暴.md` → `风暴`).
  * - Single-file mode: the file is split into chapters with `splitChapters`,
- *   using `splitPattern` as a custom heading regex when provided.
+ *   using `splitPattern` as a custom heading regex when provided. A non-empty
+ *   file without chapter headings becomes one chapter when no custom pattern
+ *   was requested.
  *
  * This mirrors the pure loading logic of `inkos import chapters` in the CLI
  * so the agent tool does not depend on the CLI package.
@@ -52,6 +54,14 @@ export async function loadChaptersFromPath(
   const chapters = splitChapters(text, splitPattern);
 
   if (chapters.length === 0) {
+    if (!splitPattern && text.trim()) {
+      const lines = text.trim().split(/\r?\n/);
+      const heading = lines[0]?.match(/^#\s+(.+)$/);
+      const title = heading?.[1]?.trim()
+        || basename(sourcePath).replace(/\.(md|txt)$/i, "");
+      const content = (heading ? lines.slice(1) : lines).join("\n").trim();
+      if (content) return [{ title, content }];
+    }
     throw new Error(
       `No chapters found in ${sourcePath}. ` +
       `The default pattern matches "第X章/第X回" and "Chapter N" heading lines. ` +

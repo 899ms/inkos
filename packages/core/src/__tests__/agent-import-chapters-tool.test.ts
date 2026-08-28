@@ -146,16 +146,20 @@ describe("import_chapters agent tool", () => {
     });
   });
 
-  it("throws when the single file yields no chapters", async () => {
+  it("imports a headingless single file as one chapter", async () => {
     const sourceFile = join(root, "no-headings.txt");
     await writeFile(sourceFile, "只有正文，没有任何章节标题。", "utf-8");
 
     const pipeline = mockPipeline();
     const tool = createImportChaptersTool(pipeline as never, "harbor", root);
 
-    await expect(tool.execute("tool-import-no-split", { sourcePath: sourceFile }))
-      .rejects.toThrow(/No chapters found/);
-    expect(pipeline.importChapters).not.toHaveBeenCalled();
+    await tool.execute("tool-import-no-split", { sourcePath: sourceFile });
+    expect(pipeline.importChapters).toHaveBeenCalledWith({
+      bookId: "harbor",
+      chapters: [{ title: "no-headings", content: "只有正文，没有任何章节标题。" }],
+      resumeFrom: undefined,
+      importMode: undefined,
+    });
   });
 
   it("throws when the book already has chapters and resumeFrom is missing", async () => {
