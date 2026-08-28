@@ -5,7 +5,7 @@ import { ArchitectIncompleteFoundationError } from "../agents/architect.js";
 import { type ReviseMode } from "../agents/reviser.js";
 import { defaultChapterLength } from "../utils/length-metrics.js";
 import { inferLanguage } from "../utils/language.js";
-import { mkdir, readFile, writeFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { StateManager } from "../state/manager.js";
 import { deleteLatestChapter } from "../state/chapter-delete.js";
@@ -392,7 +392,7 @@ const ProposeActionParams = Type.Object({
     title: Type.Optional(Type.String({ description: "New continuation book title when bookId is omitted." })),
     sourcePath: Type.String({ description: "Project-relative uploaded novel file or chapter directory." }),
     splitPattern: Type.Optional(Type.String({ description: "Optional custom chapter-heading regex source." })),
-    resumeFrom: Type.Optional(Type.Number({ description: "Resume interrupted replay from this 1-based chapter number." })),
+    resumeFrom: Type.Optional(Type.Number({ description: "Existing Work only: resume an interrupted import from this 1-based source chapter. Omit when creating a new continuation Work." })),
     genre: Type.Optional(Type.String({ description: "Genre for a newly created continuation book." })),
     platform: Type.Optional(Type.Union([
       Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
@@ -1922,7 +1922,10 @@ const ContinuationImportParams = Type.Object({
   title: Type.Optional(Type.String({ description: "New book title when bookId is omitted." })),
   sourcePath: Type.String({ description: "Project-relative uploaded novel file or chapter directory." }),
   splitPattern: Type.Optional(Type.String({ description: "Optional custom chapter-heading regex source." })),
-  resumeFrom: Type.Optional(Type.Integer({ minimum: 1 })),
+  resumeFrom: Type.Optional(Type.Integer({
+    minimum: 1,
+    description: "Existing Work only: resume an interrupted import from this 1-based source chapter. Omit for a new continuation Work.",
+  })),
   genre: Type.Optional(Type.String()),
   platform: Type.Optional(Type.Union([
     Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
@@ -1973,16 +1976,26 @@ export function createContinuationImportTool(
         throw new Error(`Book "${bookId}" already has ${existingChapterCount} chapter(s); resumeFrom is required.`);
       }
       const chapters = await loadChaptersFromPath(sourcePath, params.splitPattern);
+      const resumeFrom = created ? undefined : params.resumeFrom;
       const activatedSkills = resolveProductionToolSkills(options);
       onUpdate?.(textResult(`Importing ${chapters.length} chapter(s) into "${bookId}" and rebuilding story state...`));
-      const result = await runPipelineWithAgentContext(pipeline, signal, activatedSkills, () => (
-        pipeline.importChapters({
-          bookId,
-          chapters,
-          resumeFrom: params.resumeFrom,
-          importMode: "continuation",
-        })
-      ));
+      let result: Awaited<ReturnType<PipelineRunner["importChapters"]>>;
+      try {
+        result = await runPipelineWithAgentContext(pipeline, signal, activatedSkills, () => (
+          pipeline.importChapters({
+            bookId,
+            chapters,
+            resumeFrom,
+            importMode: "continuation",
+          })
+        ));
+        if (result.importedCount < 1) {
+          throw new Error(`Continuation import produced no persisted chapters for "${bookId}".`);
+        }
+      } catch (error) {
+        if (created) await rm(state.bookDir(bookId), { recursive: true, force: true });
+        throw error;
+      }
       return textResult(
         `Imported ${result.importedCount} chapter(s) into "${bookId}". Next chapter: ${result.nextChapter}.`,
         {

@@ -163,6 +163,7 @@ describe("derivative-work agent tools", () => {
       title: "雾港续章",
       sourcePath: ".inkos/uploads/continuation/novel.txt",
       language: "zh",
+      resumeFrom: 2,
     });
 
     expect(pipeline.importChapters).toHaveBeenCalledWith({
@@ -184,6 +185,30 @@ describe("derivative-work agent tools", () => {
       bookId: "雾港续章",
       importedCount: 2,
     });
+  });
+
+  it("rejects zero-chapter results and removes a newly created empty Work", async () => {
+    await mkdir(join(root, ".inkos", "uploads", "continuation-empty"), { recursive: true });
+    await writeFile(
+      join(root, ".inkos", "uploads", "continuation-empty", "novel.txt"),
+      "Only one existing chapter body.",
+      "utf-8",
+    );
+    const pipeline = mockPipeline();
+    pipeline.importChapters.mockResolvedValueOnce({
+      bookId: "empty-continuation",
+      importedCount: 0,
+      totalWords: 0,
+      nextChapter: 1,
+    });
+    const tool = createContinuationImportTool(pipeline as never, null, root);
+
+    await expect(tool.execute("continuation-empty", {
+      title: "Empty Continuation",
+      sourcePath: ".inkos/uploads/continuation-empty/novel.txt",
+      language: "en",
+    })).rejects.toThrow(/produced no persisted chapters/);
+    await expect(state.loadBookConfig("empty-continuation")).rejects.toThrow();
   });
 
   it("rejects non-uploaded absolute continuation paths", async () => {
