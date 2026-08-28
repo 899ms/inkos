@@ -5534,6 +5534,9 @@ describe("createStudioServer daemon lifecycle", () => {
       const task = await loadStudioTaskSnapshot(root, "agent-session-1");
       expect(task?.execution.status).toBe("running");
     });
+    await vi.waitFor(() => {
+      expect(pipelineAbortSignals.at(-1)).toBeDefined();
+    });
 
     const abortResponse = await app.request("http://localhost/api/v1/sessions/agent-session-1/abort", {
       method: "POST",
@@ -5576,6 +5579,9 @@ describe("createStudioServer daemon lifecycle", () => {
     await vi.waitFor(async () => {
       const task = await loadStudioTaskSnapshot(root, "agent-session-1");
       expect(task?.execution.status).toBe("running");
+    });
+    await vi.waitFor(() => {
+      expect(pipelineAbortSignals.at(-1)).toBeDefined();
     });
 
     const abortResponse = await app.request(
