@@ -42,7 +42,7 @@ import {
   writeProductionRunSnapshot,
   type ProductionObservation,
 } from "../production/harness.js";
-import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js";
+import { buildLengthSpec, countChapterLength, isOutsideHardRange } from "../utils/length-metrics.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath as projectPath } from "../utils/posix-path.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
@@ -292,7 +292,11 @@ async function produceShort(
       await writeDraftArtifacts(root, baseDir, "v001-partial", draft, language);
       options.onProgress?.(`Completed short fiction draft chapters: ${completedChapterNumbers.join(", ")}...`);
     };
-    const resumedDraft = await tryReadShortFictionDraft(
+    const existingStatus = await readShortRunStatus(root, join(baseDir, "status.json"));
+    const latestReviewedDraft = existingStatus === "needs-review"
+      ? await tryReadShortFictionDraft(root, join(baseDir, "drafts", "v002", "draft.json"))
+      : undefined;
+    const resumedDraft = latestReviewedDraft ?? await tryReadShortFictionDraft(
       root,
       join(baseDir, "drafts", "v001-partial", "draft.json"),
     );
@@ -350,7 +354,15 @@ async function produceShort(
     await writeText(root, join(baseDir, "reviews", "draft-v001.md"), draftReview);
 
     finalDraft = draftV1;
-    options.onProgress?.("Revising full draft once...");
+    const chapterLengthSpec = buildLengthSpec(charsPerChapter, language);
+    const repairChapterNumbers = existingStatus === "needs-review"
+      ? draftV1.chapters
+          .filter((chapter) => isOutsideHardRange(chapter.charCount, chapterLengthSpec))
+          .map((chapter) => chapter.number)
+      : undefined;
+    options.onProgress?.(repairChapterNumbers
+      ? `Revising remaining out-of-range chapters: ${repairChapterNumbers.join(", ")}...`
+      : "Revising full draft once...");
     const reviser = new ShortFictionDraftReviserAgent(options.runtimes.revise);
     try {
       const draftV2 = await reviser.reviseDraft({
@@ -361,6 +373,7 @@ async function produceShort(
         chapterCount,
         charsPerChapter,
         language,
+        ...(repairChapterNumbers ? { chapterNumbers: repairChapterNumbers } : {}),
       });
       validateShortFictionDraftForFinal(draftV2, { expectedChapters: chapterCount, minimumChapterLength });
       await writeDraftArtifacts(root, baseDir, "v002", draftV2, language);

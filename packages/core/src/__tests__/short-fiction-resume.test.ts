@@ -319,6 +319,45 @@ describe("short fiction resume + failure marker (C2)", () => {
     expect(status.status).toBe("complete");
   });
 
+  it("resumes needs-review repair from v002 and revises only chapters still outside range", async () => {
+    const base = join(root, "works", "elevator", "source");
+    await mkdir(join(base, "outline"), { recursive: true });
+    await mkdir(join(base, "drafts", "v001-partial"), { recursive: true });
+    await mkdir(join(base, "drafts", "v002"), { recursive: true });
+    await mkdir(join(base, "final"), { recursive: true });
+    await writeFile(join(base, "outline", "v002.md"), "## 既有大纲", "utf-8");
+    const original = parseShortFictionBatchDraft(DRAFT_MD, { expectedChapters: CH });
+    const longContent = "仍需压缩的重复信息。".repeat(180);
+    const reviewed = {
+      ...original,
+      chapters: original.chapters.map((chapter) => chapter.number === 1
+        ? { ...chapter, content: longContent, charCount: longContent.length }
+        : chapter),
+    };
+    await writeFile(join(base, "drafts", "v001-partial", "draft.json"), JSON.stringify(original), "utf-8");
+    await writeFile(join(base, "drafts", "v002", "draft.json"), JSON.stringify(reviewed), "utf-8");
+    await writeFile(join(base, "final", "full.md"), "# needs review", "utf-8");
+    await writeFile(join(base, "status.json"), JSON.stringify({ status: "needs-review" }), "utf-8");
+    const continueDraft = vi.spyOn(ShortFictionWriterAgent.prototype, "continueDraft").mockResolvedValue(reviewed);
+    vi.spyOn(ShortFictionDraftReviewerAgent.prototype, "reviewDraft").mockResolvedValue("只修仍超长的章节");
+    const reviseDraft = vi.spyOn(ShortFictionDraftReviserAgent.prototype, "reviseDraft").mockResolvedValue(reviewed);
+    vi.spyOn(ShortFictionPackagingAgent.prototype, "generatePackage").mockResolvedValue({
+      title: "电梯多一层", intro: "钩子", sellingPoints: ["反转"], coverPrompt: "", rawContent: "",
+    });
+
+    await runShortFictionProduction({
+      projectRoot: root, direction: "恐怖短篇", storyId: "elevator",
+      chapterCount: CH, charsPerChapter: 1000, cover: false, runtimes: runtimes(root),
+    });
+
+    expect(continueDraft).toHaveBeenCalledWith(expect.objectContaining({
+      draft: expect.objectContaining({
+        chapters: expect.arrayContaining([expect.objectContaining({ number: 1, content: longContent })]),
+      }),
+    }));
+    expect(reviseDraft).toHaveBeenCalledWith(expect.objectContaining({ chapterNumbers: [1] }));
+  });
+
   it("does not skip a previously failed run just because final/full.md exists", async () => {
     await mkdir(join(root, "works", "elevator", "source", "outline"), { recursive: true });
     await mkdir(join(root, "works", "elevator", "source", "final"), { recursive: true });
