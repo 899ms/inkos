@@ -238,6 +238,51 @@ ${originalTwo}
     expect(chatSpy).toHaveBeenCalledTimes(4);
   });
 
+  it("rebuilds a stubborn overlong chapter from a semantic beat sheet", async () => {
+    const originalContent = `ORIGINAL_LONG_MARKER${"原章保留了证据、冲突和结尾，但包含大量重复反应。".repeat(180)}`;
+    const compactContent = "压缩后的正文保留证据、因果推进和完整结尾。".repeat(45);
+    const original = parseShortFictionBatchDraft(`
+=== SHORT_FICTION_TITLE ===
+旧账
+=== CHAPTER 1 TITLE ===
+午夜证据
+=== CHAPTER 1 CONTENT ===
+${originalContent}
+`, { expectedChapters: 1 });
+    const overlongResponse = {
+      content: `=== SHORT_FICTION_TITLE ===\n旧账\n=== CHAPTER 1 TITLE ===\n午夜证据\n=== CHAPTER 1 CONTENT ===\n${originalContent}`,
+      usage: ZERO_USAGE,
+    };
+    const chatSpy = vi.spyOn(ShortFictionDraftReviserAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce(overlongResponse)
+      .mockResolvedValueOnce(overlongResponse)
+      .mockResolvedValueOnce(overlongResponse)
+      .mockResolvedValueOnce({
+        content: "- 证据必须保留\n- 冲突必须推进\n- 结尾必须完整承接下一章",
+        usage: ZERO_USAGE,
+      })
+      .mockResolvedValueOnce({
+        content: `=== SHORT_FICTION_TITLE ===\n旧账\n=== CHAPTER 1 TITLE ===\n午夜证据\n=== CHAPTER 1 CONTENT ===\n${compactContent}`,
+        usage: ZERO_USAGE,
+      });
+    const agent = new ShortFictionDraftReviserAgent({ client: fakeClient(), model: "fake", projectRoot: "/tmp" });
+
+    const revised = await agent.reviseDraft({
+      direction: "现实悬疑",
+      outlineMarkdown: "第一章找到账本证据",
+      draft: original,
+      review: "删除重复反应，保留证据和章尾。",
+      chapterCount: 1,
+      charsPerChapter: 1000,
+    });
+
+    expect(revised.chapters[0]?.content).toBe(compactContent);
+    expect(chatSpy).toHaveBeenCalledTimes(5);
+    const rebuildMessages = chatSpy.mock.calls[4]?.[0] as ReadonlyArray<{ role: string; content: string }>;
+    expect(rebuildMessages.map((message) => message.content).join("\n")).toContain("Semantic beat sheet");
+    expect(rebuildMessages.map((message) => message.content).join("\n")).not.toContain("ORIGINAL_LONG_MARKER");
+  });
+
   it("resolves cover generation from project cover config and stored cover secret", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-short-cover-"));
     try {

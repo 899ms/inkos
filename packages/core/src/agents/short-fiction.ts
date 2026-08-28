@@ -348,6 +348,56 @@ export class ShortFictionDraftReviserAgent extends BaseAgent {
         });
         candidate = revised.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
       }
+      if (candidate && candidate.charCount > length.hardMax) {
+        const sourceChapter = batchDraft.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
+        if (sourceChapter) {
+          const planResponse = await retryShortFictionCall(() => this.chat([
+            {
+              role: "system",
+              content: input.language === "en"
+                ? "You are a semantic compression editor. Extract only the indispensable causal events, clues, relationship turns, emotional payoff, and exact ending transition from the chapter. Return a compact Markdown beat sheet, not prose."
+                : "你是语义压缩编辑。只提炼本章不可丢失的因果事件、证据、关系转折、情绪回报和准确的结尾承接。输出紧凑 Markdown 节拍表，不写正文。",
+            },
+            {
+              role: "user",
+              content: input.language === "en"
+                ? `Chapter ${sourceChapter.number}: ${sourceChapter.title}\nTarget: about ${length.target} words (${length.hardMin}-${length.hardMax}).\n\n${sourceChapter.content}`
+                : `第${sourceChapter.number}章：${sourceChapter.title}\n目标：约${length.target}字（${length.hardMin}-${length.hardMax}字）。\n\n${sourceChapter.content}`,
+            },
+          ], { temperature: 0.2, maxTokens: 2048 }), this.name, this.log);
+          const rebuiltResponse = await retryShortFictionCall(() => this.chat([
+            {
+              role: "system",
+              content: input.language === "en"
+                ? "Write one complete short-fiction chapter from the supplied semantic beat sheet. Preserve every listed fact and the ending transition, but do not invent extra scenes. Obey the target word range. Output only SHORT_FICTION/CHAPTER tagged blocks."
+                : "根据给出的语义节拍表重写一章完整短篇正文。保留表中每条事实和结尾承接，不新增场景；严格服从目标字数区间。只输出 SHORT_FICTION/CHAPTER 标签块。",
+            },
+            {
+              role: "user",
+              content: [
+                `=== SHORT_FICTION_TITLE ===\n${storyTitle}`,
+                `=== CHAPTER ${sourceChapter.number} TITLE ===\n${sourceChapter.title}`,
+                input.language === "en"
+                  ? `Target ${length.target} words; hard range ${length.hardMin}-${length.hardMax}.`
+                  : `目标 ${length.target} 字；硬范围 ${length.hardMin}-${length.hardMax} 字。`,
+                "## Semantic beat sheet",
+                planResponse.content.trim(),
+              ].join("\n\n"),
+            },
+          ], {
+            temperature: 0.25,
+            maxTokens: estimateShortFictionMaxTokens(1, input.charsPerChapter, this.ctx.client.defaults.maxTokens),
+          }), this.name, this.log);
+          const rebuilt = parseShortFictionBatchDraft(rebuiltResponse.content, {
+            expectedChapters: input.chapterCount,
+            language: input.language,
+          });
+          candidate = rebuilt.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
+          if (candidate && !isOutsideHardRange(candidate.charCount, length)) {
+            revised = rebuilt;
+          }
+        }
+      }
       if (candidate && !isOutsideHardRange(candidate.charCount, length)) {
         accepted.set(candidate.number, candidate);
         storyTitle = revised.storyTitle || storyTitle;
