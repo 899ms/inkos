@@ -37,11 +37,11 @@
   },
   "scripts": {
     "prepare:workspace-core": "pnpm --filter @actalk/inkos-core build",
-    "prepack": "node ../../scripts/prepare-package-for-publish.mjs",
+    "prepack": "npm run build && node ../../scripts/prepare-package-for-publish.mjs",
     "postpack": "node ../../scripts/restore-package-json.mjs",
     "prepublishOnly": "node ../../scripts/verify-no-workspace-protocol.mjs .",
     "prebuild": "pnpm run prepare:workspace-core",
-    "build": "tsc",
+    "build": "node ../../scripts/clean-package-dist.mjs && tsc",
     "dev": "tsc --watch",
     "pretest": "pnpm run build",
     "test": "vitest run --passWithNoTests",

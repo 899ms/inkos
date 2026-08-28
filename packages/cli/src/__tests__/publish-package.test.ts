@@ -9,7 +9,7 @@ const testDir = dirname(fileURLToPath(import.meta.url));
 const cliDir = resolve(testDir, "..", "..");
 const workspaceRoot = resolve(cliDir, "..", "..");
 const studioDir = resolve(workspaceRoot, "packages", "studio");
-const CLI_PACK_TEST_TIMEOUT_MS = 30_000;
+const CLI_PACK_TEST_TIMEOUT_MS = 120_000;
 const STUDIO_PACK_TEST_TIMEOUT_MS = 120_000;
 const sourceCliPackageJsonPromise = readFile(resolve(cliDir, "package.json"), "utf-8").then((raw) =>
   JSON.parse(raw),
@@ -289,6 +289,10 @@ describe.sequential("publish packaging", () => {
       expect(archiveListing).toContain("package/skills/inkos-long-writing/SKILL.md");
       expect(archiveListing).toContain("package/skills/inkos-story-review/references/review-matrix.md");
       expect(archiveListing).toContain("package/skills/inkos-story-cover/SKILL.md");
+      expect(archiveListing).not.toContain("package/dist/agent/agent-system-prompt.");
+      expect(archiveListing).not.toContain("package/dist/agent/context-transform.");
+      expect(archiveListing).not.toContain("package/dist/interaction/runtime.");
+      expect(archiveListing).not.toContain("package/dist/interaction/project-tools.");
     } finally {
       await rm(packDir, { recursive: true, force: true });
     }
