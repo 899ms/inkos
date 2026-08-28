@@ -261,6 +261,7 @@ ${originalContent}
         content: "- 证据必须保留\n- 冲突必须推进\n- 结尾必须完整承接下一章",
         usage: ZERO_USAGE,
       })
+      .mockResolvedValueOnce(overlongResponse)
       .mockResolvedValueOnce({
         content: `=== SHORT_FICTION_TITLE ===\n旧账\n=== CHAPTER 1 TITLE ===\n午夜证据\n=== CHAPTER 1 CONTENT ===\n${compactContent}`,
         usage: ZERO_USAGE,
@@ -277,9 +278,10 @@ ${originalContent}
     });
 
     expect(revised.chapters[0]?.content).toBe(compactContent);
-    expect(chatSpy).toHaveBeenCalledTimes(5);
-    const rebuildMessages = chatSpy.mock.calls[4]?.[0] as ReadonlyArray<{ role: string; content: string }>;
+    expect(chatSpy).toHaveBeenCalledTimes(6);
+    const rebuildMessages = chatSpy.mock.calls[5]?.[0] as ReadonlyArray<{ role: string; content: string }>;
     expect(rebuildMessages.map((message) => message.content).join("\n")).toContain("Semantic beat sheet");
+    expect(rebuildMessages.map((message) => message.content).join("\n")).toContain("850");
     expect(rebuildMessages.map((message) => message.content).join("\n")).not.toContain("ORIGINAL_LONG_MARKER");
   });
 

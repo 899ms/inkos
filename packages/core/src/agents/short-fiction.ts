@@ -365,36 +365,42 @@ export class ShortFictionDraftReviserAgent extends BaseAgent {
                 : `第${sourceChapter.number}章：${sourceChapter.title}\n目标：约${length.target}字（${length.hardMin}-${length.hardMax}字）。\n\n${sourceChapter.content}`,
             },
           ], { temperature: 0.2, maxTokens: 2048 }), this.name, this.log);
-          const rebuiltResponse = await retryShortFictionCall(() => this.chat([
-            {
-              role: "system",
-              content: input.language === "en"
-                ? "Write one complete short-fiction chapter from the supplied semantic beat sheet. Preserve every listed fact and the ending transition, but do not invent extra scenes. Obey the target word range. Output only SHORT_FICTION/CHAPTER tagged blocks."
-                : "根据给出的语义节拍表重写一章完整短篇正文。保留表中每条事实和结尾承接，不新增场景；严格服从目标字数区间。只输出 SHORT_FICTION/CHAPTER 标签块。",
-            },
-            {
-              role: "user",
-              content: [
-                `=== SHORT_FICTION_TITLE ===\n${storyTitle}`,
-                `=== CHAPTER ${sourceChapter.number} TITLE ===\n${sourceChapter.title}`,
-                input.language === "en"
-                  ? `Target ${length.target} words; hard range ${length.hardMin}-${length.hardMax}.`
-                  : `目标 ${length.target} 字；硬范围 ${length.hardMin}-${length.hardMax} 字。`,
-                "## Semantic beat sheet",
-                planResponse.content.trim(),
-              ].join("\n\n"),
-            },
-          ], {
-            temperature: 0.25,
-            maxTokens: estimateShortFictionMaxTokens(1, input.charsPerChapter, this.ctx.client.defaults.maxTokens),
-          }), this.name, this.log);
-          const rebuilt = parseShortFictionBatchDraft(rebuiltResponse.content, {
-            expectedChapters: input.chapterCount,
-            language: input.language,
-          });
-          candidate = rebuilt.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
-          if (candidate && !isOutsideHardRange(candidate.charCount, length)) {
-            revised = rebuilt;
+          for (let rebuildAttempt = 0; rebuildAttempt < 2; rebuildAttempt += 1) {
+            const requestedTarget = rebuildAttempt === 0 || !candidate || candidate.charCount <= length.hardMax
+              ? length.target
+              : Math.max(length.hardMin, Math.round(length.target * 0.85));
+            const rebuiltResponse = await retryShortFictionCall(() => this.chat([
+              {
+                role: "system",
+                content: input.language === "en"
+                  ? "Write one complete short-fiction chapter from the supplied semantic beat sheet. Preserve every listed fact and the ending transition, but do not invent extra scenes. Obey the target word range. Output only SHORT_FICTION/CHAPTER tagged blocks."
+                  : "根据给出的语义节拍表重写一章完整短篇正文。保留表中每条事实和结尾承接，不新增场景；严格服从目标字数区间。只输出 SHORT_FICTION/CHAPTER 标签块。",
+              },
+              {
+                role: "user",
+                content: [
+                  `=== SHORT_FICTION_TITLE ===\n${storyTitle}`,
+                  `=== CHAPTER ${sourceChapter.number} TITLE ===\n${sourceChapter.title}`,
+                  input.language === "en"
+                    ? `Target ${requestedTarget} words; accepted hard range ${length.hardMin}-${length.hardMax}.`
+                    : `本次写作目标 ${requestedTarget} 字；验收硬范围 ${length.hardMin}-${length.hardMax} 字。`,
+                  "## Semantic beat sheet",
+                  planResponse.content.trim(),
+                ].join("\n\n"),
+              },
+            ], {
+              temperature: rebuildAttempt === 0 ? 0.25 : 0.15,
+              maxTokens: estimateShortFictionMaxTokens(1, input.charsPerChapter, this.ctx.client.defaults.maxTokens),
+            }), this.name, this.log);
+            const rebuilt = parseShortFictionBatchDraft(rebuiltResponse.content, {
+              expectedChapters: input.chapterCount,
+              language: input.language,
+            });
+            candidate = rebuilt.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
+            if (candidate && !isOutsideHardRange(candidate.charCount, length)) {
+              revised = rebuilt;
+              break;
+            }
           }
         }
       }
