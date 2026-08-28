@@ -292,8 +292,7 @@ async function produceShort(
       await writeDraftArtifacts(root, baseDir, "v001-partial", draft, language);
       options.onProgress?.(`Completed short fiction draft chapters: ${completedChapterNumbers.join(", ")}...`);
     };
-    const existingStatus = await readShortRunStatus(root, join(baseDir, "status.json"));
-    const latestReviewedDraft = existingStatus === "needs-review"
+    const latestReviewedDraft = providedStoryId
       ? await tryReadShortFictionDraft(root, join(baseDir, "drafts", "v002", "draft.json"))
       : undefined;
     const resumedDraft = latestReviewedDraft ?? await tryReadShortFictionDraft(
@@ -355,7 +354,7 @@ async function produceShort(
 
     finalDraft = draftV1;
     const chapterLengthSpec = buildLengthSpec(charsPerChapter, language);
-    const repairChapterNumbers = existingStatus === "needs-review"
+    const repairChapterNumbers = latestReviewedDraft
       ? draftV1.chapters
           .filter((chapter) => isOutsideHardRange(chapter.charCount, chapterLengthSpec))
           .map((chapter) => chapter.number)

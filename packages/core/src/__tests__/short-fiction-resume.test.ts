@@ -319,7 +319,7 @@ describe("short fiction resume + failure marker (C2)", () => {
     expect(status.status).toBe("complete");
   });
 
-  it("resumes needs-review repair from v002 and revises only chapters still outside range", async () => {
+  it("resumes repair from v002 after a transient failure and revises only chapters still outside range", async () => {
     const base = join(root, "works", "elevator", "source");
     await mkdir(join(base, "outline"), { recursive: true });
     await mkdir(join(base, "drafts", "v001-partial"), { recursive: true });
@@ -337,7 +337,7 @@ describe("short fiction resume + failure marker (C2)", () => {
     await writeFile(join(base, "drafts", "v001-partial", "draft.json"), JSON.stringify(original), "utf-8");
     await writeFile(join(base, "drafts", "v002", "draft.json"), JSON.stringify(reviewed), "utf-8");
     await writeFile(join(base, "final", "full.md"), "# needs review", "utf-8");
-    await writeFile(join(base, "status.json"), JSON.stringify({ status: "needs-review" }), "utf-8");
+    await writeFile(join(base, "status.json"), JSON.stringify({ status: "failed", error: "transient provider error" }), "utf-8");
     const continueDraft = vi.spyOn(ShortFictionWriterAgent.prototype, "continueDraft").mockResolvedValue(reviewed);
     vi.spyOn(ShortFictionDraftReviewerAgent.prototype, "reviewDraft").mockResolvedValue("只修仍超长的章节");
     const reviseDraft = vi.spyOn(ShortFictionDraftReviserAgent.prototype, "reviseDraft").mockResolvedValue(reviewed);
