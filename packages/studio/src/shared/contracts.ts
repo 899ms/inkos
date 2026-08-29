@@ -30,12 +30,6 @@ export interface BookSummary {
   readonly chapterCount: number;
   readonly lastChapterNumber: number;
   readonly totalWords: number;
-  readonly approvedChapters: number;
-  readonly pendingReview: number;
-  readonly pendingReviewChapters: number;
-  readonly failedReview: number;
-  readonly failedChapters: number;
-  readonly recentRunStatus?: string | null;
   readonly updatedAt: string;
 }
 
@@ -50,16 +44,19 @@ export interface BookDetail extends BookSummary {
 export interface ChapterSummary {
   readonly number: number;
   readonly title: string;
-  readonly status: string;
   readonly wordCount: number;
-  readonly auditIssueCount: number;
+  readonly observationCount: number;
   readonly updatedAt: string;
   readonly fileName: string | null;
 }
 
 export interface ChapterDetail extends ChapterSummary {
-  readonly auditIssues: ReadonlyArray<string>;
-  readonly reviewNote?: string;
+  readonly observations: ReadonlyArray<{
+    readonly code: string;
+    readonly status: "pass" | "warning" | "fail";
+    readonly summary: string;
+    readonly evidence: ReadonlyArray<string>;
+  }>;
   readonly content: string;
 }
 
@@ -80,13 +77,6 @@ export interface TruthFileSummary {
 
 export interface TruthFileDetail extends TruthFileSummary {
   readonly content: string | null;
-}
-
-// --- Review ---
-
-export interface ReviewActionPayload {
-  readonly chapterNumber: number;
-  readonly reason?: string;
 }
 
 // --- Runs ---

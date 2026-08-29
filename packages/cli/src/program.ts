@@ -23,7 +23,6 @@ import { updateCommand } from "./commands/update.js";
 import { detectCommand } from "./commands/detect.js";
 import { styleCommand } from "./commands/style.js";
 import { analyticsCommand } from "./commands/analytics.js";
-import { evalCommand } from "./commands/eval.js";
 import { importCommand } from "./commands/import.js";
 import { fanficCommand } from "./commands/fanfic.js";
 import { shortCommand } from "./commands/short-fiction.js";
@@ -93,7 +92,6 @@ export function createProgram(hooks: ProgramHooks = {}): Command {
   program.addCommand(detectCommand);
   program.addCommand(styleCommand);
   program.addCommand(analyticsCommand);
-  program.addCommand(evalCommand);
   program.addCommand(importCommand);
   program.addCommand(fanficCommand);
   program.addCommand(shortCommand);

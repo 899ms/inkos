@@ -386,9 +386,9 @@ InkOS は pi-agent harness を共通の推論・ツール呼び出しカーネ�
 | **Reflector** | JSONデルタを出力（フルMarkdownではない）；コードレイヤーがZodスキーマバリデーション後にイミュータブル書き込みを実行 |
 | **Normalizer** | 章が hard range から明確に外れた場合のみ、1パスで圧縮/拡張 |
 | **Continuity Auditor** | 構造化状態、制御ドキュメント、章コンテキストに対して下書きを検証 |
-| **Reviser** | 監査で発見された重大問題を修正。デフォルトの執筆チェーンでは自動修正は最大1回までで、その他は人間レビュー用にフラグ付け |
+| **Reviser** | ユーザー、Agent、または保存済み observation からの明示的な修正要求を適用し、新しい版をアトミックに記録 |
 
-監査に失敗すると、デフォルトのパイプラインは修正→再監査を1回だけ実行します。残った問題は結果と状態に保持され、人間レビューまたは後続コマンドで扱います。
+章本文と派生ストーリー状態はハード検証後にアトミックに保存されます。継続性と文章上の指摘は observation として保存され、修正は追跡可能な独立アクションとして実行されます。
 
 ### 長期記憶
 
@@ -440,15 +440,7 @@ inkos write next my-book              # Draft → audit → 自動修正、す�
 inkos write next my-book --count 5    # 5章連続で執筆
 ```
 
-`write next` はデフォルトで `plan -> compose -> write` ガバナンスチェーンを使用します。以前のプロンプトアセンブリパスが必要な場合は、`inkos.json` で明示的に設定してください：
-
-```json
-{
-  "inputGovernanceMode": "legacy"
-}
-```
-
-デフォルトは `v2` になりました。`legacy` は明示的なフォールバックとして引き続き利用可能です。
+`write next` は唯一の `plan -> compose -> write -> review -> commit` 創作チェーンを使用します。レビューは observation を生成し、技術検証がアトミック保存を制御します。意味的な指摘が章の失敗状態へ変換されることはありません。
 
 ### 2. アトミックコマンド（コンポーザブル、外部エージェントフレンドリー）
 
@@ -512,7 +504,7 @@ Studio の **Open World** と **Branching Interactive** は、先に書籍を作
 | `inkos review list [id]` | 下書きをレビュー |
 | `inkos review approve-all [id]` | 一括承認 |
 | `inkos status [id]` | プロジェクトのステータス |
-| `inkos export [id]` | 書籍をエクスポート（`--format txt/md/epub`、`--output <path>`、`--approved-only`） |
+| `inkos export [id]` | 書籍をエクスポート（`--format txt/md/epub`、`--output <path>`） |
 | `inkos radar scan` | 新規書籍の方向性に使う市場 / トレンド入力をスキャン |
 | `inkos fanfic init` | 原作素材から二次創作書籍を作成（`--from`、`--mode canon/au/ooc/cp`） |
 | `inkos short run` | 独立短編パッケージを生成 |

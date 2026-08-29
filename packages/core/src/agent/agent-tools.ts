@@ -865,7 +865,6 @@ const SubAgentParams = Type.Object({
     Type.Literal("md"),
     Type.Literal("epub"),
   ], { description: "exporter only: export format. Default: txt" })),
-  approvedOnly: Type.Optional(Type.Boolean({ description: "exporter only: export only approved chapters. Default: false" })),
 });
 
 type SubAgentParamsType = Static<typeof SubAgentParams>;
@@ -970,7 +969,7 @@ export function createSubAgentTool(
       onUpdate?: AgentToolUpdateCallback,
     ): Promise<AgentToolResult<unknown>> {
       return runWithAgentTrajectoryRole("subagent", async () => {
-        const { agent, instruction, bookId, title, chapterNumber, chapterCount, genre, platform, language, targetChapters, chapterWordCount, revise, feedback, mode, format, approvedOnly } = params;
+        const { agent, instruction, bookId, title, chapterNumber, chapterCount, genre, platform, language, targetChapters, chapterWordCount, revise, feedback, mode, format } = params;
         const activatedSkills = mergeActivatedSkillGuidance(
           options.workerSkills?.(agent) ?? [],
           options.activeSkills?.() ?? [],
@@ -1076,15 +1075,10 @@ export function createSubAgentTool(
                 }),
               );
               const last = results.at(-1);
-              const stoppedStatus = last?.status !== "ready-for-review" ? last?.status : undefined;
-              const output = textResult(
-                stoppedStatus
-                  ? sessionIsZh
-                    ? `已完成 ${results.length}/${requestedCount} 章；第 ${last?.chapterNumber} 章状态为 ${stoppedStatus}，批量写作已停止，请复核后再继续。`
-                    : `Writer completed ${results.length} of ${requestedCount} requested chapters for "${targetBookId}" and stopped because chapter ${last?.chapterNumber} ended with status "${stoppedStatus}".`
-                  : sessionIsZh
-                    ? `已连续完成 ${results.length} 章（第 ${results[0]?.chapterNumber} 章至第 ${last?.chapterNumber} 章）。`
-                    : `Writer completed ${results.length} consecutive chapters for "${targetBookId}".`,
+              return textResult(
+                sessionIsZh
+                  ? `已连续完成 ${results.length} 章（第 ${results[0]?.chapterNumber} 章至第 ${last?.chapterNumber} 章）。`
+                  : `Writer completed ${results.length} consecutive chapters for "${targetBookId}".`,
                 {
                   kind: "chapters_written",
                   bookId: targetBookId,
@@ -1095,13 +1089,11 @@ export function createSubAgentTool(
                     chapterNumber: result.chapterNumber,
                     title: result.title,
                     wordCount: result.wordCount,
-                    status: result.status,
+                    observationCount: result.review.issues.length,
                     ...(result.contextTrace ? { contextTrace: result.contextTrace } : {}),
                   })),
-                  ...(stoppedStatus ? { stoppedStatus } : {}),
                 },
               );
-              return stoppedStatus ? { ...output, isError: true } : output;
             }
             progress(`Writing next chapter for "${targetBookId}"...`);
             const result = await runPipelineWithAgentContext(
@@ -1111,37 +1103,29 @@ export function createSubAgentTool(
               () => pipeline.writeNextChapter(targetBookId, chapterWordCount, undefined, instruction),
             );
             progress(`Writer finished chapter for "${targetBookId}".`);
-            const resultStatus = (result as any).status;
-            const wordCount = (result as any).wordCount ?? "unknown";
-            const chapterNumberResult = (result as any).chapterNumber;
-            const titleResult = (result as any).title;
-            const needsReview = Boolean(resultStatus && resultStatus !== "ready-for-review" && resultStatus !== "active");
+            const wordCount = result.wordCount;
+            const chapterNumberResult = result.chapterNumber;
+            const titleResult = result.title;
             const chapterRef = chapterNumberResult
               ? sessionIsZh
                 ? `第 ${chapterNumberResult} 章${titleResult ? `《${titleResult}》` : ""}`
                 : `chapter ${chapterNumberResult}${titleResult ? ` "${titleResult}"` : ""}`
               : sessionIsZh ? "下一章" : "the next chapter";
-            const message = needsReview
-              ? sessionIsZh
-                ? `已为 ${targetBookId} 写出${chapterRef}，字数 ${wordCount}，但审稿未通过，状态 ${resultStatus}，需要复核后再继续。`
-                : `Wrote ${chapterRef} for ${targetBookId}: ${wordCount} words, but review did not pass (status: ${resultStatus}). Manual review is required before continuing.`
-              : sessionIsZh
-                ? `已为 ${targetBookId} 完成${chapterRef}，字数 ${wordCount}，状态 ${resultStatus ?? "ready-for-review"}。`
-                : `Completed ${chapterRef} for ${targetBookId}: ${wordCount} words, status ${resultStatus ?? "ready-for-review"}.`;
-            const output = textResult(
-              message,
+            return textResult(
+              sessionIsZh
+                ? `已为 ${targetBookId} 完成${chapterRef}，字数 ${wordCount}，记录 ${result.review.issues.length} 条审查观察。`
+                : `Completed ${chapterRef} for ${targetBookId}: ${wordCount} words with ${result.review.issues.length} review observation(s).`,
               {
                 kind: "chapter_written",
                 bookId: targetBookId,
                 chapterNumber: chapterNumberResult,
                 title: titleResult,
                 wordCount,
-                status: resultStatus,
+                observations: result.review.issues,
                 skillIds,
                 ...(result.contextTrace ? { contextTrace: result.contextTrace } : {}),
               },
             );
-            return needsReview ? { ...output, isError: true } : output;
           }
 
           case "auditor": {
@@ -1158,14 +1142,13 @@ export function createSubAgentTool(
               .map((i: any) => `[${i.severity}] ${i.description}`)
               .join("\n");
             return textResult(
-              `Audit chapter ${audit.chapterNumber}: ${audit.passed ? "PASSED" : "FAILED"}, ${(audit.issues ?? []).length} issue(s).` +
+              `Reviewed chapter ${audit.chapterNumber}: ${(audit.issues ?? []).length} observation(s).` +
               (issueLines ? `\n${issueLines}` : ""),
               {
-                kind: "chapter_audit",
+                kind: "chapter_review",
                 bookId: targetBookId,
                 chapterNumber: audit.chapterNumber,
-                passed: audit.passed,
-                issueCount: (audit.issues ?? []).length,
+                observations: audit.issues,
                 skillIds,
               },
             );
@@ -1181,54 +1164,23 @@ export function createSubAgentTool(
               activatedSkills,
               () => pipeline.reviseDraft(targetBookId, chapterNumber, resolvedMode, instruction),
             );
-            const applied = result.applied !== false;
             const resultChapter = result.chapterNumber ?? chapterNumber;
             const details = {
               kind: "chapter_revision",
               bookId: targetBookId,
               chapterNumber: resultChapter,
               mode: resolvedMode,
-              applied,
-              status: result.status,
               wordCount: result.wordCount,
+              changed: result.changed,
               fixedIssues: result.fixedIssues,
-              skippedReason: result.skippedReason,
-              auditPassed: result.auditPassed,
-              auditIssues: result.auditIssues,
-              revisionDiagnostics: result.revisionDiagnostics,
+              observations: result.observations,
               skillIds,
             };
-            if (!applied) {
-              progress(`Revision not applied for "${targetBookId}".`);
-              const diagnostics = result.revisionDiagnostics;
-              const diagnosticText = diagnostics
-                ? [
-                    "",
-                    "Revision gate:",
-                    `- Standard: ${diagnostics.standard}`,
-                    `- Before: blocking=${diagnostics.before.blockingCount}, critical=${diagnostics.before.criticalCount}, aiTell=${diagnostics.before.aiTellCount}`,
-                    `- After: blocking=${diagnostics.after.blockingCount}, critical=${diagnostics.after.criticalCount}, aiTell=${diagnostics.after.aiTellCount}`,
-                    ...(diagnostics.remainingIssues.length > 0
-                      ? [
-                          "- Remaining issues:",
-                          ...diagnostics.remainingIssues.map((issue) => `  - [${issue.severity}] ${issue.category}: ${issue.description}${issue.suggestion ? ` (${issue.suggestion})` : ""}`),
-                        ]
-                      : []),
-                  ].join("\n")
-                : "";
-              return textResult(
-                `Revision not applied for "${targetBookId}" chapter ${resultChapter ?? "latest"}: ${result.skippedReason ?? result.status ?? "pipeline kept the original chapter"}.${diagnosticText}`,
-                details,
-              );
-            }
             progress(`Revision complete for "${targetBookId}".`);
-            const auditText = result.auditPassed === undefined
-              ? ""
-              : result.auditPassed
-                ? " Audit passed."
-                : ` Audit still has ${(result.auditIssues ?? []).length} blocking issue(s).`;
             return textResult(
-              `Revision (${resolvedMode}) complete for "${targetBookId}" chapter ${resultChapter ?? "latest"}.${auditText}`,
+              result.changed
+                ? `Revision (${resolvedMode}) complete for "${targetBookId}" chapter ${resultChapter ?? "latest"}; ${result.observations.length} review observation(s) recorded.`
+                : `Revision (${resolvedMode}) made no change to "${targetBookId}" chapter ${resultChapter ?? "latest"}; no actionable review finding was present.`,
               details,
             );
           }
@@ -1239,7 +1191,6 @@ export function createSubAgentTool(
             const state = new StateManager(projectRoot);
             const result = await writeExportArtifact(state, targetBookId, {
               format: format ?? "txt",
-              approvedOnly: approvedOnly ?? false,
             });
             return textResult(
               `Exported "${targetBookId}": ${result.chaptersExported} chapters, ${result.totalWords} words → ${result.outputPath}`,
@@ -1252,20 +1203,30 @@ export function createSubAgentTool(
         } catch (err: any) {
           if (agent === "architect" && err instanceof ArchitectIncompleteFoundationError) {
             const missing = err.missing.join(", ");
-            return textResult(
-              [
-                err.message,
-                "",
-                `缺失 section: ${missing}`,
-                "我会把已生成的部分保留下来，并继续补齐缺失 section；不要重新发明一本书。",
-              ].join("\n"),
-              {
-                kind: "architect_incomplete",
-                missing: [...err.missing],
-                partialContent: err.partialContent,
-                retryInstruction: `Continue repairing the architect foundation. Preserve the partial content and fill missing sections: ${missing}.`,
-              },
-            );
+            return {
+              ...textResult(
+                [
+                  err.message,
+                  "",
+                  `缺失 section: ${missing}`,
+                  "我会把已生成的部分保留下来，并继续补齐缺失 section；不要重新发明一本书。",
+                ].join("\n"),
+                {
+                  kind: "architect_incomplete",
+                  missing: [...err.missing],
+                  partialContent: err.partialContent,
+                  retryInstruction: `Continue repairing the architect foundation. Preserve the partial content and fill missing sections: ${missing}.`,
+                  observations: [{
+                    code: "foundation-incomplete",
+                    kind: "hard",
+                    status: "fail",
+                    summary: err.message,
+                    evidence: [...err.missing],
+                  }],
+                },
+              ),
+              isError: true,
+            };
           }
           console.error(`[sub_agent] "${agent}" failed:`, err);
           throw err;
@@ -2152,9 +2113,7 @@ export function createShortFictionRunTool(
 
       return textResult(
         [
-          result.status === "complete"
-            ? `Short fiction "${result.storyId}" completed.`
-            : `Short fiction "${result.storyId}" was saved but still needs review.`,
+          `Short fiction "${result.storyId}" completed with ${result.observations.length} observation(s).`,
           `Final: ${result.finalMarkdownPath}`,
           `Sales package: ${result.salesPackagePath}`,
           `Cover prompt: ${result.coverPromptPath}`,
@@ -2167,7 +2126,7 @@ export function createShortFictionRunTool(
               ].join("\n"),
         ].join("\n"),
         {
-          kind: result.status === "complete" ? "short_fiction_created" : "short_fiction_needs_review",
+          kind: "short_fiction_created",
           ...result,
           skillIds: activatedSkillIds(activatedSkills),
         },
@@ -3037,7 +2996,8 @@ export function createPlayStepTool(
         // "service unavailable / reload your save" message. Return a fixed, graceful
         // structured failure so the turn fails honestly and recoverably instead.
         const isZh = (target.world?.language ?? "zh") !== "en";
-        return textResult(
+        return {
+          ...textResult(
           isZh
             ? "（系统刚才卡了一下，这一步没能展开。把你刚才想做的再说一遍，我就接着推进。）"
             : "(The system hiccuped and this step didn't resolve. Say what you just did again and I'll continue.)",
@@ -3048,7 +3008,9 @@ export function createPlayStepTool(
             error: err instanceof Error ? err.message : String(err),
             skillIds: activatedSkillIds(activatedSkills),
           },
-        );
+          ),
+          isError: true,
+        } as AgentToolResult<unknown>;
       } finally {
         closePlayRunner(runner);
       }
@@ -3073,6 +3035,15 @@ export function createPlayStepTool(
           suggestedActions: step.suggestedActions,
           action: step.action,
           mutation: step.mutation,
+          observations: step.mutation.blocked
+            ? [{
+                code: "play-action-blocked",
+                kind: "soft",
+                status: "warning",
+                summary: step.mutation.blockedReason || step.mutation.summary,
+                evidence: [],
+              }]
+            : [],
           currentState,
           graph,
           skillIds: activatedSkillIds(activatedSkills),
@@ -3177,18 +3148,28 @@ export function createPlayReviseTool(
         try {
           replay = await runWithPlayRunner((activeRunner) => activeRunner.regenerateLastTurn(replacement));
         } catch (err) {
-          return textResult(
-            isZh
-              ? "（上一回合暂时不能安全重做。继续输入新的动作，我会从当前状态推进。）"
-              : "(The previous turn cannot be safely regenerated yet. Enter a new action and I will continue from the current state.)",
-            {
-              kind: "play_revise_failed",
-              worldId,
-              runId,
-              error: err instanceof Error ? err.message : String(err),
-              skillIds: activatedSkillIds(activatedSkills),
-            },
-          );
+          return {
+            ...textResult(
+              isZh
+                ? "（上一回合暂时不能安全重做。继续输入新的动作，我会从当前状态推进。）"
+                : "(The previous turn cannot be safely regenerated yet. Enter a new action and I will continue from the current state.)",
+              {
+                kind: "play_revise_failed",
+                worldId,
+                runId,
+                error: err instanceof Error ? err.message : String(err),
+                skillIds: activatedSkillIds(activatedSkills),
+                observations: [{
+                  code: "play-revise-failed",
+                  kind: "hard",
+                  status: "fail",
+                  summary: err instanceof Error ? err.message : String(err),
+                  evidence: [],
+                }],
+              },
+            ),
+            isError: true,
+          } as AgentToolResult<unknown>;
         }
       } finally {
         closePlayRunner(runner);
@@ -3361,23 +3342,17 @@ export function createResyncChapterStateTool(
       );
       const issues = result.audit.issues;
       const zh = options.language !== "en";
-      const summary = result.audit.passed
-        ? (zh
-            ? `第 ${result.chapter.chapterNumber} 章正文未改动；状态、摘要与伏笔已从上一章快照重建，重新审稿通过。`
-            : `Chapter ${result.chapter.chapterNumber} prose was unchanged; state, summaries, and hooks were rebuilt from the previous snapshot, and the fresh audit passed.`)
-        : [
-            zh
-              ? `第 ${result.chapter.chapterNumber} 章正文未改动；状态、摘要与伏笔已重建，但重新审稿仍有 ${issues.length} 个问题：`
-              : `Chapter ${result.chapter.chapterNumber} prose was unchanged; state, summaries, and hooks were rebuilt, but the fresh audit still found ${issues.length} issue(s):`,
-            ...issues.map((issue) => `- [${issue.severity}] ${issue.description}${issue.suggestion ? ` (${issue.suggestion})` : ""}`),
-          ].join("\n");
+      const summary = [
+        zh
+          ? `第 ${result.chapter.chapterNumber} 章正文未改动；状态、摘要与伏笔已重建，记录 ${issues.length} 条审查观察。`
+          : `Chapter ${result.chapter.chapterNumber} prose was unchanged; state, summaries, and hooks were rebuilt with ${issues.length} review observation(s).`,
+        ...issues.map((issue) => `- [${issue.severity}] ${issue.description}${issue.suggestion ? ` (${issue.suggestion})` : ""}`),
+      ].join("\n");
       return textResult(summary, {
         kind: "chapter_state_resynced",
         bookId,
         chapterNumber: result.chapter.chapterNumber,
-        status: result.audit.passed ? "ready-for-review" : "audit-failed",
-        auditPassed: result.audit.passed,
-        auditIssues: issues,
+        observations: issues,
         summary: result.audit.summary,
         skillIds: activatedSkillIds(activatedSkills),
       });

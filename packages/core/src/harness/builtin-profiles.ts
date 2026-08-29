@@ -16,8 +16,6 @@ const PROFILE_INPUTS = [
     requiredSkillIds: ["inkos-long-writing"],
     recommendedSkillIds: ["inkos-story-review"],
     artifactKinds: ["foundation", "chapter-plan", "chapter", "review", "cover"],
-    hardGates: ["artifact-integrity", "user-constraints", "canon-consistency"],
-    softCriteria: ["style", "pacing", "emotion", "commercial-quality"],
   },
   {
     id: "short-fiction",
@@ -77,8 +75,6 @@ export function builtInWorkProfiles(): ReadonlyArray<WorkProfile> {
     requiredSkillIds: "requiredSkillIds" in input ? input.requiredSkillIds : [],
     recommendedSkillIds: "recommendedSkillIds" in input ? input.recommendedSkillIds : [],
     contextRecipes: {},
-    hardGates: "hardGates" in input ? input.hardGates : ["artifact-integrity", "user-constraints"],
-    softCriteria: "softCriteria" in input ? input.softCriteria : [],
     confirmation: {
       inferredMutation: "execute",
       explicitRecoverableMutation: "execute",

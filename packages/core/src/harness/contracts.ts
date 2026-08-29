@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { ObservationSchema } from "../models/observation.js";
+import type { Observation } from "../models/observation.js";
 
 export const HARNESS_VERSION = 2 as const;
 
@@ -98,8 +100,6 @@ export const WorkProfileSchema = z.object({
   recommendedSkillIds: z.array(HarnessIdSchema).default([]),
   contextRecipes: z.record(HarnessIdSchema, HarnessIdSchema).default({}),
   artifactKinds: z.array(HarnessIdSchema).default([]),
-  hardGates: z.array(HarnessIdSchema).default([]),
-  softCriteria: z.array(HarnessIdSchema).default([]),
   confirmation: ConfirmationPolicySchema.default({
     inferredMutation: "confirm",
     explicitRecoverableMutation: "execute",
@@ -119,14 +119,8 @@ export const ActionArtifactRefSchema = z.object({
 }).strict();
 export type ActionArtifactRef = z.infer<typeof ActionArtifactRefSchema>;
 
-export const ActionObservationSchema = z.object({
-  code: HarnessIdSchema,
-  kind: z.enum(["hard", "soft"]),
-  status: z.enum(["pass", "warning", "fail"]),
-  summary: z.string().min(1),
-  evidence: z.array(z.string()).default([]),
-}).strict();
-export type ActionObservation = z.infer<typeof ActionObservationSchema>;
+export const ActionObservationSchema = ObservationSchema;
+export type ActionObservation = Observation;
 
 export const ActionResultSchema = z.object({
   status: z.enum(["success", "warning", "error"]),

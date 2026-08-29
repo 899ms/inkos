@@ -51,7 +51,7 @@ export async function createTranslationProjectFromFile(
       translatedPath: toPosixPath(translatedChapterPath),
       segmentCount: segments.length,
       charCount: chapter.content.length,
-      status: "pending",
+      translatedSegments: 0,
     });
   }
 

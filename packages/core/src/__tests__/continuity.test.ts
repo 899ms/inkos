@@ -15,7 +15,7 @@ describe("ContinuityAuditor", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns a critical audit issue instead of throwing when audit output is not JSON", () => {
+  it("returns a review-unavailable observation instead of making a quality decision", () => {
     const auditor = new ContinuityAuditor({
       client: {
         provider: "openai",
@@ -34,12 +34,11 @@ describe("ContinuityAuditor", () => {
 
     const result = (auditor as any).parseAuditResult("模型只返回了一段散文，没有 JSON。", "zh");
 
-    expect(result.passed).toBe(false);
-    expect(result.summary).toContain("审稿输出解析失败");
+    expect(result.parseFailed).toBe(true);
     expect(result.issues).toEqual([
       expect.objectContaining({
-        severity: "critical",
-        category: "系统错误",
+        severity: "warning",
+        category: "review-unavailable",
       }),
     ]);
   });

@@ -7,7 +7,6 @@ export interface ExportStateLike {
   readonly loadBookConfig: (bookId: string) => Promise<{ readonly title: string; readonly language?: string }>;
   readonly loadChapterIndex: (bookId: string) => Promise<ReadonlyArray<{
     readonly number: number;
-    readonly status: string;
     readonly wordCount: number;
   }>>;
 }
@@ -60,16 +59,13 @@ export async function buildExportArtifact(
   bookId: string,
   options: {
     readonly format?: "txt" | "md" | "epub";
-    readonly approvedOnly?: boolean;
     readonly outputPath?: string;
   },
 ): Promise<ExportArtifact> {
   const format = options.format ?? "txt";
   const index = await state.loadChapterIndex(bookId);
   const book = await state.loadBookConfig(bookId);
-  const chapters = options.approvedOnly
-    ? index.filter((chapter) => chapter.status === "approved")
-    : index;
+  const chapters = index;
 
   if (chapters.length === 0) {
     throw new Error("No chapters to export.");
@@ -135,7 +131,6 @@ export async function writeExportArtifact(
   bookId: string,
   options: {
     readonly format?: "txt" | "md" | "epub";
-    readonly approvedOnly?: boolean;
     readonly outputPath?: string;
   },
 ): Promise<Omit<ExportArtifact, "payload" | "contentType" | "fileName">> {

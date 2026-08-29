@@ -7,17 +7,9 @@ import { cn } from "../../lib/utils";
 interface ChapterMeta {
   number: number;
   title: string;
-  status: string;
   wordCount: number;
+  observations: ReadonlyArray<unknown>;
 }
-
-const STATUS_INDICATOR: Record<string, { symbol: string; color: string }> = {
-  approved: { symbol: "✓", color: "text-emerald-500" },
-  "ready-for-review": { symbol: "◆", color: "text-amber-500" },
-  drafted: { symbol: "○", color: "text-muted-foreground" },
-  "needs-revision": { symbol: "✕", color: "text-destructive" },
-  imported: { symbol: "◇", color: "text-blue-500" },
-};
 
 interface ChaptersSectionProps {
   readonly bookId: string;
@@ -43,7 +35,9 @@ export function ChaptersSection({ bookId, isZh }: ChaptersSectionProps) {
       ) : (
         <ul className="space-y-1 max-h-52 overflow-y-auto overflow-x-hidden">
           {chapters.map((ch) => {
-            const ind = STATUS_INDICATOR[ch.status] ?? { symbol: "○", color: "text-muted-foreground" };
+            const ind = ch.observations.length > 0
+              ? { symbol: "◆", color: "text-amber-500" }
+              : { symbol: "●", color: "text-emerald-500" };
             return (
               <li
                 key={`${ch.number}-${ch.title ?? ""}`}

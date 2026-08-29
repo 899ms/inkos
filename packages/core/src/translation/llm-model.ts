@@ -55,7 +55,7 @@ export function createLLMTranslationModel(input: {
           content: [
             "You are InkOS Translation Review Agent.",
             "Check fidelity, omissions, terminology, pronouns, names, and target-language readability.",
-            "Return JSON only: {\"passed\":true,\"summary\":\"...\",\"issues\":[\"...\"]}.",
+            "Return JSON only: {\"summary\":\"...\",\"issues\":[\"...\"]}. An empty issues array is valid.",
           ].join("\n"),
         },
         {
@@ -75,7 +75,6 @@ export function createLLMTranslationModel(input: {
       ], input.activatedSkills), { temperature: 0.1, maxTokens: 4096, signal: input.signal });
       const parsed = parseJsonObject(response.content);
       return {
-        passed: parsed.passed === true,
         summary: typeof parsed.summary === "string" ? parsed.summary : "Translation review completed.",
         issues: Array.isArray(parsed.issues) ? parsed.issues.filter((issue): issue is string => typeof issue === "string") : [],
       };

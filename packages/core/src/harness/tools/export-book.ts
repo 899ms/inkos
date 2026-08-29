@@ -8,7 +8,6 @@ const ExportBookParameters = Type.Object({
     Type.Literal("md"),
     Type.Literal("epub"),
   ])),
-  approvedOnly: Type.Optional(Type.Boolean()),
 });
 
 type ExportBookInput = Static<typeof ExportBookParameters>;
@@ -26,7 +25,6 @@ export function createExportBookTool(
     async execute(_toolCallId, input: ExportBookInput) {
       const details = await writeExportArtifact(state, bookId, {
         format: input.format ?? "txt",
-        approvedOnly: input.approvedOnly ?? false,
         ...(options.outputPath ? { outputPath: options.outputPath } : {}),
       });
       return {

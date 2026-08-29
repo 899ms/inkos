@@ -353,7 +353,7 @@ Play 维护一个可持续推进的世界状态：角色、地点、物品、证
 
 ### 多维度审计 + 去 AI 味
 
-连续性审计员从 37 个维度检查每一章草稿：角色记忆、物资连续性、伏笔回收、大纲偏离、叙事节奏、情感弧线等。内置 AI 痕迹检测维度，自动识别"LLM 味"表达（高频词、句式单调、过度总结）。默认长篇写作链路最多自动修订一次；如果你更看重自动闭环，可以通过 `writing.reviewRetries` 调整修订轮数。
+连续性审查会从角色记忆、物资连续性、伏笔回收、大纲偏离、叙事节奏和情感弧线等维度记录具体 observation。内置 AI 痕迹检测会标出高频词、句式单调和过度总结等可修订位置。observation 是可追溯的创作反馈，不会把章节改写成“通过/失败”状态；用户或 Agent 可据此显式发起修订。
 
 去 AI 味规则内置于写手 agent 的 prompt 层——词汇疲劳词表、禁用句式、文风指纹注入，从源头减少 AI 生成痕迹。`revise --mode anti-detect` 可对已有章节做专门的反检测改写。
 
@@ -446,10 +446,10 @@ InkOS 以 pi-agent harness 作为统一认知与工具调用内核：Agent 理�
 | **反射器 Reflector**   | 输出 JSON delta（而非全量 markdown），由代码层做 Zod schema 校验后 immutable 写入    |
 | **归一化器 Normalizer** | 仅在正文明显偏离 hard range 时单 pass 压缩/扩展                                 |
 | **连续性审计员 Auditor**  | 对照结构化状态、控制文档和章节上下文验证草稿，执行连续性与质量检查                                 |
-| **修订者 Reviser**     | 修复审计发现的关键问题；默认最多自动修订一次，可通过 `writing.reviewRetries` 调整，其他问题标记给人工审核 |
+| **修订者 Reviser**     | 接受用户、Agent 或审查 observation 给出的明确修改目标，生成并原子落盘新版本                         |
 
 
-如果审计不通过，默认管线只做一次"修订 → 再审计"；仍未解决的问题会保留在结果和状态里，交给人工或后续命令继续处理。需要更强自动闭环时，可以运行 `inkos config set writing.reviewRetries 3` 把修订轮数调高。
+章节正文和故事状态通过硬校验后原子落盘；连续性与写作质量问题作为 observation 保存在章节记录中。修订是独立的显式动作，完成后会生成新的 observation 与可追溯版本。
 
 ### 长期记忆
 
@@ -499,19 +499,11 @@ InkOS 提供四种交互方式，底层共享同一组原子操作：
 ### 1. 完整管线（一键式）
 
 ```bash
-inkos write next 吞天魔帝          # 写草稿 → 审计 → 按配置自动修订
+inkos write next 吞天魔帝          # 规划 → 编排 → 写作 → 审查记录 → 原子落盘
 inkos write next 吞天魔帝 --count 5 # 连续写 5 章
 ```
 
-`write next` 现在默认走 `plan -> compose -> write` 的输入治理链路，审计后的自动修订轮数默认是 1。若你需要回退到旧的 prompt 拼装路径，可在 `inkos.json` 中显式设置：
-
-```json
-{
-  "inputGovernanceMode": "legacy"
-}
-```
-
-默认值为 `v2`。`legacy` 仅作为显式 fallback 保留。
+`write next` 使用唯一的 `plan -> compose -> write -> review -> commit` 创作链路。审查产生 observation；技术校验决定能否原子落盘，语义反馈不会被转换成章节失败状态。
 
 ### 2. 原子命令（可组合，适合外部 Agent 调用）
 
@@ -589,7 +581,7 @@ Studio 里的「开放世界」和「分支互动」是交互式创作入口。�
 | `inkos review list [id]`                    | 审阅草稿                                                                                       |
 | `inkos review approve-all [id]`             | 批量通过                                                                                       |
 | `inkos status [id]`                         | 项目状态                                                                                       |
-| `inkos export [id]`                         | 导出书籍（`--format txt/md/epub`、`--output <path>`、`--approved-only`）                           |
+| `inkos export [id]`                         | 导出书籍（`--format txt/md/epub`、`--output <path>`）                                               |
 | `inkos radar scan`                          | 扫描平台趋势                                                                                     |
 | `inkos fanfic init`                         | 从原作素材创建同人书（`--from`、`--mode canon/au/ooc/cp`）                                              |
 | `inkos short run`                           | 生成独立短篇包（正文、简介卖点、封面提示词、可选封面图）                                                               |

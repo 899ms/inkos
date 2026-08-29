@@ -61,6 +61,7 @@ export function createInitialWorkManifestWrite(input: {
 export async function syncWorkSourceArtifacts(input: {
   readonly projectRoot: string;
   readonly workId: string;
+  readonly accept: boolean;
   readonly episodeId?: string;
   readonly updatedAt?: string;
 }): Promise<WorkManifest> {
@@ -86,7 +87,7 @@ export async function syncWorkSourceArtifacts(input: {
         parentRevisionId: null,
         path: workPath,
         contentType: contentTypeFor(file),
-        status: "accepted",
+        status: input.accept ? "accepted" : "candidate",
         checksum,
         byteLength: bytes.byteLength,
         episodeId: input.episodeId,
@@ -95,7 +96,7 @@ export async function syncWorkSourceArtifacts(input: {
       artifacts.push(ArtifactManifestSchema.parse({
         id: artifactIdFor(file),
         kind: artifactKindFor(file),
-        currentRevisionId: revision.id,
+        currentRevisionId: input.accept ? revision.id : null,
         revisions: [revision],
         metadata: { sourcePath: toPosixPath(join("works", input.workId, workPath)) },
       }));
@@ -111,7 +112,7 @@ export async function syncWorkSourceArtifacts(input: {
       parentRevisionId: existing.currentRevisionId,
       path: workPath,
       contentType: contentTypeFor(file),
-      status: "accepted",
+      status: input.accept ? "accepted" : "candidate",
       checksum,
       byteLength: bytes.byteLength,
       episodeId: input.episodeId,
@@ -119,9 +120,11 @@ export async function syncWorkSourceArtifacts(input: {
     });
     artifacts[existingIndex] = ArtifactManifestSchema.parse({
       ...existing,
-      currentRevisionId: revision.id,
+      currentRevisionId: input.accept ? revision.id : existing.currentRevisionId,
       revisions: prior
-        ? existing.revisions.map((item) => item.id === prior.id ? { ...item, status: "accepted" } : item)
+        ? existing.revisions.map((item) => item.id === prior.id
+            ? { ...item, status: input.accept ? "accepted" as const : item.status }
+            : item)
         : [...existing.revisions, revision],
     });
   }
@@ -129,7 +132,7 @@ export async function syncWorkSourceArtifacts(input: {
   for (let index = 0; index < artifacts.length; index += 1) {
     const artifact = artifacts[index]!;
     const current = artifact.revisions.find((revision) => revision.id === artifact.currentRevisionId);
-    if (!current?.path.startsWith("source/") || presentWorkPaths.has(current.path)) continue;
+    if (!input.accept || !current?.path.startsWith("source/") || presentWorkPaths.has(current.path)) continue;
     artifacts[index] = ArtifactManifestSchema.parse({
       ...artifact,
       currentRevisionId: null,
@@ -171,7 +174,6 @@ function artifactIdFor(path: string): string {
 
 function artifactKindFor(path: string): string {
   if (path.endsWith("manifest.json")) return "manifest";
-  if (path.endsWith("status.json")) return "run-status";
   if (path.endsWith("glossary.json")) return "glossary";
   if (path.endsWith("review-report.md")) return "review";
   if (path.endsWith("script.md")) return "script";

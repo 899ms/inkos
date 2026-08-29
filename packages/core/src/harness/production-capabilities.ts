@@ -68,6 +68,7 @@ import {
 } from "./capability-registry.js";
 import { loadWorkManifest } from "./work-store.js";
 import { syncWorkSourceArtifacts } from "./source-sync.js";
+import { ObservationSchema, type Observation } from "../models/observation.js";
 
 export interface ProductionCapabilityEnvironment {
   readonly pipeline: PipelineRunner;
@@ -440,13 +441,19 @@ async function normalizeToolResult(
     .join("\n")
     .trim();
   const details = result.details;
+  const isError = (result as { isError?: boolean }).isError === true;
   const workIds = new Set<string>();
   if (syncArtifacts && context.work) workIds.add(context.work.id);
   collectWorkIds(details, workIds);
   const artifacts: ActionArtifactRef[] = [];
   for (const workId of workIds) {
     if (await loadKnownWork(context.projectRoot, workId)) {
-      await syncWorkSourceArtifacts({ projectRoot: context.projectRoot, workId });
+      await syncWorkSourceArtifacts({
+        projectRoot: context.projectRoot,
+        workId,
+        episodeId: context.episodeId,
+        accept: !isError,
+      });
     }
     const after = await loadKnownWork(context.projectRoot, workId);
     if (!after) continue;
@@ -466,7 +473,10 @@ async function normalizeToolResult(
       });
     }
   }
-  const status = (result as { isError?: boolean }).isError ? "error" : resultStatus(details);
+  const observations = extractObservations(details);
+  const status = isError
+    ? "error"
+    : observations.some((observation) => observation.status !== "pass") ? "warning" : "success";
   const summary = content.split("\n").map((line) => line.trim()).find(Boolean)
     ?? (status === "error" ? "Action failed." : "Action completed.");
   return ActionResultSchema.parse({
@@ -475,20 +485,30 @@ async function normalizeToolResult(
     ...(content ? { content } : {}),
     nextActions: [],
     artifacts,
-    observations: [],
+    observations,
     ...(details === undefined ? {} : { data: details }),
     ...(status === "error" ? { retry: { allowed: true } } : {}),
   });
 }
 
-function resultStatus(details: unknown): ActionResult["status"] {
-  if (!details || typeof details !== "object") return "success";
-  const kind = "kind" in details ? String(details.kind) : "";
-  if (kind.endsWith("_failed") || kind.endsWith("_incomplete")) return "error";
-  const status = "status" in details ? String(details.status) : "";
-  if (status === "failed" || status === "error") return "error";
-  if (["partial", "incomplete", "audit-failed", "state-degraded"].includes(status)) return "warning";
-  return "success";
+function extractObservations(details: unknown): Observation[] {
+  if (!details || typeof details !== "object") return [];
+  const raw = (details as Record<string, unknown>).observations;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item, index) => {
+    const parsed = ObservationSchema.safeParse(item);
+    if (parsed.success) return [parsed.data];
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    if (typeof record.description !== "string") return [];
+    return [ObservationSchema.parse({
+      code: typeof record.category === "string" && record.category ? record.category : `review-${index + 1}`,
+      kind: "soft",
+      status: "warning",
+      summary: record.description,
+      evidence: typeof record.suggestion === "string" && record.suggestion ? [record.suggestion] : [],
+    })];
+  });
 }
 
 function collectWorkIds(value: unknown, target: Set<string>): void {

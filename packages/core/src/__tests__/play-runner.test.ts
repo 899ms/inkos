@@ -201,8 +201,6 @@ describe("PlayRunner", () => {
       .resolves.toContain("\"anchor\": \"仍在停车场刚上车的片刻\"");
     await expect(readFile(join(runDir, "projections", "scene.md"), "utf-8"))
       .resolves.toContain("屏幕弹出新城花园 187 次");
-    await expect(readFile(join(runDir, "status.json"), "utf-8"))
-      .resolves.toContain('"status": "complete"');
   });
 
   it("rolls back graph and run files when a turn fails during persistence", async () => {
@@ -236,8 +234,6 @@ describe("PlayRunner", () => {
     const runDir = join(root, "works", "rollback-world", "source", "runs", "main");
     await expect(readFile(join(runDir, "events.jsonl"), "utf-8")).resolves.toBe("");
     await expect(readFile(join(runDir, "transcript.jsonl"), "utf-8")).resolves.toBe("");
-    await expect(readFile(join(runDir, "status.json"), "utf-8"))
-      .resolves.toContain('"status": "failed"');
   });
 
   it("does not commit state when scene rendering fails", async () => {

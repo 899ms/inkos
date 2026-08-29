@@ -8,12 +8,10 @@ export interface WebhookConfig {
 
 export type WebhookEvent =
   | "chapter-complete"
-  | "audit-passed"
-  | "audit-failed"
+  | "review-complete"
   | "revision-complete"
   | "pipeline-complete"
-  | "pipeline-error"
-  | "diagnostic-alert";
+  | "pipeline-error";
 
 export interface WebhookPayload {
   readonly event: WebhookEvent;

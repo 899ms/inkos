@@ -49,13 +49,8 @@ export const upCommand = new Command("up")
         retryDelayMs: config.daemon.retryDelayMs,
         cooldownAfterChapterMs: config.daemon.cooldownAfterChapterMs,
         maxChaptersPerDay: config.daemon.maxChaptersPerDay,
-        onChapterComplete: (bookId, chapter, status) => {
-          const icon = status === "ready-for-review"
-            ? "+"
-            : status === "state-degraded"
-              ? "x"
-              : "!";
-          log(`  [${icon}] ${bookId} Ch.${chapter} — ${status}`);
+        onChapterComplete: (bookId, chapter) => {
+          log(`  [+] ${bookId} Ch.${chapter}`);
         },
         onError: (bookId, error) => {
           logError(`${bookId}: ${error.message}`);

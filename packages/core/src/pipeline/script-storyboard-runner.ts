@@ -3,10 +3,7 @@ import { basename, join } from "node:path";
 import type { AgentContext } from "../agents/base.js";
 import { generateStoryGraph } from "../interactive-film/generate.js";
 import type { StoryGraph } from "../interactive-film/graph-schema.js";
-import {
-  commitProductionArtifacts,
-  createProductionRunSnapshot,
-} from "../production/harness.js";
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import {
   InteractiveFilmCreationAgent,
   ScriptCreationAgent,
@@ -182,21 +179,12 @@ export async function runScriptCreation(
     language: options.language ?? "zh",
     writes: artifacts,
   });
-  await commitProductionArtifacts({
+  assertNonEmptyArtifacts(artifacts);
+  await commitAtomicFileSet({
     rootDir: options.projectRoot,
-    artifacts: [...artifacts, work.write],
-    runPath: join(baseDir, "status.json"),
-    run: createProductionRunSnapshot({
-      kind: "script",
-      id: projectId,
-      status: "complete",
-      stage: "commit",
-      artifacts: artifacts.map((artifact) => artifact.relativePath),
-      observations: [],
-    }),
-    validate: () => assertNonEmptyArtifacts(artifacts),
+    writes: [...artifacts, work.write],
   });
-  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId });
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId, accept: true });
 
   return {
     projectId,
@@ -318,21 +306,12 @@ export async function runInteractiveFilmCreation(
     language: options.language ?? "zh",
     writes: artifacts,
   });
-  await commitProductionArtifacts({
+  assertNonEmptyArtifacts(artifacts);
+  await commitAtomicFileSet({
     rootDir: options.projectRoot,
-    artifacts: [...artifacts, work.write],
-    runPath: join(baseDir, "status.json"),
-    run: createProductionRunSnapshot({
-      kind: "interactive-film",
-      id: projectId,
-      status: "complete",
-      stage: "commit",
-      artifacts: artifacts.map((artifact) => artifact.relativePath),
-      observations: [],
-    }),
-    validate: () => assertNonEmptyArtifacts(artifacts),
+    writes: [...artifacts, work.write],
   });
-  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId });
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId, accept: true });
 
   return {
     projectId,
@@ -423,21 +402,12 @@ export async function runStoryboardCreation(
     language: options.language ?? "zh",
     writes: artifacts,
   });
-  await commitProductionArtifacts({
+  assertNonEmptyArtifacts(artifacts);
+  await commitAtomicFileSet({
     rootDir: options.projectRoot,
-    artifacts: [...artifacts, work.write],
-    runPath: join(baseDir, "status.json"),
-    run: createProductionRunSnapshot({
-      kind: "storyboard",
-      id: projectId,
-      status: "complete",
-      stage: "commit",
-      artifacts: artifacts.map((artifact) => artifact.relativePath),
-      observations: [],
-    }),
-    validate: () => assertNonEmptyArtifacts(artifacts),
+    writes: [...artifacts, work.write],
   });
-  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId });
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId, accept: true });
 
   return {
     projectId,

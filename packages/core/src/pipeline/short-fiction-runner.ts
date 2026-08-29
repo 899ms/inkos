@@ -36,12 +36,7 @@ import {
   type CoverProviderPreset,
 } from "../llm/cover-providers.js";
 import { loadSecrets } from "../llm/secrets.js";
-import {
-  createProductionRunSnapshot,
-  createRangeObservation,
-  writeProductionRunSnapshot,
-  type ProductionObservation,
-} from "../production/harness.js";
+import { createRangeObservation, type Observation } from "../models/observation.js";
 import { buildLengthSpec, countChapterLength, isOutsideHardRange } from "../utils/length-metrics.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath as projectPath } from "../utils/posix-path.js";
@@ -83,7 +78,7 @@ export interface ShortFictionRunOptions {
 
 export interface ShortFictionRunResult {
   readonly storyId: string;
-  readonly status: "complete" | "needs-review";
+  readonly observations: ReadonlyArray<Observation>;
   readonly outlinePath: string;
   readonly outlineReviewPath: string;
   readonly draftReviewPath: string;
@@ -139,25 +134,15 @@ export async function runShortFictionProduction(
   if (
     providedStoryId
     && await projectFileExists(root, join(shortWorkBaseDir(providedStoryId), "final", "full.md"))
-    && await readShortRunStatus(root, join(shortWorkBaseDir(providedStoryId), "status.json")) === "complete"
   ) {
-    return buildShortRunResult(providedStoryId, shortWorkBaseDir(providedStoryId), "complete", { coverError: "already-complete" });
+    return buildShortRunResult(providedStoryId, shortWorkBaseDir(providedStoryId), [], { coverError: "already-complete" });
   }
 
   try {
     return await produceShort(options, root, providedStoryId);
   } catch (error) {
-    // Mark the partial output as failed so drafts can't masquerade as a short.
     if (providedStoryId) {
-      await writeShortRunSnapshot(root, shortWorkBaseDir(providedStoryId), {
-        storyId: providedStoryId,
-        status: "failed",
-        stage: "production",
-        artifacts: [],
-        observations: [],
-        error: error instanceof Error ? error.message : String(error),
-      }).catch(() => undefined);
-      await syncWorkSourceArtifacts({ projectRoot: root, workId: providedStoryId }).catch(() => undefined);
+      await syncWorkSourceArtifacts({ projectRoot: root, workId: providedStoryId, accept: false }).catch(() => undefined);
     }
     throw error;
   }
@@ -427,14 +412,6 @@ async function produceShort(
     }
     await writePackageArtifacts(root, baseDir, salesPackage, language);
   } catch (error) {
-    await writeShortRunSnapshot(root, baseDir, {
-      storyId,
-      status: "failed",
-      stage: "draft",
-      artifacts: [],
-      observations: [],
-      error: error instanceof Error ? error.message : String(error),
-    }).catch(() => undefined);
     throw error;
   }
 
@@ -463,53 +440,32 @@ async function produceShort(
   ].filter(Boolean);
   const observations = [
     ...buildShortLengthObservations(finalDraft, charsPerChapter, language),
-    ...completionWarnings.map((warning): ProductionObservation => ({
-      metric: warning.startsWith("packaging") ? "package-generation" : "optional-revision",
-      expected: "completed cleanly",
-      actual: warning,
-      severity: "warning",
-      evidence: warning,
-      repairable: true,
+    ...completionWarnings.map((warning): Observation => ({
+      code: warning.startsWith("packaging") ? "package-generation" : "optional-revision",
+      kind: "soft",
+      status: "warning",
+      summary: warning,
+      evidence: [warning],
     })),
     ...(coverArtifacts.coverError && coverArtifacts.coverError !== "disabled"
       ? [{
-          metric: "cover-generation",
-          expected: "cover image generated",
-          actual: coverArtifacts.coverError,
-          severity: "warning" as const,
-          evidence: coverArtifacts.coverError,
-          repairable: true,
+          code: "cover-generation",
+          kind: "soft" as const,
+          status: "warning" as const,
+          summary: coverArtifacts.coverError,
+          evidence: [coverArtifacts.coverError],
         }]
       : []),
   ];
-  const artifacts = [
-    join(baseDir, "outline", "v002.md"),
-    join(baseDir, "reviews", "draft-v001.md"),
-    join(baseDir, "final", "full.md"),
-    join(baseDir, "final", "short-story.json"),
-    join(baseDir, "final", "sales-package.md"),
-    join(baseDir, "final", "cover-prompt.md"),
-    ...(coverArtifacts.coverImagePath ? [coverArtifacts.coverImagePath] : []),
-  ].map(projectPath);
-  const status = observations.some((observation) => observation.severity === "blocking")
-    ? "needs-review" as const
-    : "complete" as const;
-  await writeShortRunSnapshot(root, baseDir, {
-    storyId,
-    status,
-    stage: "complete",
-    artifacts,
-    observations,
-  });
-  await syncWorkSourceArtifacts({ projectRoot: root, workId: storyId });
+  await syncWorkSourceArtifacts({ projectRoot: root, workId: storyId, accept: true });
 
-  return buildShortRunResult(storyId, baseDir, status, { ...coverArtifacts, packageError: packageWarning });
+  return buildShortRunResult(storyId, baseDir, observations, { ...coverArtifacts, packageError: packageWarning });
 }
 
 function buildShortRunResult(
   storyId: string,
   baseDir: string,
-  status: "complete" | "needs-review",
+  observations: ReadonlyArray<Observation>,
   coverArtifacts: {
     readonly coverImagePath?: string;
     readonly coverError?: string;
@@ -518,7 +474,7 @@ function buildShortRunResult(
 ): ShortFictionRunResult {
   return {
     storyId,
-    status,
+    observations,
     outlinePath: projectPath(join(baseDir, "outline", "v002.md")),
     outlineReviewPath: projectPath(join(baseDir, "reviews", "outline-v001.md")),
     draftReviewPath: projectPath(join(baseDir, "reviews", "draft-v001.md")),
@@ -538,17 +494,6 @@ async function projectFileExists(root: string, path: string): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function readShortRunStatus(root: string, path: string): Promise<string | undefined> {
-  const raw = await tryReadProjectText(root, path);
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as { status?: unknown };
-    return typeof parsed.status === "string" ? parsed.status : undefined;
-  } catch {
-    return undefined;
   }
 }
 
@@ -612,7 +557,7 @@ export async function generateShortFictionCover(
     coverApiKeyEnv: options.coverApiKeyEnv,
     signal: options.signal,
   });
-  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId });
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId, accept: true });
 
   return {
     title,
@@ -713,10 +658,10 @@ function buildShortLengthObservations(
   draft: ShortFictionBatchDraft,
   target: number,
   language: ShortFictionLanguage,
-): ProductionObservation[] {
+): Observation[] {
   const spec = buildLengthSpec(target, language);
   return draft.chapters.map((chapter) => createRangeObservation({
-    metric: `chapter-${chapter.number}-length`,
+    code: `chapter-${chapter.number}-length`,
     actual: countChapterLength(chapter.content, spec.countingMode),
     target: spec.target,
     min: spec.hardMin,
@@ -724,33 +669,6 @@ function buildShortLengthObservations(
     unit: spec.countingMode,
     evidence: `chapter ${chapter.number}: ${chapter.title}`,
   }));
-}
-
-async function writeShortRunSnapshot(
-  root: string,
-  baseDir: string,
-  input: {
-    readonly storyId: string;
-    readonly status: "complete" | "needs-review" | "failed";
-    readonly stage: string;
-    readonly artifacts: ReadonlyArray<string>;
-    readonly observations: ReadonlyArray<ProductionObservation>;
-    readonly error?: string;
-  },
-): Promise<void> {
-  await writeProductionRunSnapshot({
-    rootDir: root,
-    runPath: join(baseDir, "status.json"),
-    run: createProductionRunSnapshot({
-      kind: "short-fiction",
-      id: input.storyId,
-      status: input.status,
-      stage: input.stage,
-      artifacts: input.artifacts,
-      observations: input.observations,
-      ...(input.error ? { error: input.error } : {}),
-    }),
-  });
 }
 
 async function generateCoverArtifact(input: {

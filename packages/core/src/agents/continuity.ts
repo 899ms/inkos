@@ -16,13 +16,10 @@ import {
 import { join } from "node:path";
 
 export interface AuditResult {
-  readonly passed: boolean;
   readonly issues: ReadonlyArray<AuditIssue>;
   readonly summary: string;
-  /** True when the auditor response itself was not parseable; callers must not auto-revise content from this result. */
+  /** True when the reviewer response itself was not parseable. */
   readonly parseFailed?: boolean;
-  /** 0-100 overall quality score. Present when the auditor supports scoring. */
-  readonly overallScore?: number;
   readonly tokenUsage?: {
     readonly promptTokens: number;
     readonly completionTokens: number;
@@ -466,7 +463,7 @@ export class ContinuityAuditor extends BaseAgent {
 
 ## Reviewer Scope (hard constraints)
 
-You audit completion and structure only. Your job is to decide whether the chapter delivers the plan, keeps characters and timelines intact, and moves the book forward. Wording, sentence rhythm, paragraph shape, punctuation, imagery, and other prose-surface choices are NOT yours — those belong to the Polisher pass that runs after you. If you notice prose-surface issues, you may flag them with severity "info" so the Polisher can see them, but they do not count toward passed / overall_score and they must never be critical.
+You audit completion and structure only. Identify concrete evidence about whether the chapter delivers the plan, keeps characters and timelines intact, and moves the book forward. Wording, sentence rhythm, paragraph shape, punctuation, imagery, and other prose-surface choices are outside this review. Flag any prose-surface note with severity "info" only.
 
 You audit twelve structural reader-pain patterns: dragging / flat openings, blurry worldbuilding disconnected from reality, contradictory character setup, tangled POV, mainline drift or stagnation, weak conflict with missing payoff, pacing loss of control and abrupt transitions, character inconsistency across the arc, thin/one-note characters without contrast, stiff emotion expression and abrupt relationship jumps, imbalanced cheats/power gifts, and settings that never land in concrete action. Alongside these, keep the engineering dimensions listed below (OOC, timeline coherence, information boundary, hook debt, cross-chapter repetition, lexical fatigue, length band, title fatigue, paragraph shape).
 
@@ -481,8 +478,6 @@ ${dimList}
 
 Output format MUST be JSON:
 {
-  "passed": true/false,
-  "overall_score": 0-100,
   "issues": [
 	    {
 	      "severity": "critical|warning|info",
@@ -494,21 +489,12 @@ Output format MUST be JSON:
   ],
   "summary": "one-sentence audit conclusion"
 }
-
-passed is false ONLY when critical-severity issues exist.
-
-overall_score calibration:
-- 95-100: Publishable as-is, no noticeable issues
-- 85-94: Minor blemishes but smooth reading, the reader won't break immersion
-- 75-84: Noticeable problems but the story backbone holds, needs revision but not urgent
-- 65-74: Multiple issues hurt the reading experience, pacing or continuity has gaps
-- < 65: Structural breakdown, needs major rewrite
-Score holistically — do not let a single minor issue tank the score.`
+Report only concrete findings with evidence and actionable suggestions. An empty issues array is valid.`
       : `你是一位严格的${gp.name}网络小说结构审稿编辑。你只审完成度 + 结构，不审文笔。${protagonistBlock}${searchNote}
 
 ## 审稿边界（硬约束）
 
-你不审文笔、不审排版、不审句式——这些归 Polisher。你发现的文笔问题只能以 severity="info" 标注供 Polisher 参考，不计入 reviewer 的 passed/overall_score，也绝不可标为 critical。
+你不审文笔、不审排版、不审句式。你发现的文笔问题只能以 severity="info" 标注供后续参考。
 
 你审 12 条结构类雷点：开篇拖沓/平淡、世界观模糊脱现实、人设矛盾、视角杂乱、主线偏离/停滞、冲突乏力爽点缺失、节奏失控过渡生硬、人设前后矛盾、人物单薄无反差、情感表达生硬/关系突兀、金手指失衡、设定无落地。同时保留工程维度（OOC、timeline 一致、信息越界、hook-debt、跨章重复、词汇疲劳、章节字数、标题疲劳、段落形状）。
 
@@ -523,8 +509,6 @@ ${dimList}
 
 输出格式必须为 JSON：
 {
-  "passed": true/false,
-  "overall_score": 0-100,
   "issues": [
 	    {
 	      "severity": "critical|warning|info",
@@ -536,16 +520,7 @@ ${dimList}
   ],
   "summary": "一句话总结审查结论"
 }
-
-只有当存在 critical 级别问题时，passed 才为 false。
-
-overall_score 评分校准：
-- 95-100：可直接发布，无明显问题
-- 85-94：有小瑕疵但整体流畅可读，读者不会出戏
-- 75-84：有明显问题但故事主干完整，需要修但不紧急
-- 65-74：多处影响阅读体验的问题，节奏或连续性有断裂
-- < 65：结构性问题，需要大幅重写
-综合评分，不要因为单一小问题大幅拉低分数。`;
+只报告有具体证据的问题，并给出可执行建议。issues 为空是合法结果。`;
     const systemPrompt = await this.withPromptPackGuidance(systemPromptBase, "longform.auditor");
 
     const ledgerBlock = gp.numericalSystem
@@ -686,44 +661,11 @@ ${chapterContent}`;
       if (result) return result;
     }
 
-    // Strategy 4: Try to extract individual fields via regex (last resort fallback)
-    const passedMatch = content.match(/"passed"\s*:\s*(true|false)/);
-    const issuesMatch = content.match(/"issues"\s*:\s*\[([\s\S]*?)\]/);
-    const summaryMatch = content.match(/"summary"\s*:\s*"([^"]*)"/);
-    if (passedMatch) {
-      const issues: AuditIssue[] = [];
-      if (issuesMatch) {
-        // Try to parse individual issue objects
-        const issuePattern = /\{[^{}]*"severity"\s*:\s*"[^"]*"[^{}]*\}/g;
-        let match: RegExpExecArray | null;
-        while ((match = issuePattern.exec(issuesMatch[1]!)) !== null) {
-          try {
-            const issue = JSON.parse(match[0]);
-	            issues.push({
-	              severity: issue.severity ?? "warning",
-	              category: issue.category ?? (language === "en" ? "Uncategorized" : "未分类"),
-	              description: issue.description ?? "",
-	              suggestion: issue.suggestion ?? "",
-	              repairScope: normalizeRepairScope(issue.repair_scope ?? issue.repairScope),
-	            });
-          } catch {
-            // skip malformed individual issue
-          }
-        }
-      }
-      return {
-        passed: passedMatch[1] === "true",
-        issues,
-        summary: summaryMatch?.[1] ?? "",
-      };
-    }
-
     return {
-      passed: false,
       parseFailed: true,
       issues: [{
-        severity: "critical",
-        category: language === "en" ? "System Error" : "系统错误",
+        severity: "warning",
+        category: "review-unavailable",
         description: language === "en"
           ? "Audit output format was invalid and could not be parsed as JSON."
           : "审稿输出格式异常，无法解析为 JSON",
@@ -794,13 +736,7 @@ ${overrides}\n`;
   private tryParseAuditJson(json: string, language: PromptLanguage = "zh"): AuditResult | null {
     try {
       const parsed = JSON.parse(json);
-      if (typeof parsed.passed !== "boolean" && parsed.passed !== undefined) return null;
-      const rawScore = parsed.overall_score ?? parsed.overallScore;
-      const overallScore = typeof rawScore === "number" && Number.isFinite(rawScore)
-        ? Math.round(Math.max(0, Math.min(100, rawScore)))
-        : undefined;
       return {
-        passed: Boolean(parsed.passed ?? false),
         issues: Array.isArray(parsed.issues)
 	          ? parsed.issues.map((i: Record<string, unknown>) => ({
 	              severity: (i.severity as string) ?? "warning",
@@ -811,7 +747,6 @@ ${overrides}\n`;
 	            }))
           : [],
         summary: String(parsed.summary ?? ""),
-        overallScore,
       };
     } catch {
       return null;

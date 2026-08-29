@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, readdir, rm, stat, unlink, open } from "nod
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type { BookConfig } from "../models/book.js";
-import type { ChapterMeta } from "../models/chapter.js";
+import { ChapterMetaSchema, type ChapterMeta } from "../models/chapter.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
 import {
   createWorkManifest,
@@ -429,7 +429,7 @@ export class StateManager {
         },
       }));
     }
-    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: bookId, updatedAt: config.updatedAt });
+    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: bookId, updatedAt: config.updatedAt, accept: true });
   }
 
   async saveBookConfigAt(bookDir: string, config: BookConfig): Promise<void> {
@@ -489,7 +489,13 @@ export class StateManager {
     try {
       const raw = await readFile(indexPath, "utf-8");
       const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed as ReadonlyArray<ChapterMeta>;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const migrated = parsed.map(migrateChapterMeta);
+        if (parsed.some(isLegacyChapterMeta)) {
+          await this.saveChapterIndex(bookId, migrated);
+        }
+        return migrated;
+      }
       if (Array.isArray(parsed)) {
         const rebuilt = await this.rebuildChapterIndexFromFiles(bookId);
         return rebuilt.length > 0 ? rebuilt : parsed as ReadonlyArray<ChapterMeta>;
@@ -529,12 +535,12 @@ export class StateManager {
       return [{
         number,
         title: rawTitle || `第${number}章`,
-        status: "ready-for-review" as const,
         wordCount: content.replace(/\s+/g, "").length,
         createdAt: timestamp,
         updatedAt: timestamp,
-        auditIssues: [],
+        observations: [],
         lengthWarnings: [],
+        provenance: "generated" as const,
       }];
     }));
 
@@ -561,9 +567,10 @@ export class StateManager {
     const safeIndex = index.length === 0 && !options.allowEmptyWithChapterFiles
       ? await this.rebuildChapterIndexFromFilesAt(bookDir).then((rebuilt) => rebuilt.length > 0 ? rebuilt : index)
       : index;
+    const validated = safeIndex.map((chapter) => ChapterMetaSchema.parse(chapter));
     await writeFile(
       join(chaptersDir, "index.json"),
-      JSON.stringify(safeIndex, null, 2),
+      JSON.stringify(validated, null, 2),
       "utf-8",
     );
   }
@@ -832,4 +839,39 @@ export class StateManager {
       await writeFile(path, content, "utf-8");
     }
   }
+}
+
+function isLegacyChapterMeta(value: unknown): boolean {
+  if (!value || typeof value !== "object") return true;
+  const record = value as Record<string, unknown>;
+  return "status" in record || "auditIssues" in record || "reviewNote" in record;
+}
+
+function migrateChapterMeta(value: unknown): ChapterMeta {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const observations = Array.isArray(record.observations)
+    ? record.observations
+    : Array.isArray(record.auditIssues)
+      ? record.auditIssues.filter((issue): issue is string => typeof issue === "string").map((issue, index) => ({
+          code: `legacy-review-${index + 1}`,
+          kind: "soft" as const,
+          status: "warning" as const,
+          summary: issue,
+          evidence: [],
+        }))
+      : [];
+  if (record.status === "state-degraded") {
+    observations.push({
+      code: "state-sync-required",
+      kind: "hard",
+      status: "fail",
+      summary: "Chapter body and derived story state require synchronization.",
+      evidence: [],
+    });
+  }
+  return ChapterMetaSchema.parse({
+    ...record,
+    observations,
+    provenance: record.provenance ?? (record.status === "imported" ? "imported" : "generated"),
+  });
 }

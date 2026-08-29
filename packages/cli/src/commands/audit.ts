@@ -11,7 +11,7 @@ import {
 import { sendCommandNotification } from "../notify-helper.js";
 
 export const auditCommand = new Command("audit")
-  .description("Audit a chapter for continuity issues")
+  .description("Review a chapter and persist concrete observations")
   .argument("[book-id]", "Book ID (auto-detected if only one book)")
   .argument("[chapter]", "Chapter number (defaults to latest)")
   .option("--json", "Output JSON")
@@ -49,7 +49,7 @@ export const auditCommand = new Command("audit")
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
-        log(`  Chapter ${result.chapterNumber}: ${result.passed ? "PASSED" : "FAILED"}`);
+        log(`  Chapter ${result.chapterNumber}: ${result.issues.length} observation(s)`);
         log(`  Summary: ${result.summary}`);
         if (result.issues.length > 0) {
           log("  Issues:");
@@ -66,7 +66,6 @@ export const auditCommand = new Command("audit")
           title: formatNotifyCommandTitle(language, "audit", notifyBookName, true),
           body: formatNotifyAuditBody(language, {
             chapterNumber: result.chapterNumber,
-            passed: result.passed,
             issueCount: result.issues.length,
             summary: result.summary,
           }),
@@ -82,7 +81,7 @@ export const auditCommand = new Command("audit")
       if (opts.json) {
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Audit failed: ${e}`);
+        logError(`Review failed: ${e}`);
       }
       process.exit(1);
     }

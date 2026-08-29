@@ -91,7 +91,7 @@ export class PlayStore {
           content: `${JSON.stringify(world, null, 2)}\n`,
         }],
       });
-      await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: worldId, updatedAt: now });
+      await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: worldId, updatedAt: now, accept: true });
       return world;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -149,7 +149,7 @@ export class PlayStore {
         content: `${JSON.stringify(world, null, 2)}\n`,
       }],
     });
-    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: world.id, updatedAt: world.updatedAt });
+    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: world.id, updatedAt: world.updatedAt, accept: true });
     return world;
   }
 

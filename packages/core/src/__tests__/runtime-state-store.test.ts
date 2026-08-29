@@ -31,9 +31,9 @@ describe("runtime-state-store memory helpers", () => {
     await writeFile(
       join(chaptersDir, "index.json"),
       JSON.stringify([
-        { number: 1, title: "Ch1", status: "approved" },
-        { number: 2, title: "Ch2", status: "approved" },
-        { number: 3, title: "Ch3", status: "approved" },
+        { number: 1, title: "Ch1" },
+        { number: 2, title: "Ch2" },
+        { number: 3, title: "Ch3" },
       ]),
       "utf-8",
     );
@@ -127,7 +127,7 @@ describe("runtime-state-store memory helpers", () => {
     await Promise.all([
       writeFile(
         join(chaptersDir, "index.json"),
-        JSON.stringify([{ number: 1, title: "Ch1", status: "approved" }]),
+        JSON.stringify([{ number: 1, title: "Ch1" }]),
         "utf-8",
       ),
       writeFile(
@@ -283,7 +283,7 @@ describe("runtime-state-store memory helpers", () => {
     await writeFile(
       join(chaptersDir, "index.json"),
       JSON.stringify(
-        Array.from({ length: 12 }, (_, i) => ({ number: i + 1, title: `Ch${i + 1}`, status: "approved" })),
+        Array.from({ length: 12 }, (_, i) => ({ number: i + 1, title: `Ch${i + 1}` })),
       ),
       "utf-8",
     );
@@ -347,7 +347,7 @@ describe("runtime-state-store memory helpers", () => {
     await Promise.all([
       writeFile(
         join(chaptersDir, "index.json"),
-        JSON.stringify(Array.from({ length: 5 }, (_, i) => ({ number: i + 1, title: `Ch${i + 1}`, status: "approved" }))),
+        JSON.stringify(Array.from({ length: 5 }, (_, i) => ({ number: i + 1, title: `Ch${i + 1}` }))),
         "utf-8",
       ),
       writeFile(
@@ -409,7 +409,7 @@ describe("runtime-state-store memory helpers", () => {
     await writeFile(
       join(chaptersDir, "index.json"),
       JSON.stringify(
-        Array.from({ length: 11 }, (_, i) => ({ number: i + 1, title: `Ch${i + 1}`, status: "approved" })),
+        Array.from({ length: 11 }, (_, i) => ({ number: i + 1, title: `Ch${i + 1}` })),
       ),
       "utf-8",
     );

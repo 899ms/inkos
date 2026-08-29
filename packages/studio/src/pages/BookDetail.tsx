@@ -10,30 +10,28 @@ import {
   ChevronLeft,
   Zap,
   FileText,
-  CheckCheck,
   BarChart2,
   Download,
-  Search,
   Wand2,
-  Eye,
   Database,
-  Check,
-  X,
   ShieldCheck,
   RotateCcw,
   RefreshCw,
   Sparkles,
   Trash2,
   Save,
-  Hand,
-  Settings2
 } from "lucide-react";
 
 interface ChapterMeta {
   readonly number: number;
   readonly title: string;
-  readonly status: string;
   readonly wordCount: number;
+  readonly observations: ReadonlyArray<{
+    readonly code: string;
+    readonly status: "pass" | "warning" | "fail";
+    readonly summary: string;
+  }>;
+  readonly provenance: "generated" | "imported" | "edited";
 }
 
 interface BookData {
@@ -62,26 +60,6 @@ interface Nav {
   toTruth: (bookId: string) => void;
 }
 
-function translateChapterStatus(status: string, t: TFunction): string {
-  const map: Record<string, () => string> = {
-    "ready-for-review": () => t("chapter.readyForReview"),
-    "approved": () => t("chapter.approved"),
-    "drafted": () => t("chapter.drafted"),
-    "needs-revision": () => t("chapter.needsRevision"),
-    "imported": () => t("chapter.imported"),
-    "audit-failed": () => t("chapter.auditFailed"),
-  };
-  return map[status]?.() ?? status;
-}
-
-const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = {
-  "ready-for-review": { color: "text-amber-500 bg-amber-500/10", icon: <Eye size={12} /> },
-  approved: { color: "text-emerald-500 bg-emerald-500/10", icon: <Check size={12} /> },
-  drafted: { color: "text-muted-foreground bg-muted/20", icon: <FileText size={12} /> },
-  "needs-revision": { color: "text-destructive bg-destructive/10", icon: <RotateCcw size={12} /> },
-  imported: { color: "text-blue-500 bg-blue-500/10", icon: <Download size={12} /> },
-};
-
 export function BookDetail({
   bookId,
   nav,
@@ -109,17 +87,7 @@ export function BookDetail({
   const [settingsTargetChapters, setSettingsTargetChapters] = useState<number | null>(null);
   const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
-  const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
-  // Auto (pipeline self-reviews) vs manual (write the draft and stop; you
-  // run audit / revise / approve as checkpoint actions). This is scoped to
-  // the current book, with project-level mode as the inherited default.
-  const [reviewMode, setReviewMode] = useState<"auto" | "manual">("auto");
-  useEffect(() => {
-    void fetchJson<{ mode?: string }>(`/books/${encodeURIComponent(bookId)}/chapter-review-mode`)
-      .then((r) => setReviewMode(r.mode === "manual" ? "manual" : "auto"))
-      .catch(() => undefined);
-  }, [bookId]);
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
   const drafting = draftRequestPending || activity.drafting;
@@ -166,20 +134,6 @@ export function BookDetail({
     } catch (e) {
       setDraftRequestPending(false);
       alert(e instanceof Error ? e.message : "Failed");
-    }
-  };
-
-  const handleToggleReviewMode = async () => {
-    const next = reviewMode === "manual" ? "auto" : "manual";
-    setReviewMode(next);
-    try {
-      await fetchJson(`/books/${encodeURIComponent(bookId)}/chapter-review-mode`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: next }),
-      });
-    } catch {
-      setReviewMode(reviewMode); // revert on failure
     }
   };
 
@@ -290,23 +244,6 @@ export function BookDetail({
     }
   };
 
-  const handleApproveAll = async () => {
-    if (!data) return;
-    const reviewable = data.chapters.filter((ch) => ch.status === "ready-for-review");
-    let failed = 0;
-    for (const chapter of reviewable) {
-      try {
-        await postApi(`/books/${bookId}/chapters/${chapter.number}/approve`);
-      } catch {
-        failed += 1;
-      }
-    }
-    if (failed > 0) {
-      alert(`${failed}/${reviewable.length} approve(s) failed`);
-    }
-    refetch();
-  };
-
   const runBookAction = async (key: string, action: () => Promise<string>) => {
     setBookActionPending(key);
     try {
@@ -317,27 +254,6 @@ export function BookDetail({
     } finally {
       setBookActionPending(null);
     }
-  };
-
-  const handleEvaluate = async () => {
-    await runBookAction("eval", async () => {
-      const result = await fetchJson<{
-        qualityScore: number;
-        totalChapters: number;
-        totalWords: number;
-        auditPassRate: number;
-        avgAiTellDensity: number;
-        hookResolveRate: number;
-      }>(`/books/${bookId}/eval`);
-      return [
-        `${t("book.evaluate")}: ${result.qualityScore}/100`,
-        `${t("dash.chapters")}: ${result.totalChapters}`,
-        `${t("book.words")}: ${result.totalWords.toLocaleString()}`,
-        `Audit: ${result.auditPassRate}%`,
-        `AI tells: ${result.avgAiTellDensity}/1k`,
-        `Hooks: ${result.hookResolveRate}%`,
-      ].join("\n");
-    });
   };
 
   const handleConsolidate = async () => {
@@ -409,13 +325,6 @@ export function BookDetail({
     });
   };
 
-  const handleRepairState = async (chapterNum: number) => {
-    await runBookAction(`repair-state-${chapterNum}`, async () => {
-      await fetchJson(`/books/${bookId}/repair-state/${chapterNum}`, { method: "POST" });
-      return data?.book.language === "en" ? `Chapter ${chapterNum} state repaired.` : `第 ${chapterNum} 章状态已修复。`;
-    });
-  };
-
   if (loading) return (
     <div className="flex flex-col items-center justify-center py-32 space-y-4">
       <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
@@ -428,13 +337,12 @@ export function BookDetail({
 
   const { book, chapters } = data;
   const totalWords = chapters.reduce((sum, ch) => sum + (ch.wordCount ?? 0), 0);
-  const reviewCount = chapters.filter((ch) => ch.status === "ready-for-review").length;
 
   const currentWordCount = settingsWordCount ?? book.chapterWordCount;
   const currentTargetChapters = settingsTargetChapters ?? book.targetChapters ?? 0;
   const currentStatus = settingsStatus ?? (book.status as BookStatus);
 
-  const exportHref = `/api/v1/books/${bookId}/export?format=${exportFormat}${exportApprovedOnly ? "&approvedOnly=true" : ""}`;
+  const exportHref = `/api/v1/books/${bookId}/export?format=${exportFormat}`;
 
   return (
     <div className="space-y-8 fade-in">
@@ -497,16 +405,6 @@ export function BookDetail({
             {drafting ? t("book.drafting") : t("book.draftOnly")}
           </button>
           <button
-            onClick={handleToggleReviewMode}
-            title={reviewMode === "manual"
-              ? "手动审查：写完即停，由你点 审稿/修订/通过（更快、更可控）。点此切回自动。"
-              : "自动审查：写完自动审校并按需重写（更省心，但更慢）。点此切到手动·写完即停。"}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium bg-secondary/60 text-foreground rounded-xl border border-border/50 hover:bg-secondary transition-all"
-          >
-            {reviewMode === "manual" ? <Hand size={16} /> : <Settings2 size={16} />}
-            {reviewMode === "manual" ? "审查：手动·写完即停" : "审查：自动"}
-          </button>
-          <button
             onClick={() => setConfirmDeleteOpen(true)}
             disabled={deleting}
             className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-destructive/10 text-destructive rounded-xl hover:bg-destructive hover:text-white transition-all border border-destructive/20 disabled:opacity-50"
@@ -539,15 +437,6 @@ export function BookDetail({
 
       {/* Tool Strip */}
       <div className="flex flex-wrap items-center gap-2 py-1">
-          {reviewCount > 0 && (
-            <button
-              onClick={handleApproveAll}
-              className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-emerald-500/10 text-emerald-600 rounded-lg hover:bg-emerald-500/20 transition-all border border-emerald-500/20"
-            >
-              <CheckCheck size={14} />
-              {t("book.approveAll")} ({reviewCount})
-            </button>
-          )}
           <button
             onClick={() => nav.toTruth(bookId)}
             className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
@@ -561,14 +450,6 @@ export function BookDetail({
           >
             <BarChart2 size={14} />
             {t("book.analytics")}
-          </button>
-          <button
-            onClick={handleEvaluate}
-            disabled={bookActionPending === "eval"}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50 disabled:opacity-50"
-          >
-            <Search size={14} />
-            {bookActionPending === "eval" ? t("common.loading") : t("book.evaluate")}
           </button>
           <button
             onClick={handleConsolidate}
@@ -612,22 +493,13 @@ export function BookDetail({
               <option value="md">MD</option>
               <option value="epub">EPUB</option>
             </select>
-            <label className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={exportApprovedOnly}
-                onChange={(e) => setExportApprovedOnly(e.target.checked)}
-                className="rounded border-border/50"
-              />
-              {t("book.approvedOnly")}
-            </label>
             <button
               onClick={async () => {
                 try {
                   const data = await fetchJson<{ path?: string; chapters?: number }>(`/books/${bookId}/export-save`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ format: exportFormat, approvedOnly: exportApprovedOnly }),
+                    body: JSON.stringify({ format: exportFormat }),
                   });
                   alert(`${t("common.exportSuccess")}\n${data.path}\n(${data.chapters} ${t("dash.chapters")})`);
                 } catch (e) {
@@ -698,7 +570,7 @@ export function BookDetail({
                 <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-16">#</th>
                 <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground">{t("book.manuscriptTitle")}</th>
                 <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-28">{t("book.words")}</th>
-                <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-36">{t("book.status")}</th>
+                <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-36">{t("book.review")}</th>
                 <th className="text-right px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground">{t("book.curate")}</th>
               </tr>
             </thead>
@@ -718,45 +590,22 @@ export function BookDetail({
                   </td>
                   <td className="px-6 py-4 text-muted-foreground font-medium tabular-nums text-xs">{(ch.wordCount ?? 0).toLocaleString()}</td>
                   <td className="px-6 py-4">
-                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-tight ${STATUS_CONFIG[ch.status]?.color ?? "bg-muted text-muted-foreground"}`}>
-                      {STATUS_CONFIG[ch.status]?.icon}
-                      {translateChapterStatus(ch.status, t)}
+                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-tight ${ch.observations.length > 0 ? "text-amber-600 bg-amber-500/10" : "text-emerald-600 bg-emerald-500/10"}`}>
+                      {ch.observations.length > 0
+                        ? `${ch.observations.length} ${t("book.observations")}`
+                        : t("book.currentRevision")}
                     </div>
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                      {ch.status === "ready-for-review" && (
-                        <>
-                          <button
-                            onClick={async () => {
-                              try { await postApi(`/books/${bookId}/chapters/${ch.number}/approve`); refetch(); }
-                              catch (e) { alert(e instanceof Error ? e.message : "Approve failed"); }
-                            }}
-                            className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all shadow-sm"
-                            title={t("book.approve")}
-                          >
-                            <Check size={14} />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
-                              catch (e) { alert(e instanceof Error ? e.message : "Reject failed"); }
-                            }}
-                            className="p-2 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive hover:text-white transition-all shadow-sm"
-                            title={t("book.reject")}
-                          >
-                            <X size={14} />
-                          </button>
-                        </>
-                      )}
                       <button
                         onClick={async () => {
                           try {
-                            const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                            alert(auditResult.passed ? "Audit passed" : `Audit failed: ${auditResult.issues?.length ?? 0} issues`);
+                            const review = await fetchJson<{ summary?: string; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
+                            alert(`${review.summary ?? t("book.review")}\n${review.issues?.length ?? 0} ${t("book.observations")}`);
                             refetch();
                           } catch (e) {
-                            alert(e instanceof Error ? e.message : "Audit failed");
+                            alert(e instanceof Error ? e.message : "Review failed");
                           }
                         }}
                         className="p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm"
@@ -784,18 +633,6 @@ export function BookDetail({
                           ? <div className="w-3.5 h-3.5 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" />
                           : <RefreshCw size={14} />}
                       </button>
-                      {ch.status === "state-degraded" && (
-                        <button
-                          onClick={() => handleRepairState(ch.number)}
-                          disabled={bookActionPending === `repair-state-${ch.number}`}
-                          className="p-2 rounded-lg bg-amber-500/10 text-amber-600 hover:bg-amber-500 hover:text-white transition-all shadow-sm disabled:opacity-50"
-                          title={t("book.repairState")}
-                        >
-                          {bookActionPending === `repair-state-${ch.number}`
-                            ? <div className="w-3.5 h-3.5 border-2 border-amber-600/20 border-t-amber-600 rounded-full animate-spin" />
-                            : <Settings2 size={14} />}
-                        </button>
-                      )}
                       <select
                         disabled={revisingChapters.includes(ch.number)}
                         value=""

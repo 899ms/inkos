@@ -444,9 +444,9 @@ Long-form chapters are produced by multiple agents in sequence:
 | **Reflector** | Outputs a JSON delta (not full markdown); code-layer applies Zod schema validation then immutable write |
 | **Normalizer** | Single-pass compress/expand only when the chapter clearly leaves the hard length range |
 | **Continuity Auditor** | Validates the draft against structured state, control docs, and chapter context |
-| **Reviser** | Fixes critical issues found by the auditor; the default write cycle runs at most one automatic revision pass and flags the rest for human review |
+| **Reviser** | Applies an explicit revision request from the user, Agent, or persisted review observations and atomically records the new version |
 
-If the audit fails, the default pipeline runs one revise → re-audit pass. Remaining issues are preserved in the result and state for human review or later commands.
+Chapter prose and derived story state are committed atomically after hard validation. Continuity and craft findings are persisted as observations, while revision remains an explicit action with its own traceable artifact version.
 
 ### Long-Term Memory
 
@@ -494,19 +494,11 @@ InkOS provides four interaction modes, all sharing the same atomic operations:
 ### 1. Full Pipeline (One Command)
 
 ```bash
-inkos write next my-book              # Draft → audit → auto-revise, all in one
+inkos write next my-book              # Plan → compose → write → review observations → atomic commit
 inkos write next my-book --count 5    # Write 5 chapters in sequence
 ```
 
-`write next` now uses the `plan -> compose -> write` governance chain by default. If you need the older prompt-assembly path, set this explicitly in `inkos.json`:
-
-```json
-{
-  "inputGovernanceMode": "legacy"
-}
-```
-
-The default is now `v2`. `legacy` remains available as an explicit fallback.
+`write next` uses the single `plan -> compose -> write -> review -> commit` creative path. Review produces observations; technical validation controls atomic persistence, and semantic feedback is never converted into a failed chapter state.
 
 ### 2. Atomic Commands (Composable, External Agent Friendly)
 
@@ -570,7 +562,7 @@ The first image is a local Studio screenshot. The other images are real local ou
 | `inkos review list [id]` | Review drafts |
 | `inkos review approve-all [id]` | Batch approve |
 | `inkos status [id]` | Project status |
-| `inkos export [id]` | Export book (`--format txt/md/epub`, `--output <path>`, `--approved-only`) |
+| `inkos export [id]` | Export book (`--format txt/md/epub`, `--output <path>`) |
 | `inkos radar scan` | Scan market / trend inputs for new-book direction |
 | `inkos fanfic init` | Create a fanfic book from source material (`--from`, `--mode canon/au/ooc/cp`) |
 | `inkos short run` | Generate a standalone short-fiction package |

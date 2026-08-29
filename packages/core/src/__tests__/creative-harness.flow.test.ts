@@ -21,6 +21,7 @@ import {
   migrateLegacyProject,
 } from "../harness/index.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { loadTranslationManifest } from "../translation/run-store.js";
 
 describe("creative harness mini-flows", () => {
   const roots: string[] = [];
@@ -60,7 +61,7 @@ describe("creative harness mini-flows", () => {
             segments: request.segments.map((segment) => ({ index: segment.index, target: `译：${segment.source}` })),
             glossary: [],
           }),
-          reviewChapter: async () => ({ passed: true, summary: "OK", issues: [] }),
+          reviewChapter: async () => ({ summary: "OK", issues: [] }),
         }),
       }),
       workId,
@@ -240,6 +241,45 @@ describe("creative harness mini-flows", () => {
       workCount: 9,
       remainingRoots: [],
       lineage: [{ relation: "derived-from", sourceWorkId: "same" }],
+    });
+  });
+
+  it("rewrites a legacy translation manifest into the canonical progress model", async () => {
+    const root = await tempProject("translation-manifest-migration");
+    const sourceDir = join(root, "works", "legacy-translation", "source");
+    await mkdir(sourceDir, { recursive: true });
+    const manifestPath = join(sourceDir, "manifest.json");
+    await writeFile(manifestPath, JSON.stringify({
+      id: "legacy-translation",
+      title: "Legacy Translation",
+      sourceLanguage: "English",
+      targetLanguage: "Chinese (Simplified)",
+      createdAt: "2026-08-26T00:00:00.000Z",
+      updatedAt: "2026-08-26T00:00:00.000Z",
+      source: { kind: "markdown", path: "source.md", charCount: 12 },
+      chapters: [{
+        number: 1,
+        title: "Arrival",
+        sourcePath: "source/chapter-0001.json",
+        translatedPath: "translated/chapter-0001.json",
+        segmentCount: 2,
+        charCount: 12,
+        status: "translated",
+      }],
+    }));
+
+    const manifest = await loadTranslationManifest(root, "legacy-translation");
+    const persisted = JSON.parse(await readFile(manifestPath, "utf-8")) as {
+      chapters: Array<Record<string, unknown>>;
+    };
+    expect({
+      translatedSegments: manifest.chapters[0]?.translatedSegments,
+      persistedStatus: persisted.chapters[0]?.status,
+      persistedSegments: persisted.chapters[0]?.translatedSegments,
+    }).toEqual({
+      translatedSegments: 2,
+      persistedStatus: undefined,
+      persistedSegments: 2,
     });
   });
 

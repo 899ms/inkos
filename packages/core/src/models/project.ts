@@ -82,27 +82,11 @@ export const DetectionConfigSchema = z.object({
 
 export type DetectionConfig = z.infer<typeof DetectionConfigSchema>;
 
-export const QualityGatesSchema = z.object({
-  maxAuditRetries: z.number().int().min(0).max(10).default(2),
-  pauseAfterConsecutiveFailures: z.number().int().min(1).default(3),
-  retryTemperatureStep: z.number().min(0).max(0.5).default(0.1),
-});
-
-export type QualityGates = z.infer<typeof QualityGatesSchema>;
-
 export const FoundationConfigSchema = z.object({
   reviewRetries: z.number().int().min(0).max(10).default(2),
 });
 
 export type FoundationConfig = z.infer<typeof FoundationConfigSchema>;
-
-export const WritingConfigSchema = z.object({
-  reviewRetries: z.number().int().min(0).max(10).default(1),
-  reviewMode: z.enum(["auto", "manual"]).default("auto"),
-  revisionGate: z.enum(["strict", "lenient", "always"]).default("strict"),
-});
-
-export type WritingConfig = z.infer<typeof WritingConfigSchema>;
 
 export const AgentLLMOverrideSchema = z.object({
   model: z.string().min(1),
@@ -139,9 +123,6 @@ export const ProjectConfigSchema = z.object({
   foundation: FoundationConfigSchema.default({
     reviewRetries: 2,
   }),
-  writing: WritingConfigSchema.default({
-    reviewRetries: 1,
-  }),
   researchSearch: ResearchSearchConfigSchema,
   modelOverrides: z.record(z.string(), ModelOverrideValueSchema).optional(),
   daemon: z.object({
@@ -154,11 +135,6 @@ export const ProjectConfigSchema = z.object({
     retryDelayMs: z.number().int().min(0).default(30_000),
     cooldownAfterChapterMs: z.number().int().min(0).default(10_000),
     maxChaptersPerDay: z.number().int().min(1).default(50),
-    qualityGates: QualityGatesSchema.default({
-      maxAuditRetries: 2,
-      pauseAfterConsecutiveFailures: 3,
-      retryTemperatureStep: 0.1,
-    }),
   }).default({
     schedule: {
       radarCron: "0 */6 * * *",
@@ -169,11 +145,6 @@ export const ProjectConfigSchema = z.object({
     retryDelayMs: 30_000,
     cooldownAfterChapterMs: 10_000,
     maxChaptersPerDay: 50,
-    qualityGates: {
-      maxAuditRetries: 2,
-      pauseAfterConsecutiveFailures: 3,
-      retryTemperatureStep: 0.1,
-    },
   }),
 });
 

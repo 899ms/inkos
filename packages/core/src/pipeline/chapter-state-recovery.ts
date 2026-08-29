@@ -8,7 +8,6 @@ import type { WriteChapterOutput } from "../agents/writer.js";
 import type { WriterAgent } from "../agents/writer.js";
 import type { Logger } from "../utils/logger.js";
 import type { BookConfig } from "../models/book.js";
-import type { ChapterMeta } from "../models/chapter.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { LengthLanguage } from "../utils/length-metrics.js";
 
@@ -42,7 +41,7 @@ export type SettlementRetryResult =
     readonly validation: ValidationResult;
   }
   | {
-    readonly kind: "degraded";
+    readonly kind: "failed";
     readonly issues: ReadonlyArray<AuditIssue>;
   };
 
@@ -106,8 +105,8 @@ export async function retrySettlementAfterValidationFailure(
   }
 
   return {
-    kind: "degraded",
-    issues: buildStateDegradedIssues(retryValidation.warnings, params.language),
+    kind: "failed",
+    issues: buildStateValidationIssues(retryValidation.warnings, params.language),
   };
 }
 
@@ -134,7 +133,7 @@ export function buildStateValidationFeedback(
   ].join("\n");
 }
 
-export function buildStateDegradedIssues(
+export function buildStateValidationIssues(
   warnings: ReadonlyArray<ValidationWarning>,
   language: LengthLanguage,
 ): ReadonlyArray<AuditIssue> {
@@ -159,82 +158,4 @@ export function buildStateDegradedIssues(
       ? "Repair chapter state from the persisted body before continuing."
       : "请先基于已保存正文修复本章 state，再继续后续章节。",
   }];
-}
-
-export function buildStateDegradedPersistenceOutput(params: {
-  readonly output: WriteChapterOutput;
-  readonly oldState: string;
-  readonly oldHooks: string;
-  readonly oldLedger: string;
-}): WriteChapterOutput {
-  return {
-    ...params.output,
-    runtimeStateDelta: undefined,
-    runtimeStateSnapshot: undefined,
-    updatedState: params.oldState,
-    updatedLedger: params.oldLedger,
-    updatedHooks: params.oldHooks,
-    updatedChapterSummaries: undefined,
-  };
-}
-
-export interface StateDegradedReviewNote {
-  readonly kind: "state-degraded";
-  readonly baseStatus: "ready-for-review" | "audit-failed";
-  readonly injectedIssues: ReadonlyArray<string>;
-}
-
-export function buildStateDegradedReviewNote(
-  baseStatus: "ready-for-review" | "audit-failed",
-  issues: ReadonlyArray<AuditIssue>,
-): string {
-  return JSON.stringify({
-    kind: "state-degraded",
-    baseStatus,
-    injectedIssues: issues.map((issue) => `[${issue.severity}] ${issue.description}`),
-  } satisfies StateDegradedReviewNote);
-}
-
-export function parseStateDegradedReviewNote(
-  reviewNote?: string,
-): StateDegradedReviewNote | null {
-  if (!reviewNote) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(reviewNote) as {
-      kind?: unknown;
-      baseStatus?: unknown;
-      injectedIssues?: unknown;
-    };
-    if (
-      parsed.kind !== "state-degraded"
-      || (parsed.baseStatus !== "ready-for-review" && parsed.baseStatus !== "audit-failed")
-      || !Array.isArray(parsed.injectedIssues)
-    ) {
-      return null;
-    }
-
-    return {
-      kind: "state-degraded",
-      baseStatus: parsed.baseStatus,
-      injectedIssues: parsed.injectedIssues.filter((issue): issue is string => typeof issue === "string"),
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function resolveStateDegradedBaseStatus(
-  chapter: Pick<ChapterMeta, "reviewNote" | "auditIssues">,
-): "ready-for-review" | "audit-failed" {
-  const metadata = parseStateDegradedReviewNote(chapter.reviewNote);
-  if (metadata) {
-    return metadata.baseStatus;
-  }
-
-  return chapter.auditIssues.some((issue) => issue.startsWith("[critical]"))
-    ? "audit-failed"
-    : "ready-for-review";
 }

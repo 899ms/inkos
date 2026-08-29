@@ -12,11 +12,7 @@ type WriteResultShape = {
   readonly chapterNumber: number;
   readonly title: string;
   readonly wordCount: number;
-  readonly status: string;
-  readonly revised: boolean;
-  readonly issues: ReadonlyArray<WriteIssue>;
-  readonly auditPassed?: boolean;
-  readonly passedAudit?: boolean;
+  readonly observations: ReadonlyArray<WriteIssue>;
 };
 
 type ImportResultShape = {
@@ -119,7 +115,6 @@ export function formatWriteNextResultLines(
   language: CliLanguage,
   result: WriteResultShape,
 ): string[] {
-  const auditPassed = result.auditPassed ?? result.passedAudit ?? false;
   const lengthLabel = formatLengthCount(result.wordCount, resolveLengthCountingMode(language));
   const lines = [
     localize(language, {
@@ -131,29 +126,17 @@ export function formatWriteNextResultLines(
       en: `  Length: ${lengthLabel}`,
     }),
     localize(language, {
-      zh: `  审计：${auditPassed ? "通过" : "需复核"}`,
-      en: `  Audit: ${auditPassed ? "PASSED" : "NEEDS REVIEW"}`,
+      zh: `  审查观察：${result.observations.length}`,
+      en: `  Review observations: ${result.observations.length}`,
     }),
   ];
 
-  if (result.revised) {
-    lines.push(localize(language, {
-      zh: "  自动修正：已执行（已修复关键问题）",
-      en: "  Auto-revised: YES (critical issues were fixed)",
-    }));
-  }
-
-  lines.push(localize(language, {
-    zh: `  状态：${result.status}`,
-    en: `  Status: ${result.status}`,
-  }));
-
-  if (result.issues.length > 0) {
+  if (result.observations.length > 0) {
     lines.push(localize(language, {
       zh: "  问题：",
       en: "  Issues:",
     }));
-    for (const issue of result.issues) {
+    for (const issue of result.observations) {
       lines.push(`    [${issue.severity}] ${issue.category}: ${issue.description}`);
     }
   }
@@ -223,7 +206,7 @@ export function formatNotifyBatchWriteBody(
     readonly chapterNumber: number;
     readonly title: string;
     readonly wordCount: number;
-    readonly auditPassed: boolean;
+    readonly observationCount: number;
   }>,
 ): string {
   const first = chapters[0]!;
@@ -236,8 +219,8 @@ export function formatNotifyBatchWriteBody(
     ...chapters.map((ch) => {
       const lengthLabel = formatLengthCount(ch.wordCount, resolveLengthCountingMode(language));
       return localize(language, {
-        zh: `第${ch.chapterNumber}章 ${ch.title} | ${lengthLabel} | ${ch.auditPassed ? "审计通过" : "需复核"}`,
-        en: `Chapter ${ch.chapterNumber} ${ch.title} | ${lengthLabel} | ${ch.auditPassed ? "audit passed" : "needs review"}`,
+        zh: `第${ch.chapterNumber}章 ${ch.title} | ${lengthLabel} | ${ch.observationCount} 条观察`,
+        en: `Chapter ${ch.chapterNumber} ${ch.title} | ${lengthLabel} | ${ch.observationCount} observation(s)`,
       });
     }),
   ];
@@ -248,14 +231,13 @@ export function formatNotifyAuditBody(
   language: CliLanguage,
   result: {
     readonly chapterNumber: number;
-    readonly passed: boolean;
     readonly issueCount: number;
     readonly summary: string;
   },
 ): string {
   const head = localize(language, {
-    zh: `第${result.chapterNumber}章审计${result.passed ? "通过" : "未通过"}（${result.issueCount} 个问题）`,
-    en: `Chapter ${result.chapterNumber} audit ${result.passed ? "passed" : "failed"} (${result.issueCount} issue(s))`,
+    zh: `第${result.chapterNumber}章审查完成（${result.issueCount} 条观察）`,
+    en: `Chapter ${result.chapterNumber} review completed (${result.issueCount} observation(s))`,
   });
   return result.summary ? `${head}\n${result.summary}` : head;
 }
@@ -264,16 +246,15 @@ export function formatNotifyReviseBody(
   language: CliLanguage,
   result: {
     readonly chapterNumber: number;
-    readonly applied: boolean;
+    readonly changed: boolean;
     readonly wordCount: number;
     readonly fixedCount: number;
-    readonly skippedReason?: string;
   },
 ): string {
-  if (!result.applied) {
+  if (!result.changed) {
     return localize(language, {
-      zh: `第${result.chapterNumber}章保留原稿${result.skippedReason ? `：${result.skippedReason}` : ""}`,
-      en: `Chapter ${result.chapterNumber} kept original draft${result.skippedReason ? `: ${result.skippedReason}` : ""}`,
+      zh: `第${result.chapterNumber}章没有可执行修改`,
+      en: `Chapter ${result.chapterNumber} had no actionable change`,
     });
   }
   const lengthLabel = formatLengthCount(result.wordCount, resolveLengthCountingMode(language));

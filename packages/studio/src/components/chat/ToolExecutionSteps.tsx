@@ -330,19 +330,14 @@ interface ChapterRevisionIssueDetails {
 
 interface ChapterRevisionDetails {
   readonly chapterNumber?: number;
-  readonly applied: boolean;
-  readonly status?: string;
-  readonly auditPassed?: boolean;
+  readonly changed: boolean;
   readonly fixedIssues: ReadonlyArray<string>;
-  readonly auditIssues: ReadonlyArray<ChapterRevisionIssueDetails>;
-  readonly skippedReason?: string;
+  readonly observations: ReadonlyArray<ChapterRevisionIssueDetails>;
 }
 
 interface ChapterStateResyncDetails {
   readonly chapterNumber?: number;
-  readonly status?: string;
-  readonly auditPassed?: boolean;
-  readonly auditIssues: ReadonlyArray<ChapterRevisionIssueDetails>;
+  readonly observations: ReadonlyArray<ChapterRevisionIssueDetails>;
   readonly summary?: string;
 }
 
@@ -368,12 +363,9 @@ export function getChapterRevisionDetails(exec: ToolExecution): ChapterRevisionD
   if (details.kind !== "chapter_revision") return null;
   return {
     chapterNumber: numberField(details, "chapterNumber"),
-    applied: details.applied === true,
-    status: stringField(details, "status"),
-    auditPassed: typeof details.auditPassed === "boolean" ? details.auditPassed : undefined,
+    changed: details.changed === true,
     fixedIssues: rawStringArrayField(details, "fixedIssues"),
-    auditIssues: parseChapterAuditIssues(details.auditIssues),
-    skippedReason: stringField(details, "skippedReason"),
+    observations: parseChapterAuditIssues(details.observations),
   };
 }
 
@@ -383,9 +375,7 @@ export function getChapterStateResyncDetails(exec: ToolExecution): ChapterStateR
   if (details.kind !== "chapter_state_resynced") return null;
   return {
     chapterNumber: numberField(details, "chapterNumber"),
-    status: stringField(details, "status"),
-    auditPassed: typeof details.auditPassed === "boolean" ? details.auditPassed : undefined,
-    auditIssues: parseChapterAuditIssues(details.auditIssues),
+    observations: parseChapterAuditIssues(details.observations),
     summary: stringField(details, "summary"),
   };
 }
@@ -415,34 +405,27 @@ function ChapterAuditIssues({
 function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
   const details = getChapterRevisionDetails(exec);
   if (!details) return null;
-  const passed = details.applied && details.auditPassed === true;
+  const changed = details.changed;
   return (
     <div
       data-testid="chapter-revision-preview"
-      className={`mx-3 mb-3 mt-1 rounded-xl border px-3 py-2.5 ${passed ? "border-emerald-500/25 bg-emerald-500/5" : "border-amber-500/25 bg-amber-500/5"}`}
+      className={`mx-3 mb-3 mt-1 rounded-xl border px-3 py-2.5 ${changed ? "border-emerald-500/25 bg-emerald-500/5" : "border-border/50 bg-secondary/20"}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[15px] font-semibold text-foreground">
           {details.chapterNumber ? tr(`第 ${details.chapterNumber} 章修订`, `Chapter ${details.chapterNumber} revision`) : tr("章节修订", "Chapter revision")}
         </div>
-        <div className={`rounded-full px-2 py-0.5 text-[12px] font-semibold ${passed ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600"}`}>
-          {!details.applied
-            ? tr("保留原稿", "Original kept")
-            : details.auditPassed
-              ? tr("审稿通过", "Audit passed")
-              : tr("仍需复核", "Review required")}
+        <div className={`rounded-full px-2 py-0.5 text-[12px] font-semibold ${changed ? "bg-emerald-500/15 text-emerald-600" : "bg-secondary text-muted-foreground"}`}>
+          {changed ? tr("已更新", "Updated") : tr("无变化", "No change")}
         </div>
       </div>
-      {details.skippedReason && (
-        <div className="mt-2 text-[13px] leading-5 text-muted-foreground">{details.skippedReason}</div>
-      )}
       {details.fixedIssues.length > 0 && (
         <div className="mt-2 text-[13px] leading-5 text-muted-foreground">
           <span className="font-medium text-foreground">{tr("已处理", "Fixed")}{tr("：", ": ")}</span>
           {details.fixedIssues.join("；")}
         </div>
       )}
-      <ChapterAuditIssues issues={details.auditIssues} title={tr("剩余审稿问题", "Remaining audit issues")} />
+      <ChapterAuditIssues issues={details.observations} title={tr("审查观察", "Review observations")} />
     </div>
   );
 }
@@ -450,22 +433,21 @@ function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
 function ChapterStateResyncPreview({ exec }: { exec: ToolExecution }) {
   const details = getChapterStateResyncDetails(exec);
   if (!details) return null;
-  const passed = details.auditPassed === true;
   return (
     <div
       data-testid="chapter-state-resync-preview"
-      className={`mx-3 mb-3 mt-1 rounded-xl border px-3 py-2.5 ${passed ? "border-emerald-500/25 bg-emerald-500/5" : "border-amber-500/25 bg-amber-500/5"}`}
+      className="mx-3 mb-3 mt-1 rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-3 py-2.5"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[15px] font-semibold text-foreground">
           {details.chapterNumber ? tr(`第 ${details.chapterNumber} 章状态已同步`, `Chapter ${details.chapterNumber} state resynced`) : tr("章节状态已同步", "Chapter state resynced")}
         </div>
-        <div className={`rounded-full px-2 py-0.5 text-[12px] font-semibold ${passed ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600"}`}>
-          {passed ? tr("审稿通过", "Audit passed") : tr("仍需修订", "Revision required")}
+        <div className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[12px] font-semibold text-emerald-600">
+          {tr("已同步", "Synced")}
         </div>
       </div>
       {details.summary && <div className="mt-2 text-[13px] leading-5 text-muted-foreground">{details.summary}</div>}
-      <ChapterAuditIssues issues={details.auditIssues} title={tr("审稿问题", "Audit issues")} />
+      <ChapterAuditIssues issues={details.observations} title={tr("审查观察", "Review observations")} />
     </div>
   );
 }

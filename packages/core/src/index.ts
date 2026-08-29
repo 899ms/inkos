@@ -1,24 +1,14 @@
 // Models
-export { type BookConfig, type Platform, type Genre, type BookStatus, type FanficMode, type ChapterReviewMode, type RevisionGate, BookConfigSchema, PlatformSchema, GenreSchema, BookStatusSchema, FanficModeSchema, normalizePlatformId, normalizePlatformOrOther, resolveChapterReviewMode, resolveRevisionGate } from "./models/book.js";
-export { type ChapterMeta, type ChapterStatus, ChapterMetaSchema, ChapterStatusSchema } from "./models/chapter.js";
-export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionConfig, type QualityGates, type FoundationConfig, type WritingConfig, type AgentLLMOverride, type ResearchSearchConfig, ProjectConfigSchema, LLMConfigSchema, AgentLLMOverrideSchema, DetectionConfigSchema, QualityGatesSchema, FoundationConfigSchema, WritingConfigSchema, ResearchSearchConfigSchema } from "./models/project.js";
+export { type BookConfig, type Platform, type Genre, type BookStatus, type FanficMode, BookConfigSchema, PlatformSchema, GenreSchema, BookStatusSchema, FanficModeSchema, normalizePlatformId, normalizePlatformOrOther } from "./models/book.js";
+export { type ChapterMeta, ChapterMetaSchema } from "./models/chapter.js";
+export { type Observation, ObservationSchema } from "./models/observation.js";
+export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionConfig, type FoundationConfig, type AgentLLMOverride, type ResearchSearchConfig, ProjectConfigSchema, LLMConfigSchema, AgentLLMOverrideSchema, DetectionConfigSchema, FoundationConfigSchema, ResearchSearchConfigSchema } from "./models/project.js";
 export { type CurrentState, type ParticleLedger, type PendingHooks, type PendingHook, type LedgerEntry } from "./models/state.js";
 export { type GenreProfile, type ParsedGenreProfile, GenreProfileSchema, parseGenreProfile } from "./models/genre-profile.js";
 export { type BookRules, type ParsedBookRules, BookRulesSchema, parseBookRules, tryParseBookRulesFrontmatter } from "./models/book-rules.js";
 export { type DetectionHistoryEntry, type DetectionStats } from "./models/detection.js";
 export { type StyleProfile } from "./models/style-profile.js";
 export { type LengthCountingMode, type LengthSpec, type LengthTelemetry, type LengthWarning, LengthCountingModeSchema, LengthSpecSchema, LengthTelemetrySchema, LengthWarningSchema } from "./models/length-governance.js";
-export {
-  commitProductionArtifacts,
-  createProductionRunSnapshot,
-  createRangeObservation,
-  writeProductionRunSnapshot,
-  type ProductionKind,
-  type ProductionObservation,
-  type ProductionObservationSeverity,
-  type ProductionRunSnapshot,
-  type ProductionRunStatus,
-} from "./production/harness.js";
 export {
   type RuntimeStateLanguage,
   type StateManifest,
@@ -541,13 +531,6 @@ export { resolveEffectiveLLMConfig, type EffectiveLLMConfigResult, type Effectiv
 export { loadLLMEnvLayers, mergeEnvMaps, studioIgnoredEnv, cliOverlayEnv, legacyEnv, type LLMEnvLayers, type LLMEnvMap } from "./utils/llm-env.js";
 export type { ContextCompressionCallback, ContextCompressionCategory, ContextCompressionEvent, ContextCompressionPhase } from "./models/context-compression.js";
 export { computeAnalytics, type AnalyticsData, type TokenStats } from "./utils/analytics.js";
-export {
-  evaluateBookQuality,
-  computeChapterEvalScore,
-  type BookEval,
-  type ChapterEval,
-  type EvaluateBookQualityOptions,
-} from "./utils/book-eval.js";
 export {
   collectStaleHookDebt,
   evaluateHookAdmission,

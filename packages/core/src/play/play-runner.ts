@@ -20,11 +20,6 @@ import { createPlayDB } from "./play-db-factory.js";
 import { applyPlayMutation, seedPlayGraph, type PlayReducerDB } from "./play-reducer.js";
 import { PlayStore, type PlayWorld } from "./play-store.js";
 import type { PlayGraphSnapshot } from "./play-file-db.js";
-import {
-  createProductionRunSnapshot,
-  writeProductionRunSnapshot,
-  type ProductionObservation,
-} from "../production/harness.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 export interface PlayActionInterpreterLike {
@@ -227,7 +222,7 @@ export class PlayRunner {
       );
     }
     await this.store.writeProjection(this.options.worldId, this.options.runId, "projections/state.md", renderStateBrief({ action, mutation: finalMutation }));
-    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId });
+    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true });
     return { mutation: finalMutation };
   }
 
@@ -238,26 +233,12 @@ export class PlayRunner {
     await this.store.ensureWorldDefinition(this.options.worldId);
     await this.store.ensureRun(this.options.worldId, this.options.runId);
     const turn = (await this.store.readEvents(this.options.worldId, this.options.runId)).length + 1;
-    await this.writeRunStatus(turn, "running", []);
     try {
       const result = await this.executeStep(rawInput, turn, options);
-      const observations: ProductionObservation[] = result.mutation.blocked
-        ? [{
-            metric: "play-action",
-            expected: "action advances or meaningfully responds to world state",
-            actual: result.mutation.blockedReason || result.mutation.summary,
-            severity: "info",
-            evidence: result.mutation.blockedReason || result.mutation.summary,
-            repairable: false,
-          }]
-        : [];
-      await this.writeRunStatus(turn, "complete", observations);
-      await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId });
+      await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true });
       return result;
     } catch (error) {
-      const cancelled = this.options.ctx?.signal?.aborted === true;
-      await this.writeRunStatus(turn, cancelled ? "cancelled" : "failed", [], error).catch(() => undefined);
-      await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId }).catch(() => undefined);
+      await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: false }).catch(() => undefined);
       throw error;
     }
   }
@@ -380,36 +361,6 @@ export class PlayRunner {
     };
   }
 
-  private async writeRunStatus(
-    turn: number,
-    status: "running" | "complete" | "failed" | "cancelled",
-    observations: ReadonlyArray<ProductionObservation>,
-    error?: unknown,
-  ): Promise<void> {
-    const runDir = join("works", this.options.worldId, "source", "runs", this.options.runId);
-    await writeProductionRunSnapshot({
-      rootDir: this.options.projectRoot,
-      runPath: join(runDir, "status.json"),
-      run: createProductionRunSnapshot({
-        kind: "play",
-        id: `${this.options.worldId}:${this.options.runId}`,
-        status,
-        stage: `turn-${turn}`,
-        artifacts: [
-          join(runDir, "events.jsonl"),
-          join(runDir, "transcript.jsonl"),
-          join(runDir, "state", "current.json"),
-          join(runDir, "projections", "scene.md"),
-          join(runDir, "projections", "state.md"),
-        ],
-        observations,
-        skillIds: this.options.ctx?.activatedSkills?.map((activation) => activation.skill.id),
-        resumeCursor: String(turn),
-        ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}),
-      }),
-    });
-  }
-
   async regenerateLastTurn(input?: string): Promise<PlayReplayResult> {
     const events = await this.store.readEvents(this.options.worldId, this.options.runId);
     const last = events.at(-1);
@@ -472,7 +423,7 @@ export class PlayRunner {
       throw new Error(`Play variant not found: turn ${input.turn} / ${input.variantId}`);
     }
     await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, snapshot, db);
-    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId });
+    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true });
     return {
       turn: input.turn,
       variantId: input.variantId,

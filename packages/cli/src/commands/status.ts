@@ -37,16 +37,8 @@ export const statusCommand = new Command("status")
         const { profile: genreProfile } = await readGenreProfile(root, book.genre);
         const countingMode = resolveLengthCountingMode(book.language ?? genreProfile.language);
 
-        const approved = index.filter((ch) => ch.status === "approved").length;
-        const pending = index.filter(
-          (ch) => ch.status === "ready-for-review",
-        ).length;
-        const failed = index.filter(
-          (ch) => ch.status === "audit-failed",
-        ).length;
-        const degraded = index.filter(
-          (ch) => ch.status === "state-degraded",
-        ).length;
+        const observationCount = index.reduce((sum, chapter) => sum + chapter.observations.length, 0);
+        const chaptersWithObservations = index.filter((chapter) => chapter.observations.length > 0).length;
         const totalWords = index.reduce((sum, ch) => sum + ch.wordCount, 0);
         const avgWords = index.length > 0 ? Math.round(totalWords / index.length) : 0;
 
@@ -60,20 +52,16 @@ export const statusCommand = new Command("status")
           targetChapters: book.targetChapters,
           totalWords,
           avgWordsPerChapter: avgWords,
-          approved,
-          pending,
-          failed,
-          degraded,
+          observationCount,
+          chaptersWithObservations,
           ...(migrationHint ? { migrationHint } : {}),
           ...(opts.chapters ? {
             chapterList: index.map((ch) => ({
               number: ch.number,
               title: ch.title,
-              status: ch.status,
               wordCount: ch.wordCount,
-              ...(ch.status === "audit-failed" || ch.status === "state-degraded"
-                ? { issues: ch.auditIssues }
-                : {}),
+              provenance: ch.provenance,
+              observations: ch.observations,
             })),
           } : {}),
         });
@@ -84,7 +72,7 @@ export const statusCommand = new Command("status")
           log(`    Platform: ${book.platform} | Genre: ${book.genre}`);
           log(`    Chapters: ${persistedChapterCount} / ${book.targetChapters}`);
           log(`    Words: ${totalWords.toLocaleString()} (avg ${avgWords}/ch)`);
-          log(`    Approved: ${approved} | Pending: ${pending} | Failed: ${failed} | Degraded: ${degraded}`);
+          log(`    Review observations: ${observationCount} across ${chaptersWithObservations} chapter(s)`);
           if (migrationHint) {
             log(`    Migration: ${migrationHint}`);
           }
@@ -92,31 +80,10 @@ export const statusCommand = new Command("status")
           if (opts.chapters && index.length > 0) {
             log("");
             for (const ch of index) {
-              const icon = ch.status === "approved"
-                ? "+"
-                : ch.status === "audit-failed"
-                  ? "!"
-                  : ch.status === "state-degraded"
-                    ? "x"
-                    : "~";
-              log(`    [${icon}] Ch.${ch.number} "${ch.title}" | ${formatLengthCount(ch.wordCount, countingMode)} | ${ch.status}`);
-              if ((ch.status === "audit-failed" || ch.status === "state-degraded") && ch.auditIssues.length > 0) {
-                const criticals = ch.auditIssues.filter((i: string) => i.startsWith("[critical]"));
-                const warnings = ch.auditIssues.filter((i: string) => i.startsWith("[warning]"));
-                if (criticals.length > 0) {
-                  for (const issue of criticals) {
-                    log(`        ${issue}`);
-                  }
-                }
-                if (warnings.length > 0) {
-                  if (ch.status === "state-degraded") {
-                    for (const issue of warnings) {
-                      log(`        ${issue}`);
-                    }
-                  } else {
-                    log(`        + ${warnings.length} warning(s)`);
-                  }
-                }
+              const icon = ch.observations.length > 0 ? "!" : "+";
+              log(`    [${icon}] Ch.${ch.number} "${ch.title}" | ${formatLengthCount(ch.wordCount, countingMode)} | ${ch.provenance}`);
+              for (const observation of ch.observations) {
+                log(`        [${observation.status}] ${observation.code}: ${observation.summary}`);
               }
             }
           }

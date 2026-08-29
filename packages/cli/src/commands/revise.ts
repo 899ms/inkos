@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { DEFAULT_REVISE_MODE, PipelineRunner, StateManager, resolveRevisionGate, type ReviseMode } from "@actalk/inkos-core";
+import { DEFAULT_REVISE_MODE, PipelineRunner, StateManager, type ReviseMode } from "@actalk/inkos-core";
 import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
 import {
   formatNotifyCommandTitle,
@@ -42,7 +42,6 @@ export const reviseCommand = new Command("revise")
       notifyBookName = book.title ?? bookId;
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: opts.brief,
-        revisionGate: resolveRevisionGate(book, config.writing),
       }));
 
       const mode = opts.mode as ReviseMode;
@@ -52,13 +51,12 @@ export const reviseCommand = new Command("revise")
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
-      } else if (!result.applied) {
-        log(`  Chapter ${result.chapterNumber}: kept original draft`);
-        if (result.skippedReason) log(`  Reason: ${result.skippedReason}`);
       } else {
-        log(`  Chapter ${result.chapterNumber} revised`);
+        log(result.changed
+          ? `  Chapter ${result.chapterNumber} revised`
+          : `  Chapter ${result.chapterNumber}: no actionable change`);
         log(`  Words: ${result.wordCount}`);
-        log(`  Status: ${result.status}`);
+        log(`  Review observations: ${result.observations.length}`);
         log("  Fixed:");
         for (const fix of result.fixedIssues) {
           log(`    - ${fix}`);
@@ -72,10 +70,9 @@ export const reviseCommand = new Command("revise")
           title: formatNotifyCommandTitle(language, "revise", notifyBookName, true),
           body: formatNotifyReviseBody(language, {
             chapterNumber: result.chapterNumber,
-            applied: result.applied,
+            changed: result.changed,
             wordCount: result.wordCount,
             fixedCount: result.fixedIssues.length,
-            skippedReason: result.skippedReason,
           }),
         }, config);
       }

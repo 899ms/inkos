@@ -38,7 +38,6 @@ import {
   chatCompletion,
   runWorkerAgent,
   buildExportArtifact,
-  evaluateBookQuality,
   ConsolidatorAgent,
   DetectionConfigSchema,
   ResearchSearchConfigSchema,
@@ -1964,73 +1963,6 @@ async function saveRawConfig(root: string, config: Record<string, unknown>): Pro
   await writeFile(join(root, "inkos.json"), JSON.stringify(config, null, 2), "utf-8");
 }
 
-type ChapterReviewMode = "auto" | "manual";
-
-function normalizeChapterReviewMode(mode: unknown): ChapterReviewMode {
-  return mode === "manual" ? "manual" : "auto";
-}
-
-function readProjectChapterReviewMode(config: Record<string, unknown>): ChapterReviewMode {
-  const writing = config.writing && typeof config.writing === "object" && !Array.isArray(config.writing)
-    ? config.writing as Record<string, unknown>
-    : {};
-  return normalizeChapterReviewMode(writing.reviewMode);
-}
-
-function readBookChapterReviewMode(rawBook: Record<string, unknown>): ChapterReviewMode | undefined {
-  const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-    ? rawBook.writing as Record<string, unknown>
-    : undefined;
-  if (!writing || writing.reviewMode !== "manual" && writing.reviewMode !== "auto") return undefined;
-  return writing.reviewMode;
-}
-
-async function loadRawBookConfig(root: string, bookId: string): Promise<Record<string, unknown>> {
-  const raw = await readFile(join(workDirectory(root, bookId), "source", "book.json"), "utf-8");
-  return JSON.parse(raw) as Record<string, unknown>;
-}
-
-async function resolveBookChapterReviewMode(root: string, bookId: string | undefined, projectMode: ChapterReviewMode): Promise<ChapterReviewMode> {
-  if (!bookId || !isSafeBookId(bookId)) return projectMode;
-  try {
-    const rawBook = await loadRawBookConfig(root, bookId);
-    return readBookChapterReviewMode(rawBook) ?? projectMode;
-  } catch {
-    return projectMode;
-  }
-}
-
-type RevisionGateSetting = "strict" | "lenient" | "always";
-
-function normalizeRevisionGate(gate: unknown): RevisionGateSetting {
-  return gate === "lenient" || gate === "always" ? gate : "strict";
-}
-
-function readProjectRevisionGate(config: Record<string, unknown>): RevisionGateSetting {
-  const writing = config.writing && typeof config.writing === "object" && !Array.isArray(config.writing)
-    ? config.writing as Record<string, unknown>
-    : {};
-  return normalizeRevisionGate(writing.revisionGate);
-}
-
-function readBookRevisionGate(rawBook: Record<string, unknown>): RevisionGateSetting | undefined {
-  const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-    ? rawBook.writing as Record<string, unknown>
-    : undefined;
-  if (!writing || writing.revisionGate !== "strict" && writing.revisionGate !== "lenient" && writing.revisionGate !== "always") return undefined;
-  return writing.revisionGate;
-}
-
-async function resolveBookRevisionGate(root: string, bookId: string | undefined, projectGate: RevisionGateSetting): Promise<RevisionGateSetting> {
-  if (!bookId || !isSafeBookId(bookId)) return projectGate;
-  try {
-    const rawBook = await loadRawBookConfig(root, bookId);
-    return readBookRevisionGate(rawBook) ?? projectGate;
-  } catch {
-    return projectGate;
-  }
-}
-
 function unquoteEnvValue(value: string): string {
   const trimmed = value.trim();
   if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
@@ -2808,7 +2740,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   }
 
   async function buildPipelineConfig(
-    overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model" | "revisionGate">> & {
+    overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model">> & {
       readonly currentConfig?: ProjectConfig;
       readonly sessionIdForSSE?: string;
       // 确认式生产任务的 execution id。给任务构建 pipeline 时传入，该 pipeline
@@ -2820,10 +2752,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     },
   ): Promise<PipelineConfig> {
     const currentConfig = overrides?.currentConfig ?? await loadCurrentProjectConfig();
-    const projectReviewMode = readProjectChapterReviewMode(currentConfig as unknown as Record<string, unknown>);
-    const chapterReviewMode = await resolveBookChapterReviewMode(root, overrides?.bookIdForSettings, projectReviewMode);
-    const projectRevisionGate = readProjectRevisionGate(currentConfig as unknown as Record<string, unknown>);
-    const revisionGate = await resolveBookRevisionGate(root, overrides?.bookIdForSettings, projectRevisionGate);
     const sseExecutionTag = overrides?.executionIdForSSE
       ? { executionId: overrides.executionIdForSSE }
       : {};
@@ -2847,9 +2775,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       projectRoot: root,
       defaultLLMConfig: currentConfig.llm,
       foundationReviewRetries: currentConfig.foundation?.reviewRetries ?? 2,
-      writingReviewRetries: currentConfig.writing?.reviewRetries ?? 1,
-      chapterReviewMode,
-      revisionGate: overrides?.revisionGate ?? revisionGate,
       modelOverrides: currentConfig.modelOverrides,
       notifyChannels: currentConfig.notify,
       logger,
@@ -3477,7 +3402,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
     pipeline.writeNextChapter(id, body.wordCount).then(
       (result) => {
-        broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
+        broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount, observationCount: result.review.issues.length });
       },
       (e) => {
         broadcast("write:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
@@ -3504,16 +3429,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     );
 
     return c.json({ status: "drafting", bookId: id });
-  });
-
-  app.get("/api/v1/books/:id/eval", async (c) => {
-    const id = c.req.param("id");
-    const chapters = c.req.query("chapters");
-    try {
-      return c.json(await evaluateBookQuality({ state, bookId: id, chapters }));
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
   });
 
   app.post("/api/v1/books/:id/consolidate", async (c) => {
@@ -3556,20 +3471,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
-  app.post("/api/v1/books/:id/repair-state/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.repairChapterState(id, chapterNum);
-      broadcast("repair-state:complete", { bookId: id, chapter: chapterNum });
-      return c.json(result);
-    } catch (e) {
-      broadcast("repair-state:error", { bookId: id, chapter: chapterNum, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   app.post("/api/v1/books/:id/foundation/revise", async (c) => {
     const id = c.req.param("id");
     const { feedback } = await c.req.json<{ feedback?: string }>().catch(() => ({ feedback: undefined }));
@@ -3583,47 +3484,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ ok: true });
     } catch (e) {
       broadcast("foundation:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/chapters/:num/approve", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-
-    try {
-      const index = await state.loadChapterIndex(id);
-      const updated = index.map((ch) =>
-        ch.number === num ? { ...ch, status: "approved" as const } : ch,
-      );
-      await state.saveChapterIndex(id, updated);
-      return c.json({ ok: true, chapterNumber: num, status: "approved" });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/chapters/:num/reject", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-
-    try {
-      const index = await state.loadChapterIndex(id);
-      const target = index.find((ch) => ch.number === num);
-      if (!target) {
-        return c.json({ error: `Chapter ${num} not found` }, 404);
-      }
-
-      const rollbackTarget = num - 1;
-      const discarded = await state.rollbackToChapter(id, rollbackTarget);
-      return c.json({
-        ok: true,
-        chapterNumber: num,
-        status: "rejected",
-        rolledBackTo: rollbackTarget,
-        discarded,
-      });
-    } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
   });
@@ -4469,8 +4329,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         retryDelayMs: currentConfig.daemon.retryDelayMs,
         cooldownAfterChapterMs: currentConfig.daemon.cooldownAfterChapterMs,
         maxChaptersPerDay: currentConfig.daemon.maxChaptersPerDay,
-        onChapterComplete: (bookId, chapter, status) => {
-          broadcast("daemon:chapter", { bookId, chapter, status });
+        onChapterComplete: (bookId, chapter) => {
+          broadcast("daemon:chapter", { bookId, chapter });
         },
         onError: (bookId, error) => {
           broadcast("daemon:error", { bookId, error: error.message });
@@ -5637,7 +5497,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         bookId: id,
       });
       const result = await auditor.auditChapter(bookDir, content, chapterNum, book.genre);
-      broadcast("audit:complete", { bookId: id, chapter: chapterNum, passed: result.passed });
+      broadcast("review:complete", { bookId: id, chapter: chapterNum, observationCount: result.issues.length });
       return c.json(result);
     } catch (e) {
       broadcast("audit:error", { bookId: id, error: String(e) });
@@ -5687,12 +5547,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/books/:id/export", async (c) => {
     const id = c.req.param("id");
     const format = (c.req.query("format") ?? "txt") as string;
-    const approvedOnly = c.req.query("approvedOnly") === "true";
 
     try {
       const artifact = await buildExportArtifact(state, id, {
         format: format as "txt" | "md" | "epub",
-        approvedOnly,
       });
       const responseBody = typeof artifact.payload === "string"
         ? artifact.payload
@@ -5712,7 +5570,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/export-save", async (c) => {
     const id = c.req.param("id");
-    const { format, approvedOnly } = await c.req.json<{ format?: string; approvedOnly?: boolean }>().catch(() => ({ format: "txt", approvedOnly: false }));
+    const { format } = await c.req.json<{ format?: string }>().catch(() => ({ format: "txt" }));
     const fmt = format ?? "txt";
 
     try {
@@ -5730,7 +5588,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         workId: id,
         parameters: {
           format: fmt,
-          approvedOnly: Boolean(approvedOnly),
         },
       });
       const details = result.data as Readonly<Record<string, unknown>> | undefined;
@@ -5849,78 +5706,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     raw.researchSearch = researchSearch;
     await saveRawConfig(root, raw);
     return c.json({ ok: true, researchSearch });
-  });
-
-  // --- Chapter review mode (C4a: auto pipeline vs manual checkpoint) ---
-
-  app.get("/api/v1/project/chapter-review-mode", async (c) => {
-    const raw = await loadRawConfig(root);
-    return c.json({ mode: readProjectChapterReviewMode(raw) });
-  });
-
-  app.put("/api/v1/project/chapter-review-mode", async (c) => {
-    const { mode } = await c.req.json<{ mode?: string }>();
-    const next = normalizeChapterReviewMode(mode);
-    const raw = await loadRawConfig(root);
-    raw.writing = { ...(raw.writing ?? {}), reviewMode: next };
-    await saveRawConfig(root, raw);
-    return c.json({ ok: true, mode: next });
-  });
-
-  app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {
-    const bookId = c.req.param("id");
-    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
-    try {
-      const [projectConfig, rawBook] = await Promise.all([
-        loadRawConfig(root),
-        loadRawBookConfig(root, bookId),
-      ]);
-      const projectMode = readProjectChapterReviewMode(projectConfig);
-      const bookMode = readBookChapterReviewMode(rawBook);
-      return c.json({
-        mode: bookMode ?? projectMode,
-        bookMode: bookMode ?? null,
-        projectMode,
-      });
-    } catch {
-      return c.json({ error: `Book "${bookId}" not found` }, 404);
-    }
-  });
-
-  app.put("/api/v1/books/:id/chapter-review-mode", async (c) => {
-    const bookId = c.req.param("id");
-    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
-    const { mode } = await c.req.json<{ mode?: string }>();
-    const rawBookPath = join(workDirectory(root, bookId), "source", "book.json");
-    try {
-      const [projectConfig, rawBook] = await Promise.all([
-        loadRawConfig(root),
-        loadRawBookConfig(root, bookId),
-      ]);
-      const projectMode = readProjectChapterReviewMode(projectConfig);
-      if (mode === "inherit") {
-        const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-          ? { ...(rawBook.writing as Record<string, unknown>) }
-          : {};
-        delete writing.reviewMode;
-        rawBook.writing = Object.keys(writing).length > 0 ? writing : undefined;
-      } else {
-        rawBook.writing = {
-          ...(rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing) ? rawBook.writing as Record<string, unknown> : {}),
-          reviewMode: normalizeChapterReviewMode(mode),
-        };
-      }
-      await writeFile(rawBookPath, JSON.stringify(rawBook, null, 2), "utf-8");
-      const bookMode = readBookChapterReviewMode(rawBook);
-      return c.json({
-        ok: true,
-        mode: bookMode ?? projectMode,
-        bookMode: bookMode ?? null,
-        projectMode,
-      });
-    } catch {
-      return c.json({ error: `Book "${bookId}" not found` }, 404);
-    }
   });
 
   // --- Notify channels ---
@@ -6058,7 +5843,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
-        revisionGate: "always",
         bookIdForSettings: id,
       }));
       const result = await pipeline.reviseDraft(id, chapterNum, "rework");
@@ -6066,7 +5850,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         bookId: id,
         chapterNumber: result.chapterNumber,
         wordCount: result.wordCount,
-        status: result.status,
+        changed: result.changed,
       });
       return c.json({ status: "complete", bookId: id, chapter: chapterNum, result });
     } catch (e) {
@@ -6731,7 +6515,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         return {
           number: chapter.number,
           title: chapter.title,
-          status: chapter.status,
+          translatedSegments: chapter.translatedSegments,
+          reviewSummary: chapter.reviewSummary,
+          reviewIssues: chapter.reviewIssues,
           segments: source.segments.map((segment) => ({
             index: segment.index,
             source: segment.source,

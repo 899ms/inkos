@@ -299,12 +299,18 @@ function markChapterForManualReview(
   return index.map((chapter) => chapter.number === chapterNumber
     ? {
         ...chapter,
-        status: "audit-failed" as const,
         updatedAt: now,
         ...(typeof wordCount === "number" ? { wordCount } : {}),
-        auditIssues: [
-          ...chapter.auditIssues.filter((existing) => !existing.includes(issue)),
-          `[warning] ${issue}`,
+        provenance: "edited" as const,
+        observations: [
+          ...chapter.observations.filter((existing) => existing.code !== "manual-edit-review"),
+          {
+            code: "manual-edit-review",
+            kind: "soft" as const,
+            status: "warning" as const,
+            summary: issue,
+            evidence: [],
+          },
         ],
       }
     : chapter);

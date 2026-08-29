@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
+  TranslationChapterManifest,
   TranslationChapterFile,
   TranslationGlossaryTerm,
   TranslationProjectManifest,
@@ -16,11 +17,36 @@ export function translationManifestPath(projectRoot: string, projectId: string):
   return join(translationProjectDir(projectRoot, projectId), "manifest.json");
 }
 
+type LegacyTranslationChapterManifest = Omit<TranslationChapterManifest, "translatedSegments"> & {
+  readonly translatedSegments?: number;
+  readonly status?: string;
+};
+
+type LegacyTranslationProjectManifest = Omit<TranslationProjectManifest, "chapters"> & {
+  readonly chapters: ReadonlyArray<LegacyTranslationChapterManifest>;
+};
+
 export async function loadTranslationManifest(
   projectRoot: string,
   projectId: string,
 ): Promise<TranslationProjectManifest> {
-  return JSON.parse(await readFile(translationManifestPath(projectRoot, projectId), "utf-8")) as TranslationProjectManifest;
+  const path = translationManifestPath(projectRoot, projectId);
+  const raw = JSON.parse(await readFile(path, "utf-8")) as LegacyTranslationProjectManifest;
+  const migrated = {
+    ...raw,
+    chapters: raw.chapters.map(({ status, ...chapter }) => ({
+      ...chapter,
+      translatedSegments: typeof chapter.translatedSegments === "number"
+        ? chapter.translatedSegments
+        : status === "pending"
+          ? 0
+          : chapter.segmentCount,
+    })),
+  } satisfies TranslationProjectManifest;
+  if (raw.chapters.some((chapter) => "status" in chapter || typeof chapter.translatedSegments !== "number")) {
+    await writeFile(path, `${JSON.stringify(migrated, null, 2)}\n`, "utf-8");
+  }
+  return migrated;
 }
 
 export async function saveTranslationManifest(

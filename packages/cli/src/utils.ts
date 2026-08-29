@@ -106,7 +106,7 @@ export function parseLLMOverridesFromArgv(argv: readonly string[]): LLMConfigCli
 export function buildPipelineConfig(
   config: ProjectConfig,
   root: string,
-  extra?: Partial<Pick<PipelineConfig, "notifyChannels" | "radarSources" | "externalContext" | "chapterReviewMode" | "revisionGate">> & {
+  extra?: Partial<Pick<PipelineConfig, "notifyChannels" | "radarSources" | "externalContext">> & {
     readonly quiet?: boolean;
     readonly logFile?: NodeJS.WritableStream;
   },
@@ -138,9 +138,6 @@ export function buildPipelineConfig(
     projectRoot: root,
     defaultLLMConfig: config.llm,
     foundationReviewRetries: config.foundation.reviewRetries,
-    writingReviewRetries: config.writing?.reviewRetries ?? 1,
-    chapterReviewMode: extra?.chapterReviewMode,
-    revisionGate: extra?.revisionGate,
     modelOverrides: config.modelOverrides,
     notifyChannels: extra?.notifyChannels ?? config.notify,
     radarSources: extra?.radarSources,

@@ -37,7 +37,7 @@ export async function writeTranslationExport(
     await writeFile(outputPath, await renderTextExport(projectRoot, projectId, format), "utf-8");
   }
 
-  await syncWorkSourceArtifacts({ projectRoot, workId: projectId });
+  await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: true });
 
   return {
     outputPath,

@@ -66,11 +66,8 @@ export const autoCommand = new Command("auto")
       }
 
       const config = await loadConfig();
-      // `inkos auto` is unattended batch writing, so the audit→revise loop must
-      // run inline: force "auto" regardless of book/project reviewMode settings.
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         quiet: opts.quiet,
-        chapterReviewMode: "auto",
       }));
 
       if (!opts.json) log(formatAutoWriteStart(language, bookId, startChapter, targetChapter));
@@ -97,21 +94,13 @@ export const autoCommand = new Command("auto")
             chapterNumber: result.chapterNumber,
             title: result.title,
             wordCount: result.wordCount,
-            auditPassed: result.auditResult.passed,
-            revised: result.revised,
-            status: result.status,
-            issues: result.auditResult.issues,
+            observations: result.review.issues,
           })) {
             log(line);
           }
           log("");
         }
 
-        if (result.status === "state-degraded") {
-          throw new Error(
-            `Chapter ${result.chapterNumber} finished in state-degraded status, stopping auto-write. Run "inkos write repair-state ${bookId} ${result.chapterNumber}" first, then re-run inkos auto.`,
-          );
-        }
       }
 
       if (opts.json) {
@@ -132,7 +121,7 @@ export const autoCommand = new Command("auto")
             chapterNumber: r.chapterNumber,
             title: r.title,
             wordCount: r.wordCount,
-            auditPassed: r.auditResult.passed,
+            observationCount: r.review.issues.length,
           }))),
         }, config);
       }

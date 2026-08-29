@@ -213,8 +213,6 @@ describe("storyboard creation runner", () => {
     expect(script).toContain("便利店。暴雨。");
     expect(script).toContain("监控时间轴被店长远程覆盖");
     expect(script.match(/陌生人推门。/gu)).toHaveLength(1);
-    const status = JSON.parse(await readFile(join(root, "works/missing-on-camera/source/status.json"), "utf-8"));
-    expect(status.status).toBe("complete");
   });
 
   it("does not commit a script with repeated deliverable sections", async () => {

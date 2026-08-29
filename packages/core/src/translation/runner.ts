@@ -1,9 +1,5 @@
 import { join } from "node:path";
-import {
-  commitProductionArtifacts,
-  createProductionRunSnapshot,
-  writeProductionRunSnapshot,
-} from "../production/harness.js";
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import {
   loadTranslationChapter,
   loadTranslationGlossary,
@@ -29,24 +25,6 @@ export async function runTranslationProject(
     readonly batchSize?: number;
   },
 ): Promise<RunTranslationProjectResult> {
-  const runPath = join("works", projectId, "source", "status.json");
-  const baseArtifacts = [
-    join("works", projectId, "source", "manifest.json"),
-    join("works", projectId, "source", "glossary.json"),
-  ];
-  await writeProductionRunSnapshot({
-    rootDir: projectRoot,
-    runPath,
-    run: createProductionRunSnapshot({
-      kind: "translation",
-      id: projectId,
-      status: "running",
-      stage: "translate",
-      artifacts: baseArtifacts,
-      observations: [],
-    }),
-  });
-
   try {
     let manifest = await loadTranslationManifest(projectRoot, projectId);
     let glossary = [...await loadTranslationGlossary(projectRoot, projectId)];
@@ -93,23 +71,11 @@ export async function runTranslationProject(
         title: translatedTitle,
         segments: orderedTranslatedSegments(source.segments, translatedByIndex),
       }, glossary);
-      await writeProductionRunSnapshot({
-        rootDir: projectRoot,
-        runPath,
-        run: createProductionRunSnapshot({
-          kind: "translation",
-          id: projectId,
-          status: "running",
-          stage: "translate",
-          artifacts: [...baseArtifacts, chapterInfo.translatedPath],
-          observations: [],
-          resumeCursor: `${chapterInfo.number}:${offset + batch.length}`,
-        }),
-      });
     }
 
     const completedChapter = await loadTranslationChapter(projectRoot, chapterInfo.translatedPath);
-    let status: "translated" | "reviewed" = "translated";
+    let reviewSummary: string | undefined;
+    let reviewIssues: ReadonlyArray<string> | undefined;
     if (options.model.reviewChapter && completedChapter.segments.some((segment) => segment.target?.trim())) {
       const review = await options.model.reviewChapter({
         sourceLanguage: manifest.sourceLanguage,
@@ -119,40 +85,34 @@ export async function runTranslationProject(
         glossary,
       });
       reviewedChapters++;
-      status = review.passed ? "reviewed" : "translated";
-      reportLines.push(`## ${completedChapter.title}`, "", `- passed: ${review.passed ? "yes" : "no"}`, `- summary: ${review.summary}`, "");
+      reviewSummary = review.summary;
+      reviewIssues = review.issues;
+      reportLines.push(`## ${completedChapter.title}`, "", `- summary: ${review.summary}`, "");
       for (const issue of review.issues) {
         reportLines.push(`- issue: ${issue}`);
       }
       reportLines.push("");
     }
-    manifest = updateChapterStatus(manifest, chapterInfo.number, status, completedChapter.title);
+    manifest = updateChapterProgress(
+      manifest,
+      chapterInfo.number,
+      completedChapter.segments.filter((segment) => segment.target?.trim()).length,
+      completedChapter.title,
+      reviewSummary,
+      reviewIssues,
+    );
     await saveTranslationManifest(projectRoot, manifest);
   }
 
     const reportPath = `works/${projectId}/source/review-report.md`;
-    const artifacts = [
-      ...baseArtifacts,
-      ...manifest.chapters.map((chapter) => chapter.translatedPath),
-      reportPath,
-    ];
-    await commitProductionArtifacts({
+    await commitAtomicFileSet({
       rootDir: projectRoot,
-      artifacts: [{
+      writes: [{
         relativePath: reportPath,
         content: `${reportLines.join("\n").trimEnd()}\n`,
       }],
-      runPath,
-      run: createProductionRunSnapshot({
-        kind: "translation",
-        id: projectId,
-        status: "complete",
-        stage: "complete",
-        artifacts,
-        observations: [],
-      }),
     });
-    await syncWorkSourceArtifacts({ projectRoot, workId: projectId });
+    await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: true });
     return {
       projectId,
       translatedSegments,
@@ -160,20 +120,7 @@ export async function runTranslationProject(
       reportPath,
     };
   } catch (error) {
-    await writeProductionRunSnapshot({
-      rootDir: projectRoot,
-      runPath,
-      run: createProductionRunSnapshot({
-        kind: "translation",
-        id: projectId,
-        status: "failed",
-        stage: "translate",
-        artifacts: baseArtifacts,
-        observations: [],
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    }).catch(() => undefined);
-    await syncWorkSourceArtifacts({ projectRoot, workId: projectId }).catch(() => undefined);
+    await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: false }).catch(() => undefined);
     throw error;
   }
 }
@@ -185,17 +132,21 @@ function orderedTranslatedSegments(
   return sourceSegments.map((segment) => translatedByIndex.get(segment.index) ?? segment);
 }
 
-function updateChapterStatus(
+function updateChapterProgress(
   manifest: TranslationProjectManifest,
   chapterNumber: number,
-  status: "translated" | "reviewed",
+  translatedSegments: number,
   translatedTitle: string,
+  reviewSummary?: string,
+  reviewIssues?: ReadonlyArray<string>,
 ): TranslationProjectManifest {
   return {
     ...manifest,
     updatedAt: new Date().toISOString(),
     chapters: manifest.chapters.map((chapter) =>
-      chapter.number === chapterNumber ? { ...chapter, title: translatedTitle, status } : chapter,
+      chapter.number === chapterNumber
+        ? { ...chapter, title: translatedTitle, translatedSegments, reviewSummary, reviewIssues }
+        : chapter,
     ),
   };
 }

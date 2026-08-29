@@ -25,7 +25,7 @@ vi.mock("@actalk/inkos-core", async () => {
         chapterNumber: 1,
         title: "雨夜",
         wordCount: 1200,
-        status: "ready-for-review",
+        observations: [],
       };
     }
   }
