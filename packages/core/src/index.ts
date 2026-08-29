@@ -2,7 +2,7 @@
 export { type BookConfig, type Platform, type Genre, type BookStatus, type FanficMode, BookConfigSchema, PlatformSchema, GenreSchema, BookStatusSchema, FanficModeSchema, normalizePlatformId, normalizePlatformOrOther } from "./models/book.js";
 export { type ChapterMeta, ChapterMetaSchema } from "./models/chapter.js";
 export { type Observation, ObservationSchema } from "./models/observation.js";
-export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionConfig, type FoundationConfig, type AgentLLMOverride, type ResearchSearchConfig, ProjectConfigSchema, LLMConfigSchema, AgentLLMOverrideSchema, DetectionConfigSchema, FoundationConfigSchema, ResearchSearchConfigSchema } from "./models/project.js";
+export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionConfig, type AgentLLMOverride, type ResearchSearchConfig, ProjectConfigSchema, LLMConfigSchema, AgentLLMOverrideSchema, DetectionConfigSchema, ResearchSearchConfigSchema } from "./models/project.js";
 export { type CurrentState, type ParticleLedger, type PendingHooks, type PendingHook, type LedgerEntry } from "./models/state.js";
 export { type GenreProfile, type ParsedGenreProfile, GenreProfileSchema, parseGenreProfile } from "./models/genre-profile.js";
 export { type BookRules, type ParsedBookRules, BookRulesSchema, parseBookRules, tryParseBookRulesFrontmatter } from "./models/book-rules.js";
@@ -160,6 +160,7 @@ export {
   type SkillResolutionInput,
   type SkillResolutionResult,
 } from "./skills/index.js";
+export type { ActivatedSkillGuidance } from "./agent/skill-tool.js";
 export {
   BUILTIN_PROMPTS,
   BUILTIN_PROMPT_PACKS,
@@ -208,7 +209,6 @@ export {
   PLANNER_MEMO_SYSTEM_PROMPT,
   PLANNER_MEMO_USER_TEMPLATE,
   buildPlannerUserMessage,
-  buildGoldenOpeningGuidance,
   type PlannerUserMessageInput,
 } from "./agents/planner-prompts.js";
 export {
@@ -378,11 +378,8 @@ export {
   SHORT_FICTION_EN_MIN_WORDS_PER_CHAPTER,
   SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER,
   ShortFictionOutlineAgent,
-  ShortFictionOutlineReviewerAgent,
-  ShortFictionOutlineReviserAgent,
   ShortFictionWriterAgent,
   ShortFictionDraftReviewerAgent,
-  ShortFictionDraftReviserAgent,
   ShortFictionPackagingAgent,
   parseShortFictionBatchDraft,
   validateShortFictionDraftForFinal,
@@ -488,7 +485,7 @@ export { PolisherAgent, type PolishChapterInput, type PolishChapterOutput } from
 export { RadarAgent, type RadarResult, type RadarRecommendation } from "./agents/radar.js";
 export { FanqieRadarSource, QidianRadarSource, TextRadarSource, type RadarSource, type PlatformRankings, type RankingEntry } from "./agents/radar-source.js";
 export { readGenreProfile, readBookRules, listAvailableGenres, getBuiltinGenresDir } from "./agents/rules-reader.js";
-export { buildWriterSystemPrompt, buildGoldenOpeningDiscipline } from "./agents/writer-prompts.js";
+export { buildWriterSystemPrompt } from "./agents/writer-prompts.js";
 export { analyzeAITells, type AITellResult, type AITellIssue } from "./agents/ai-tells.js";
 export { analyzeSensitiveWords, type SensitiveWordResult, type SensitiveWordMatch } from "./agents/sensitive-words.js";
 export { detectAIContent, type DetectionResult } from "./agents/detector.js";
@@ -502,7 +499,7 @@ export { parseSettlementOutput, type SettlementOutput } from "./agents/settler-p
 export { parseSettlerDeltaOutput, type SettlerDeltaOutput } from "./agents/settler-delta-parser.js";
 export { FanficCanonImporter, type FanficCanonOutput } from "./agents/fanfic-canon-importer.js";
 export { getFanficDimensionConfig, FANFIC_DIMENSIONS, type FanficDimensionConfig } from "./agents/fanfic-dimensions.js";
-export { buildFanficCanonSection, buildCharacterVoiceProfiles, buildFanficModeInstructions } from "./agents/fanfic-prompt-sections.js";
+export { buildCharacterVoiceProfiles } from "./agents/fanfic-prompt-sections.js";
 export * from "./prompts/index.js";
 
 // Utils
@@ -545,7 +542,7 @@ export { analyzeHookHealth } from "./utils/hook-health.js";
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
 export { Scheduler, type SchedulerConfig } from "./pipeline/scheduler.js";
-export { detectChapter, detectAndRewrite, loadDetectionHistory, type DetectChapterResult, type DetectAndRewriteResult } from "./pipeline/detection-runner.js";
+export { detectChapter, loadDetectionHistory, type DetectChapterResult } from "./pipeline/detection-runner.js";
 export { runScriptCreation, runStoryboardCreation, runInteractiveFilmCreation, createStoryboardAssetsManifest, type ScriptCreationRunOptions, type ScriptCreationRunResult, type StoryboardAssetsManifest, type StoryboardCreationRunOptions, type StoryboardCreationRunResult, type InteractiveFilmCreationRunOptions, type InteractiveFilmCreationRunResult, type StoryboardImageAsset, type StoryboardImageAssetVariant } from "./pipeline/script-storyboard-runner.js";
 export { ScriptCreationAgent, StoryboardCreationAgent, InteractiveFilmCreationAgent, renderScriptSpec, renderStoryboardSpec, renderInteractiveFilmSpec, type ScriptCreationInput, type ScriptTargetFormat, type StoryboardCreationInput, type InteractiveFilmCreationInput } from "./agents/script-storyboard.js";
 

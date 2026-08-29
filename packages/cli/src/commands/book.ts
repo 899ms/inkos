@@ -24,7 +24,7 @@ import {
   resolveCliLanguage,
 } from "../localization.js";
 import { createBookBackup, listBookBackups, restoreBookBackup } from "../book-backup.js";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 
 export const bookCommand = new Command("book")
   .description("Manage books");
@@ -83,6 +83,7 @@ bookCommand
         : undefined;
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { externalContext: brief }));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
       await executeExplicitCapabilityTool({
         projectRoot: root,
@@ -99,6 +100,7 @@ bookCommand
               chapterWordCount: book.chapterWordCount,
             },
           },
+          workerSkills: () => activatedSkills,
         }),
         parameters: {
           agent: "architect",

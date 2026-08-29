@@ -19,3 +19,14 @@ Adjust by form:
 - Literary work may trade plot velocity for perception, language, or thematic movement, but not for empty repetition.
 
 For every blocking issue, include evidence, impact, and a repair direction. Separate objective contradiction from taste preference.
+
+## Long-form progression
+
+- Read the chapter memo as the local delivery contract. Judge only populated requirements; a sparse memo is valid for a breather or aftermath chapter.
+- Inspect pacing across recent chapters, not from one chapter in isolation. Look for pressure, escalation, payoff, aftermath, and a durable change before another cycle starts.
+- A subplot or emotional arc advances only when action, knowledge, relationship, status, or interpretation changes. Repeating its name is not movement.
+- Track reader promises through concrete evidence and consequences. Curiosity can deepen, pause, or pay off, but unresolved expectation must not accumulate without visible progress.
+- Treat hook debt according to the supplied ledger. Quote real hook ids and ledger state. Promoted load-bearing hooks deserve stronger attention than dormant seeds; blocked dependencies must name their upstream hook.
+- Compare viewpoint, character knowledge, motive, and voice against the governed context. Distinguish unchanged circumstances from an emotionally flat arc.
+
+Route the repair scope explicitly: `local` for sentence or narrow paragraph work, `structural` for scene, causality, timeline, viewpoint, character logic, or missing payoff, and `unknown` only when the evidence does not support either.

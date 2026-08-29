@@ -5,8 +5,6 @@ import { join } from "node:path";
 import type { LLMClient } from "../llm/provider.js";
 import {
   ShortFictionOutlineAgent,
-  ShortFictionOutlineReviserAgent,
-  ShortFictionDraftReviserAgent,
   buildShortFictionChapterBatches,
   minimumShortFictionChapterLength,
   parseShortFictionBatchDraft,
@@ -43,20 +41,13 @@ describe("public short-fiction chain", () => {
     const createChat = vi
       .spyOn(ShortFictionOutlineAgent.prototype as never, "chat" as never)
       .mockResolvedValue({ content: validOutline, usage: ZERO_USAGE });
-    const reviseChat = vi
-      .spyOn(ShortFictionOutlineReviserAgent.prototype as never, "chat" as never)
-      .mockResolvedValue({ content: validOutline, usage: ZERO_USAGE });
     const context = { client: fakeClient(), model: "fake", projectRoot: "/tmp" };
 
-    const first = await new ShortFictionOutlineAgent(context).createOutline({
+    await new ShortFictionOutlineAgent(context).createOutline({
       direction: "现实悬疑", chapterCount: 12, charsPerChapter: 1000,
-    });
-    await new ShortFictionOutlineReviserAgent(context).reviseOutline({
-      direction: "现实悬疑", outline: first, review: "加强反扑", chapterCount: 12, charsPerChapter: 1000,
     });
 
     expect(createChat.mock.calls[0]?.[1]).toMatchObject({ maxTokens: 16_384 });
-    expect(reviseChat.mock.calls[0]?.[1]).toMatchObject({ maxTokens: 16_384 });
   });
 
   it("parses a complete tagged short-fiction draft", () => {
@@ -146,143 +137,6 @@ describe("public short-fiction chain", () => {
     expect(draft.chapters[1]?.content).not.toContain("陆景琛踹开老宅院门");
     expect(draft.chapters[2]?.content).toContain("直播链接");
     expect(() => validateShortFictionDraftForFinal(draft, { expectedChapters: 3 })).not.toThrow();
-  });
-
-  it("uses the previous draft as assistant context for the second writer pass", async () => {
-    const firstDraft = parseShortFictionBatchDraft(`
-=== SHORT_FICTION_TITLE ===
-初稿标题
-=== CHAPTER 1 TITLE ===
-旧章
-=== CHAPTER 1 CONTENT ===
-旧正文有一处时间线问题。
-`, { expectedChapters: 1 });
-
-    const chatSpy = vi
-      .spyOn(ShortFictionDraftReviserAgent.prototype as never, "chat" as never)
-      .mockResolvedValue({
-        content: `
-=== SHORT_FICTION_TITLE ===
-新稿标题
-=== CHAPTER 1 TITLE ===
-新章
-=== CHAPTER 1 CONTENT ===
-${"新正文修正时间线，并保留人物行动、证据和现场反应。".repeat(45)}
-`,
-        usage: ZERO_USAGE,
-      });
-
-    const agent = new ShortFictionDraftReviserAgent({
-      client: fakeClient(),
-      model: "fake",
-      projectRoot: "/tmp",
-    });
-
-    const revised = await agent.reviseDraft({
-      direction: "女频短篇 婚姻反杀",
-      outlineMarkdown: "12章完整故事方案",
-      draft: firstDraft,
-      review: "时间线不成立，第二天不能先收到律师函再补证据。",
-      chapterCount: 1,
-      charsPerChapter: 1000,
-    });
-
-    const messages = chatSpy.mock.calls[0]?.[0] as ReadonlyArray<{ role: string; content: string }>;
-    expect(messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
-    expect(messages[2]?.content).toContain("旧正文有一处时间线问题");
-    expect(messages[3]?.content).toContain("时间线不成立");
-    expect(revised.storyTitle).toBe("新稿标题");
-
-    chatSpy.mockRestore();
-  });
-
-  it("adopts valid chapter revisions without letting one bad chapter revert the whole draft", async () => {
-    const originalOne = "第一章原稿保留完整场面和证据。".repeat(70);
-    const originalTwo = "第二章原稿保留人物行动和因果。".repeat(70);
-    const acceptedOne = "第一章新版修正时间线并压缩重复反应。".repeat(55);
-    const firstDraft = parseShortFictionBatchDraft(`
-=== SHORT_FICTION_TITLE ===
-初稿标题
-=== CHAPTER 1 TITLE ===
-旧一章
-=== CHAPTER 1 CONTENT ===
-${originalOne}
-=== CHAPTER 2 TITLE ===
-旧二章
-=== CHAPTER 2 CONTENT ===
-${originalTwo}
-`, { expectedChapters: 2 });
-    const chatSpy = vi.spyOn(ShortFictionDraftReviserAgent.prototype as never, "chat" as never)
-      .mockResolvedValueOnce({
-        content: `=== SHORT_FICTION_TITLE ===\n新稿标题\n=== CHAPTER 1 TITLE ===\n新一章\n=== CHAPTER 1 CONTENT ===\n${acceptedOne}`,
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValue({
-        content: "=== CHAPTER 2 TITLE ===\n过短二章\n=== CHAPTER 2 CONTENT ===\n仍然太短。",
-        usage: ZERO_USAGE,
-      });
-    const agent = new ShortFictionDraftReviserAgent({ client: fakeClient(), model: "fake", projectRoot: "/tmp" });
-
-    const revised = await agent.reviseDraft({
-      direction: "现实悬疑",
-      outlineMarkdown: "两章完整方案",
-      draft: firstDraft,
-      review: "修正时间线并压缩重复反应。",
-      chapterCount: 2,
-      charsPerChapter: 1000,
-    });
-
-    expect(revised.chapters[0]?.content).toBe(acceptedOne);
-    expect(revised.chapters[1]?.content).toBe(originalTwo);
-    expect(revised.storyTitle).toBe("新稿标题");
-    expect(chatSpy).toHaveBeenCalledTimes(4);
-  });
-
-  it("rebuilds a stubborn overlong chapter from a semantic beat sheet", async () => {
-    const originalContent = `ORIGINAL_LONG_MARKER${"原章保留了证据、冲突和结尾，但包含大量重复反应。".repeat(180)}`;
-    const compactContent = "压缩后的正文保留证据、因果推进和完整结尾。".repeat(45);
-    const original = parseShortFictionBatchDraft(`
-=== SHORT_FICTION_TITLE ===
-旧账
-=== CHAPTER 1 TITLE ===
-午夜证据
-=== CHAPTER 1 CONTENT ===
-${originalContent}
-`, { expectedChapters: 1 });
-    const overlongResponse = {
-      content: `=== SHORT_FICTION_TITLE ===\n旧账\n=== CHAPTER 1 TITLE ===\n午夜证据\n=== CHAPTER 1 CONTENT ===\n${originalContent}`,
-      usage: ZERO_USAGE,
-    };
-    const chatSpy = vi.spyOn(ShortFictionDraftReviserAgent.prototype as never, "chat" as never)
-      .mockResolvedValueOnce(overlongResponse)
-      .mockResolvedValueOnce(overlongResponse)
-      .mockResolvedValueOnce(overlongResponse)
-      .mockResolvedValueOnce({
-        content: "- 证据必须保留\n- 冲突必须推进\n- 结尾必须完整承接下一章",
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce(overlongResponse)
-      .mockResolvedValueOnce({
-        content: `=== SHORT_FICTION_TITLE ===\n旧账\n=== CHAPTER 1 TITLE ===\n午夜证据\n=== CHAPTER 1 CONTENT ===\n${compactContent}`,
-        usage: ZERO_USAGE,
-      });
-    const agent = new ShortFictionDraftReviserAgent({ client: fakeClient(), model: "fake", projectRoot: "/tmp" });
-
-    const revised = await agent.reviseDraft({
-      direction: "现实悬疑",
-      outlineMarkdown: "第一章找到账本证据",
-      draft: original,
-      review: "删除重复反应，保留证据和章尾。",
-      chapterCount: 1,
-      charsPerChapter: 1000,
-    });
-
-    expect(revised.chapters[0]?.content).toBe(compactContent);
-    expect(chatSpy).toHaveBeenCalledTimes(6);
-    const rebuildMessages = chatSpy.mock.calls[5]?.[0] as ReadonlyArray<{ role: string; content: string }>;
-    expect(rebuildMessages.map((message) => message.content).join("\n")).toContain("Semantic beat sheet");
-    expect(rebuildMessages.map((message) => message.content).join("\n")).toContain("850");
-    expect(rebuildMessages.map((message) => message.content).join("\n")).not.toContain("ORIGINAL_LONG_MARKER");
   });
 
   it("resolves cover generation from project cover config and stored cover secret", async () => {

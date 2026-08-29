@@ -3,7 +3,7 @@ import { PipelineRunner, StateManager } from "@actalk/inkos-core";
 import { readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { loadConfig, buildPipelineConfig, findProjectRoot, getLegacyMigrationHint, resolveContext, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, getLegacyMigrationHint, resolveContext, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatNotifyBatchWriteBody,
   formatNotifyCommandTitle,
@@ -52,6 +52,7 @@ writeCommand
         externalContext: context,
         quiet: opts.quiet,
       }));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
       const count = parseInt(opts.count, 10);
       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
@@ -60,7 +61,10 @@ writeCommand
       for (let i = 0; i < count; i++) {
         if (!opts.json) log(formatWriteNextProgress(language, i + 1, count, bookId));
 
-        const result = await pipeline.writeNextChapter(bookId, wordCount);
+        const result = await pipeline.runWithAgentContext(
+          { activatedSkills },
+          () => pipeline.writeNextChapter(bookId, wordCount),
+        );
         results.push(result);
 
         if (!opts.json) {
@@ -216,8 +220,12 @@ writeCommand
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: opts.brief,
       }));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
-      const result = await pipeline.writeNextChapter(bookId, wordCount);
+      const result = await pipeline.runWithAgentContext(
+        { activatedSkills },
+        () => pipeline.writeNextChapter(bookId, wordCount),
+      );
       const language = resolveCliLanguage(book.language);
 
       if (opts.json) {

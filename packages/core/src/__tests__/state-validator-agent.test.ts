@@ -32,7 +32,7 @@ describe("StateValidatorAgent", () => {
     vi.spyOn(agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> }, "chat")
       .mockResolvedValue({
         content: [
-          "{\"warnings\":[],\"passed\":true}",
+          "{\"warnings\":[],\"consistent\":true,\"reconciliationRequired\":false}",
           "",
           "## Notes",
           "Trailing markdown can still mention braces like } without changing the verdict.",
@@ -50,8 +50,8 @@ describe("StateValidatorAgent", () => {
       "en",
     )).resolves.toEqual({
       warnings: [],
-      passed: true,
-      repairRequired: false,
+      consistent: true,
+      reconciliationRequired: false,
     });
   });
 
@@ -68,7 +68,7 @@ describe("StateValidatorAgent", () => {
     });
     vi.spyOn(agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> }, "chat")
       .mockResolvedValue({
-        content: "REPAIR\n[missing_state_update] 角色已到码头，但状态卡仍在车站",
+        content: "RECONCILE\n[missing_state_update] 角色已到码头，但状态卡仍在车站",
         usage: ZERO_USAGE,
       });
 
@@ -80,8 +80,8 @@ describe("StateValidatorAgent", () => {
       "H1 未推进",
       "H1 未推进",
     )).resolves.toEqual({
-      passed: false,
-      repairRequired: true,
+      consistent: false,
+      reconciliationRequired: true,
       warnings: [{
         category: "missing_state_update",
         description: "角色已到码头，但状态卡仍在车站",
@@ -109,7 +109,7 @@ describe("StateValidatorAgent", () => {
     const chatSpy = vi.spyOn(
       agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> },
       "chat",
-    ).mockResolvedValue({ content: "PASS", usage: ZERO_USAGE });
+    ).mockResolvedValue({ content: "CLEAR", usage: ZERO_USAGE });
 
     await agent.validate("Body.", 1, "old", "new state", "old hooks", "new hooks", "zh");
 
@@ -138,7 +138,7 @@ describe("StateValidatorAgent", () => {
     const chatSpy = vi.spyOn(
       agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> },
       "chat",
-    ).mockResolvedValue({ content: "PASS", usage: ZERO_USAGE });
+    ).mockResolvedValue({ content: "CLEAR", usage: ZERO_USAGE });
 
     await agent.validate(
       "正文确认：第五条规则才是天黑后不准出宿舍。",
@@ -183,7 +183,7 @@ describe("StateValidatorAgent", () => {
     const chatSpy = vi.spyOn(
       agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> },
       "chat",
-    ).mockResolvedValue({ content: "PASS", usage: ZERO_USAGE });
+    ).mockResolvedValue({ content: "CLEAR", usage: ZERO_USAGE });
 
     await agent.validate(
       `${"正文".repeat(7000)}\nCHAPTER_TAIL_MARKER`,

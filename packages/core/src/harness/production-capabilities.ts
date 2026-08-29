@@ -92,6 +92,7 @@ export interface ProductionCapabilityEnvironment {
     profileId: string,
     includeRecommended?: boolean,
   ) => ReadonlyArray<ActivatedSkillGuidance>;
+  readonly skillActivations?: (...skillIds: ReadonlyArray<string>) => ReadonlyArray<ActivatedSkillGuidance>;
   readonly interactiveFilmAuthoring?: boolean;
 }
 
@@ -331,11 +332,17 @@ export function createProductionCapabilityRegistry(
   registerToolCapability(registry, "translation", "Translation", translationTools);
   registerToolCapability(registry, "adaptation", "Adaptation", [
     createFanficBookTool(environment.pipeline, environment.projectRoot, {
-      defaultSkills: environment.profileSkills?.("longform-novel"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        environment.profileSkills?.("longform-novel") ?? [],
+        environment.skillActivations?.("inkos-story-import") ?? [],
+      ),
       activeSkills: environment.activeSkills,
     }),
     createContinuationImportTool(environment.pipeline, environment.work?.id ?? null, environment.projectRoot, {
-      defaultSkills: environment.profileSkills?.("longform-novel"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        environment.profileSkills?.("longform-novel") ?? [],
+        environment.skillActivations?.("inkos-story-import") ?? [],
+      ),
       activeSkills: environment.activeSkills,
     }),
     createSpinoffBookTool(environment.pipeline, environment.projectRoot, {

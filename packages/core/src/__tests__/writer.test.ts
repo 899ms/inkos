@@ -87,7 +87,6 @@ describe("WriterAgent", () => {
         title: "雨夜对账",
         content: "林秋在雨夜重新核对账本。",
         wordCount: 14,
-        preWriteCheck: "",
         postSettlement: "",
         updatedState: "# 当前状态\n\n- 林秋确认账目被篡改。\n",
         updatedLedger: "# 粒子账本\n",
@@ -1334,7 +1333,7 @@ describe("WriterAgent", () => {
     }
   });
 
-  it("sanitizes governed control inputs so raw hook ids and control headings do not enter the creative prompt", async () => {
+  it("preserves governed control semantics in the creative prompt", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-writer-hook-agenda-test-"));
     const bookDir = join(root, "book");
     const storyDir = join(bookDir, "story");
@@ -1460,7 +1459,6 @@ describe("WriterAgent", () => {
       const creativePrompt = (chatSpy.mock.calls[0]?.[0] as ReadonlyArray<{ content: string }> | undefined)?.[1]?.content ?? "";
 
       expect(systemPrompt).not.toContain("Hook-A / Hook-B");
-      expect(systemPrompt).toContain("Real hook_id"); // English book gets the English output scaffold
       // Enum/identifier fields (hookId, movement, chapterType) are NOT sanitized —
       // the writer needs them to understand which hook to move and what chapter type
       // to write. Free-text fields (goal, instruction, targetEffect) ARE sanitized.
@@ -1471,8 +1469,7 @@ describe("WriterAgent", () => {
       // But slug references INSIDE free text (targetEffect) are sanitized
       expect(creativePrompt).not.toContain("stale-ledger");
       expect(creativePrompt).not.toContain("H001");
-      expect(creativePrompt).not.toContain("本章要做的");
-      // The goal text should survive sanitization
+      expect(creativePrompt).toContain("本章要做的是");
       expect(creativePrompt).toContain("Push Mara back toward the archive ledger.");
     } finally {
       await rm(root, { recursive: true, force: true });

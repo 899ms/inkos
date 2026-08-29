@@ -76,17 +76,9 @@ export const DetectionConfigSchema = z.object({
   apiKeyEnv: z.string().min(1),
   threshold: z.number().min(0).max(1).default(0.5),
   enabled: z.boolean().default(false),
-  autoRewrite: z.boolean().default(false),
-  maxRetries: z.number().int().min(1).max(10).default(3),
 });
 
 export type DetectionConfig = z.infer<typeof DetectionConfigSchema>;
-
-export const FoundationConfigSchema = z.object({
-  reviewRetries: z.number().int().min(0).max(10).default(2),
-});
-
-export type FoundationConfig = z.infer<typeof FoundationConfigSchema>;
 
 export const AgentLLMOverrideSchema = z.object({
   model: z.string().min(1),
@@ -120,9 +112,6 @@ export const ProjectConfigSchema = z.object({
   llm: LLMConfigSchema,
   notify: z.array(NotifyChannelSchema).default([]),
   detection: DetectionConfigSchema.optional(),
-  foundation: FoundationConfigSchema.default({
-    reviewRetries: 2,
-  }),
   researchSearch: ResearchSearchConfigSchema,
   modelOverrides: z.record(z.string(), ModelOverrideValueSchema).optional(),
   daemon: z.object({

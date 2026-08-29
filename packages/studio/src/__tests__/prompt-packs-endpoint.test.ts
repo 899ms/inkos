@@ -39,8 +39,7 @@ describe("Studio prompt pack endpoints", () => {
       path: "prompt/play/renderer.md",
     }));
     expect(json.prompts.find((prompt) => prompt.id === "play.mutator")?.source).toBe("builtin");
-    expect(json.prompts.find((prompt) => prompt.id === "play.renderer")?.defaultContent)
-      .toContain("scene renderer");
+    expect(json.prompts.find((prompt) => prompt.id === "play.renderer")?.defaultContent).toBe("");
   });
 
   it("saves and resets project prompt overrides", async () => {
@@ -71,7 +70,7 @@ describe("Studio prompt pack endpoints", () => {
       source: "builtin",
       overridden: false,
     });
-    expect(reset.prompt.content).toContain("scene renderer");
+    expect(reset.prompt.content).toBe("");
   });
 
   it("rejects unknown prompt ids instead of writing arbitrary files", async () => {

@@ -526,12 +526,6 @@ function resolveProjectTextArtifactFile(root: string, rawPath: string): { readon
   return { ...file, contentType };
 }
 
-function isLikelyFailedToolResult(exec: CollectedToolExec): boolean {
-  if (exec.status === "error") return true;
-  const text = `${exec.error ?? ""}\n${exec.result ?? ""}`.toLowerCase();
-  return /\bfailed\b|\berror\b|失败|异常|出错/.test(text);
-}
-
 function hasSuccessfulSubAgentExec(
   execs: ReadonlyArray<CollectedToolExec>,
   agent: string,
@@ -540,7 +534,6 @@ function hasSuccessfulSubAgentExec(
     exec.tool.split("__").at(-1) === "sub_agent"
     && exec.agent === agent
     && exec.status === "completed"
-    && !isLikelyFailedToolResult(exec)
   );
 }
 
@@ -551,12 +544,11 @@ function hasSuccessfulToolExec(
   return execs.some((exec) =>
     exec.tool.split("__").at(-1) === tool.split("__").at(-1)
     && exec.status === "completed"
-    && !isLikelyFailedToolResult(exec)
   );
 }
 
 function hasSuccessfulToolResult(execs: ReadonlyArray<CollectedToolExec>): boolean {
-  return execs.some((exec) => exec.status === "completed" && !isLikelyFailedToolResult(exec));
+  return execs.some((exec) => exec.status === "completed");
 }
 
 function normalizeStudioSessionKind(value: unknown, fallback: SessionKind): SessionKind {
@@ -1023,7 +1015,7 @@ function validateAgentActionExecution(args: {
   readonly language?: StudioLanguage;
 }): string | undefined {
   const lang = args.language ?? "zh";
-  const failedExec = args.collectedToolExecs.find(isLikelyFailedToolResult);
+  const failedExec = args.collectedToolExecs.find((exec) => exec.status === "error");
   if (failedExec) {
     const detail = failedExec.error ?? failedExec.result ?? pick(lang, "未知错误", "unknown error");
     return pick(
@@ -1178,7 +1170,6 @@ function suppressManualTextForTool(exec: CollectedToolExec): boolean {
 function hasSuccessfulToolOwnedResponse(execs: ReadonlyArray<CollectedToolExec>): boolean {
   return execs.some((exec) =>
     exec.status === "completed"
-    && !isLikelyFailedToolResult(exec)
     && suppressManualTextForTool(exec)
   );
 }
@@ -2774,7 +2765,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       model: overrides?.model ?? currentConfig.llm.model,
       projectRoot: root,
       defaultLLMConfig: currentConfig.llm,
-      foundationReviewRetries: currentConfig.foundation?.reviewRetries ?? 2,
       modelOverrides: currentConfig.modelOverrides,
       notifyChannels: currentConfig.notify,
       logger,

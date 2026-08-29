@@ -220,15 +220,6 @@ describe("ContinuityAuditor", () => {
       const systemPrompt = messages?.[0]?.content ?? "";
       const userPrompt = messages?.[1]?.content ?? "";
 
-      expect(systemPrompt).toContain("Hook Check");
-      expect(systemPrompt).toContain("Chapter Memo Drift Check");
-      expect(systemPrompt).not.toContain("Outline Drift Check");
-      expect(systemPrompt).toContain("stays dormant long enough to feel abandoned");
-      expect(systemPrompt).toContain("3-question test");
-      expect(systemPrompt).toContain("same mode long enough to flatten rhythm");
-      expect(systemPrompt).not.toContain("more than 5 chapters");
-      expect(systemPrompt).not.toContain("3 straight chapters");
-      expect(systemPrompt).not.toContain("3+ consecutive chapters");
       expect(systemPrompt).not.toContain("伏笔检查");
       expect(systemPrompt).not.toContain("大纲偏离检测");
 
@@ -434,15 +425,7 @@ describe("ContinuityAuditor", () => {
       const messages = chatSpy.mock.calls[0]?.[0] as
         | ReadonlyArray<{ content: string }>
         | undefined;
-      const systemPrompt = messages?.[0]?.content ?? "";
       const userPrompt = messages?.[1]?.content ?? "";
-
-      // Prompt declares structure-only scope and sparse-memo legality.
-      expect(systemPrompt).toContain("审稿边界");
-      expect(systemPrompt).toContain("你不审文笔");
-      expect(systemPrompt).toContain("稀疏 memo 是合法状态");
-      expect(systemPrompt).toContain("章节备忘偏离");
-      expect(systemPrompt).not.toContain("大纲偏离检测");
 
       // User prompt injects the memo for drift-checking.
       expect(userPrompt).toContain("## 章节备忘（用于 memo 偏离检测）");

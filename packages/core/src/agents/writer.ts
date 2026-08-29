@@ -47,7 +47,6 @@ import {
   buildNarrativeIntentBrief,
   renderMemoAsNarrativeBlock,
   renderNarrativeSelectedContext,
-  sanitizeNarrativeEvidenceBlock,
 } from "../utils/narrative-control.js";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -100,7 +99,6 @@ export interface WriteChapterOutput {
   readonly title: string;
   readonly content: string;
   readonly wordCount: number;
-  readonly preWriteCheck: string;
   readonly postSettlement: string;
   readonly runtimeStateDelta?: RuntimeStateDelta;
   readonly runtimeStateSnapshot?: RuntimeStateSnapshot;
@@ -169,7 +167,7 @@ export class WriterAgent extends BaseAgent {
     const fingerprintChapters = await this.loadRecentChapters(bookDir, chapterNumber, 5);
 
     // Load genre profile + book rules
-    const { profile: genreProfile, body: genreBody } =
+    const { profile: genreProfile } =
       await readGenreProfile(this.ctx.projectRoot, book.genre);
     const parsedBookRules = await readBookRules(bookDir);
     const bookRules = parsedBookRules?.rules ?? null;
@@ -203,9 +201,8 @@ export class WriterAgent extends BaseAgent {
 
     // ── Phase 1: Creative writing (temperature 0.7) ──
     const creativeSystemPrompt = await this.withPromptPackGuidance(buildWriterSystemPrompt(
-      book, genreProfile, bookRules, bookRulesBody, genreBody, styleGuide, styleFingerprint,
-      chapterNumber, "creative", fanficContext, resolvedLanguage,
-      "governed",
+      book, genreProfile, bookRules, bookRulesBody, styleGuide, styleFingerprint,
+      fanficContext, resolvedLanguage,
       resolvedLengthSpec,
     ), "longform.writer");
 
@@ -239,13 +236,6 @@ export class WriterAgent extends BaseAgent {
     const creativeUsage = creativeResponse.usage;
 
     const creative = parseCreativeOutput(chapterNumber, creativeResponse.content, resolvedLengthSpec.countingMode);
-
-    // Phase 4: soft-check that PRE_WRITE_CHECK aligns with the chapter memo.
-    // Memo was already parse-validated in the planner, so this only warns —
-    // the LLM self-check may have skipped or abbreviated a row.
-    if (input.chapterMemo) {
-      this.verifyPreWriteCheckAlignsWithMemo(creative.preWriteCheck, chapterNumber, resolvedLanguage);
-    }
 
     // ── Phase 2: State settlement (temperature 0.3) ──
     this.logInfo(resolvedLanguage, {
@@ -368,7 +358,6 @@ export class WriterAgent extends BaseAgent {
       title: creative.title,
       content: surfaceNormalizedContent,
       wordCount: surfaceNormalizedWordCount,
-      preWriteCheck: creative.preWriteCheck,
       postSettlement: settlement.postSettlement,
       runtimeStateDelta: resolvedRuntimeStateDelta,
       runtimeStateSnapshot: runtimeStateArtifacts?.snapshot ?? settlement.runtimeStateSnapshot,
@@ -471,7 +460,6 @@ export class WriterAgent extends BaseAgent {
         input.content,
         resolvedLanguage === "en" ? "en_words" : "zh_chars",
       ),
-      preWriteCheck: "",
       postSettlement: settlement.postSettlement,
       runtimeStateDelta: runtimeStateArtifacts?.resolvedDelta ?? settlement.runtimeStateDelta,
       runtimeStateSnapshot: runtimeStateArtifacts?.snapshot ?? settlement.runtimeStateSnapshot,
@@ -573,6 +561,7 @@ export class WriterAgent extends BaseAgent {
       selectedEvidenceBlock: params.selectedEvidenceBlock,
       governedControlBlock,
       validationFeedback: params.validationFeedback,
+      language: resolvedLang,
     });
 
     const response = await this.chat(
@@ -761,7 +750,7 @@ export class WriterAgent extends BaseAgent {
       ? `\n${params.varianceBrief}\n`
       : "";
     const selectedEvidenceBlock = params.selectedEvidenceBlock
-      ? `\n${sanitizeNarrativeEvidenceBlock(params.selectedEvidenceBlock, language)}\n`
+      ? `\n${params.selectedEvidenceBlock}\n`
       : "";
     const chapterContextBlock = this.buildChapterContextBlock(params.externalContext, language);
     const briefNarrative = renderMemoAsNarrativeBlock(params.chapterMemo, params.chapterIntentData, language);
@@ -785,8 +774,7 @@ ${selectedEvidenceBlock}
 
 ${varianceBlock}
 ${lengthRequirementBlock}
-- Output PRE_WRITE_CHECK first, then the chapter
-- Output only PRE_WRITE_CHECK, CHAPTER_TITLE, and CHAPTER_CONTENT blocks`;
+- Output only CHAPTER_TITLE and CHAPTER_CONTENT blocks`;
     }
 
     return `请续写第${params.chapterNumber}章。
@@ -807,8 +795,7 @@ ${selectedEvidenceBlock}
 
 ${varianceBlock}
 ${lengthRequirementBlock}
-- 先输出写作自检表，再写正文
-- 只需输出 PRE_WRITE_CHECK、CHAPTER_TITLE、CHAPTER_CONTENT 三个区块`;
+- 只输出 CHAPTER_TITLE、CHAPTER_CONTENT 两个区块`;
   }
 
   private buildChapterContextBlock(externalContext: string | undefined, language: "zh" | "en"): string {
@@ -890,48 +877,6 @@ ${selectedContext || "- none"}
 
 ### 当前覆盖
 ${overrides}\n`;
-  }
-
-  /**
-   * Soft-check that the LLM's PRE_WRITE_CHECK output references the three
-   * non-negotiable memo sections: 当前任务, 不要做, 章尾必须发生的改变.
-   *
-   * This is NOT a hard gate — the memo was already parse-validated in the
-   * planner, and the writer prompt already tells the LLM to align to memo.
-   * We only warn when the LLM skipped a section, so the chapter still ships.
-   */
-  private verifyPreWriteCheckAlignsWithMemo(
-    preWriteCheck: string,
-    chapterNumber: number,
-    language: "zh" | "en",
-  ): void {
-    if (!preWriteCheck || preWriteCheck.trim().length === 0) {
-      this.logWarn(language, {
-        zh: `第${chapterNumber}章 PRE_WRITE_CHECK 为空，无法对齐 chapter_memo`,
-        en: `Chapter ${chapterNumber} PRE_WRITE_CHECK is empty; cannot verify memo alignment`,
-      });
-      return;
-    }
-
-    const required = language === "en"
-      ? [
-          { needle: "Current task", label: "Current task" },
-          { needle: "Do not", label: "Do not" },
-          { needle: "end-of-chapter", label: "Required end-of-chapter change" },
-        ]
-      : [
-          { needle: "当前任务", label: "当前任务" },
-          { needle: "不要做", label: "不要做" },
-          { needle: "章尾", label: "章尾必须发生的改变" },
-        ];
-    const missing = required.filter((r) => !preWriteCheck.includes(r.needle)).map((r) => r.label);
-
-    if (missing.length > 0) {
-      this.logWarn(language, {
-        zh: `第${chapterNumber}章 PRE_WRITE_CHECK 缺少 memo 章节检查：${missing.join("、")}`,
-        en: `Chapter ${chapterNumber} PRE_WRITE_CHECK missing memo sections: ${missing.join(", ")}`,
-      });
-    }
   }
 
   private buildLengthRequirementBlock(lengthSpec: LengthSpec, language: "zh" | "en"): string {

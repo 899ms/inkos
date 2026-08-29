@@ -302,27 +302,7 @@ ${VALID_EN_BODY}
     expect(result.memo.chapter).toBe(1);
     expect(result.memo.isGoldenOpening).toBe(true); // ch1 en → also golden (≤5)
 
-    // System prompt must be the English variant
-    const callArgs = chatSpy.mock.calls[0]!;
-    const messages = callArgs[2] as ReadonlyArray<{ role: string; content: string }>;
-    const systemMsg = messages.find((m) => m.role === "system");
-    const userMsg = messages.find((m) => m.role === "user");
-
-    // English system prompt markers
-    expect(systemMsg?.content).toContain("editor-in-chief");
-    expect(systemMsg?.content).toContain("Output format (strict)");
-    expect(systemMsg?.content).not.toContain("你是这本小说的创作总编");
-
-    // English user template markers
-    expect(userMsg?.content).toContain("# Chapter 1 memo request");
-    expect(userMsg?.content).toContain("Last screen of previous chapter");
-    expect(userMsg?.content).toContain("Golden opening chapter: yes");
-    expect(userMsg?.content).not.toContain("# 第 1 章 memo 请求");
-
-    // English golden-opening guidance appended for ch ≤ 3
-    expect(userMsg?.content).toContain("Golden Opening Guidance");
-    expect(userMsg?.content).toContain("Chapter 1");
-    expect(userMsg?.content).not.toContain("黄金三章规划指引");
+    expect(result.memo.body).toContain("## Current task");
   });
 
   it("returns a degraded memo instead of throwing when all 3 attempts fail", async () => {
@@ -339,7 +319,6 @@ ${VALID_EN_BODY}
 
     expect(result.memo.chapter).toBe(2);
     expect(result.memo.goal.length).toBeGreaterThan(0);
-    expect(result.memo.body).toContain("## 当前任务");
     expect(result.memo.body).toContain("## Planner warning");
     expect(result.intentMarkdown).toContain("Planner warning");
   });

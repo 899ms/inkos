@@ -12,7 +12,7 @@ import {
   selectNarrativeBranch,
   type NarrativeForecast,
 } from "@actalk/inkos-core";
-import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError, resolveBookId } from "../utils.js";
+import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError, resolveBookId, resolveCliProfileSkills } from "../utils.js";
 
 // CLI surface for RFC #342: create / show / select. All three operate only on
 // story/runtime/narrative-forecasts/ artifacts; canonical files stay untouched.
@@ -41,16 +41,17 @@ forecastCommand
       if (opts.llmBaseUrl) config.llm.baseUrl = opts.llmBaseUrl;
       if (opts.model) config.llm.model = opts.model;
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { quiet: Boolean(opts.json) }));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
-      const result = await createNarrativeForecast({
-        projectRoot: root,
-        bookId,
-        divergence: opts.divergence,
-        branchCount,
-        horizon,
-        runtime: pipeline.createAgentContext("forecast", bookId),
-        onProgress: opts.json ? undefined : (message) => log(message),
-      });
+      const result = await pipeline.runWithAgentContext({ activatedSkills }, () => createNarrativeForecast({
+          projectRoot: root,
+          bookId,
+          divergence: opts.divergence,
+          branchCount,
+          horizon,
+          runtime: pipeline.createAgentContext("forecast", bookId),
+          onProgress: opts.json ? undefined : (message) => log(message),
+        }));
 
       if (opts.json) {
         log(JSON.stringify({

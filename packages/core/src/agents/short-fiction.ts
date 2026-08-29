@@ -1,18 +1,12 @@
 import { BaseAgent } from "./base.js";
 import {
-  buildLengthSpec,
   countChapterLength,
-  isOutsideHardRange,
   resolveLengthCountingMode,
 } from "../utils/length-metrics.js";
 import {
   type ShortFictionLanguage,
   buildShortFictionDraftReviewSystemPrompt,
   buildShortFictionDraftReviewUserPrompt,
-  buildShortFictionDraftRevisionFollowup,
-  buildShortFictionOutlineReviewSystemPrompt,
-  buildShortFictionOutlineReviewUserPrompt,
-  buildShortFictionOutlineRevisionFollowup,
   buildShortFictionOutlineSystemPrompt,
   buildShortFictionOutlineUserPrompt,
   buildShortFictionPackageSystemPrompt,
@@ -78,19 +72,6 @@ export interface ShortFictionOutlineInput {
   readonly language?: ShortFictionLanguage;
 }
 
-export interface ShortFictionOutlineReviewInput {
-  readonly direction: string;
-  readonly outline: ShortFictionOutline;
-  readonly reference?: ShortFictionReference;
-  readonly language?: ShortFictionLanguage;
-}
-
-export interface ShortFictionOutlineRevisionInput extends ShortFictionOutlineReviewInput {
-  readonly review: string;
-  readonly chapterCount: number;
-  readonly charsPerChapter: number;
-}
-
 export interface ShortFictionDraftInput {
   readonly direction: string;
   readonly outlineMarkdown: string;
@@ -106,10 +87,6 @@ export interface ShortFictionDraftInput {
 
 export interface ShortFictionDraftReviewInput extends ShortFictionDraftInput {
   readonly draft: ShortFictionBatchDraft;
-}
-
-export interface ShortFictionDraftRevisionInput extends ShortFictionDraftReviewInput {
-  readonly review: string;
 }
 
 export interface ShortFictionPackageInput {
@@ -130,40 +107,6 @@ export class ShortFictionOutlineAgent extends BaseAgent {
         { role: "system", content: buildShortFictionOutlineSystemPrompt(input.language) },
         { role: "user", content: buildShortFictionOutlineUserPrompt(input, input.language) },
       ], { temperature: 0.55, maxTokens: 16_384 }), this.name, this.log);
-
-    return parseShortFictionOutline(response.content, input.language);
-  }
-}
-
-export class ShortFictionOutlineReviewerAgent extends BaseAgent {
-  get name(): string {
-    return "short-fiction-outline-reviewer";
-  }
-
-  async reviewOutline(input: ShortFictionOutlineReviewInput): Promise<string> {
-    const response = await retryShortFictionCall(() =>
-      this.chat([
-        { role: "system", content: buildShortFictionOutlineReviewSystemPrompt(input.language) },
-        { role: "user", content: buildShortFictionOutlineReviewUserPrompt(input, input.language) },
-      ], { temperature: 0.3, maxTokens: 4096 }), this.name, this.log);
-
-    return response.content.trim();
-  }
-}
-
-export class ShortFictionOutlineReviserAgent extends BaseAgent {
-  get name(): string {
-    return "short-fiction-outline-reviser";
-  }
-
-  async reviseOutline(input: ShortFictionOutlineRevisionInput): Promise<ShortFictionOutline> {
-    const response = await retryShortFictionCall(() =>
-      this.chat([
-        { role: "system", content: buildShortFictionOutlineSystemPrompt(input.language) },
-        { role: "user", content: buildShortFictionOutlineUserPrompt(input, input.language) },
-        { role: "assistant", content: input.outline.rawContent.trim() },
-        { role: "user", content: buildShortFictionOutlineRevisionFollowup(input, input.language) },
-      ], { temperature: 0.45, maxTokens: 16_384 }), this.name, this.log);
 
     return parseShortFictionOutline(response.content, input.language);
   }
@@ -277,151 +220,6 @@ export class ShortFictionDraftReviewerAgent extends BaseAgent {
       ], { temperature: 0.3, maxTokens: 8192 }), this.name, this.log);
 
     return response.content.trim();
-  }
-}
-
-export class ShortFictionDraftReviserAgent extends BaseAgent {
-  get name(): string {
-    return "short-fiction-draft-reviser";
-  }
-
-  async reviseDraft(input: ShortFictionDraftRevisionInput): Promise<ShortFictionBatchDraft> {
-    const batches = buildShortFictionChapterBatches(
-      input.chapterNumbers ?? allChapterNumbers(input.chapterCount),
-      input.charsPerChapter,
-      this.ctx.client.defaults.maxTokens,
-    );
-    const accepted = new Map(input.draft.chapters.map((chapter) => [chapter.number, chapter]));
-    let storyTitle = input.draft.storyTitle;
-    let openingHook = input.draft.openingHook;
-    const length = buildLengthSpec(input.charsPerChapter, input.language ?? "zh");
-    for (const chapterNumbers of batches) {
-      const batchDraft = selectShortFictionChapters(input.draft, chapterNumbers);
-      const messages = [
-        {
-          role: "system" as const,
-          content: input.language === "en"
-            ? "You are a precision short-fiction reviser. Preserve the chapter's causal events and emotional payoff, but obey the requested word range exactly. Compress semantically by merging repeated reactions, exposition, and transitions; never truncate the ending. Output only the requested tagged blocks."
-            : "你是精确的短篇改稿编辑。保留本章因果事件、证据和情绪回报，但必须严格服从目标字数区间。过长时语义压缩重复反应、解释和转场，不能截断结尾；只输出规定标签块。",
-        },
-        { role: "user" as const, content: buildShortFictionWriterUserPrompt({ ...input, chapterNumbers }, input.language) },
-        { role: "assistant" as const, content: renderShortFictionDraftMarkdown(batchDraft, input.language) },
-        { role: "user" as const, content: buildShortFictionDraftRevisionFollowup({ ...input, chapterNumbers }, input.language) },
-      ];
-      let response = await retryShortFictionCall(() =>
-        this.chat(messages, {
-          temperature: 0.45,
-          maxTokens: estimateShortFictionMaxTokens(
-            chapterNumbers.length,
-            input.charsPerChapter,
-            this.ctx.client.defaults.maxTokens,
-          ),
-        }), this.name, this.log);
-      let revised = parseShortFictionBatchDraft(response.content, {
-        expectedChapters: input.chapterCount,
-        language: input.language,
-      });
-      let candidate = revised.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
-      for (let correction = 0; correction < 2 && (!candidate || isOutsideHardRange(candidate.charCount, length)); correction += 1) {
-        const actual = candidate?.charCount ?? 0;
-        const tooLong = actual > length.hardMax;
-        response = await retryShortFictionCall(() => this.chat([
-          ...messages,
-          { role: "assistant", content: response.content },
-          {
-            role: "user",
-            content: input.language === "en"
-              ? tooLong
-                ? `This version is ${actual} words, far above the ${length.hardMin}-${length.hardMax} range. Rewrite it to about ${length.target} words. Keep every indispensable event and clue, but remove repeated reactions, duplicate explanations, and non-causal transitions. Do not add scenes and do not cut off the ending. Output only the required blocks.`
-                : `This version is ${actual} words, below the ${length.hardMin}-${length.hardMax} range. Rewrite it to about ${length.target} words by completing one existing scene with action, dialogue, and evidence. Do not add a new subplot. Output only the required blocks.`
-              : tooLong
-                ? `这版有 ${actual} 字，明显超过 ${length.hardMin}-${length.hardMax} 字区间。重写到约 ${length.target} 字：保留不可缺的事件和证据，删除重复反应、重复解释和不推动因果的转场；不要新增场景，也不能截断结尾。只输出规定标签块。`
-                : `这版只有 ${actual} 字，低于 ${length.hardMin}-${length.hardMax} 字区间。重写到约 ${length.target} 字：只把现有一个场景用动作、对话和证据写完整，不要新增支线。只输出规定标签块。`,
-          },
-        ], {
-          temperature: correction === 0 ? 0.3 : 0.2,
-          maxTokens: estimateShortFictionMaxTokens(1, input.charsPerChapter, this.ctx.client.defaults.maxTokens),
-        }), this.name, this.log);
-        revised = parseShortFictionBatchDraft(response.content, {
-          expectedChapters: input.chapterCount,
-          language: input.language,
-        });
-        candidate = revised.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
-      }
-      if (candidate && candidate.charCount > length.hardMax) {
-        const sourceChapter = batchDraft.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
-        if (sourceChapter) {
-          const planResponse = await retryShortFictionCall(() => this.chat([
-            {
-              role: "system",
-              content: input.language === "en"
-                ? "You are a semantic compression editor. Extract only the indispensable causal events, clues, relationship turns, emotional payoff, and exact ending transition from the chapter. Return a compact Markdown beat sheet, not prose."
-                : "你是语义压缩编辑。只提炼本章不可丢失的因果事件、证据、关系转折、情绪回报和准确的结尾承接。输出紧凑 Markdown 节拍表，不写正文。",
-            },
-            {
-              role: "user",
-              content: input.language === "en"
-                ? `Chapter ${sourceChapter.number}: ${sourceChapter.title}\nTarget: about ${length.target} words (${length.hardMin}-${length.hardMax}).\n\n${sourceChapter.content}`
-                : `第${sourceChapter.number}章：${sourceChapter.title}\n目标：约${length.target}字（${length.hardMin}-${length.hardMax}字）。\n\n${sourceChapter.content}`,
-            },
-          ], { temperature: 0.2, maxTokens: 2048 }), this.name, this.log);
-          for (let rebuildAttempt = 0; rebuildAttempt < 2; rebuildAttempt += 1) {
-            const requestedTarget = rebuildAttempt === 0 || !candidate || candidate.charCount <= length.hardMax
-              ? length.target
-              : Math.max(length.hardMin, Math.round(length.target * 0.85));
-            const rebuiltResponse = await retryShortFictionCall(() => this.chat([
-              {
-                role: "system",
-                content: input.language === "en"
-                  ? "Write one complete short-fiction chapter from the supplied semantic beat sheet. Preserve every listed fact and the ending transition, but do not invent extra scenes. Obey the target word range. Output only SHORT_FICTION/CHAPTER tagged blocks."
-                  : "根据给出的语义节拍表重写一章完整短篇正文。保留表中每条事实和结尾承接，不新增场景；严格服从目标字数区间。只输出 SHORT_FICTION/CHAPTER 标签块。",
-              },
-              {
-                role: "user",
-                content: [
-                  `=== SHORT_FICTION_TITLE ===\n${storyTitle}`,
-                  `=== CHAPTER ${sourceChapter.number} TITLE ===\n${sourceChapter.title}`,
-                  input.language === "en"
-                    ? `Target ${requestedTarget} words; accepted hard range ${length.hardMin}-${length.hardMax}.`
-                    : `本次写作目标 ${requestedTarget} 字；验收硬范围 ${length.hardMin}-${length.hardMax} 字。`,
-                  "## Semantic beat sheet",
-                  planResponse.content.trim(),
-                ].join("\n\n"),
-              },
-            ], {
-              temperature: rebuildAttempt === 0 ? 0.25 : 0.15,
-              maxTokens: estimateShortFictionMaxTokens(1, input.charsPerChapter, this.ctx.client.defaults.maxTokens),
-            }), this.name, this.log);
-            const rebuilt = parseShortFictionBatchDraft(rebuiltResponse.content, {
-              expectedChapters: input.chapterCount,
-              language: input.language,
-            });
-            candidate = rebuilt.chapters.find((chapter) => chapter.number === chapterNumbers[0]);
-            if (candidate && !isOutsideHardRange(candidate.charCount, length)) {
-              revised = rebuilt;
-              break;
-            }
-          }
-        }
-      }
-      if (candidate && !isOutsideHardRange(candidate.charCount, length)) {
-        accepted.set(candidate.number, candidate);
-        storyTitle = revised.storyTitle || storyTitle;
-        openingHook = revised.openingHook ?? openingHook;
-      }
-    }
-
-    const chapters = input.draft.chapters.map((chapter) => accepted.get(chapter.number) ?? chapter);
-    const merged: ShortFictionBatchDraft = {
-      storyTitle,
-      ...(openingHook ? { openingHook } : {}),
-      chapters,
-      rawContent: "",
-    };
-    return {
-      ...merged,
-      rawContent: renderShortFictionDraftMarkdown(merged, input.language),
-    };
   }
 }
 

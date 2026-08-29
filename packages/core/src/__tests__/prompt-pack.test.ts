@@ -27,12 +27,12 @@ describe("prompt pack loader", () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  it("loads a structurally complete built-in prompt", async () => {
+  it("exposes an empty built-in override slot without duplicating Skill guidance", async () => {
     const loaded = await loadPromptPackPrompt({ promptId: "longform.writer" });
 
     expect(loaded.source).toBe("builtin");
     expect(loaded.promptId).toBe("longform.writer");
-    expect(loaded.content.trim().length).toBeGreaterThan(0);
+    expect(loaded.content).toBe("");
   });
 
   it("resolves project, user, then built-in precedence as one flow", async () => {

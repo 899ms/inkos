@@ -52,13 +52,32 @@ export async function reviewChapterDraft(params: {
   const content = params.normalize(params.output.content);
   params.assertNotEmpty(content);
   const wordCount = countChapterLength(content, params.lengthSpec.countingMode);
-  const modelReview = await params.auditor.auditChapter(
-    params.bookDir,
-    content,
-    params.chapterNumber,
-    params.book.genre,
-    params.controlInput ? { ...params.controlInput, temperature: 0.3 } : undefined,
-  );
+  let modelReview: AuditResult;
+  try {
+    modelReview = await params.auditor.auditChapter(
+      params.bookDir,
+      content,
+      params.chapterNumber,
+      params.book.genre,
+      params.controlInput ? { ...params.controlInput, temperature: 0.3 } : undefined,
+    );
+  } catch (error) {
+    const isEnglish = params.lengthSpec.countingMode === "en_words";
+    modelReview = {
+      parseFailed: true,
+      issues: [{
+        severity: "warning",
+        category: "review-unavailable",
+        description: isEnglish
+          ? `Review observation was unavailable: ${String(error)}`
+          : `审稿观察暂不可用：${String(error)}`,
+        suggestion: isEnglish
+          ? "The chapter remains persisted; request review again when needed."
+          : "正文照常落盘；需要时可再次发起审稿。",
+      }],
+      summary: isEnglish ? "Review unavailable" : "审稿暂不可用",
+    };
+  }
   const lengthIssues: AuditIssue[] = isOutsideHardRange(wordCount, params.lengthSpec)
     ? [{
         severity: "warning",

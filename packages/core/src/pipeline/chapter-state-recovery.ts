@@ -36,21 +36,23 @@ export interface SettlementRetryParams {
 
 export type SettlementRetryResult =
   | {
-    readonly kind: "recovered";
+    readonly kind: "reconciled";
     readonly output: WriteChapterOutput;
     readonly validation: ValidationResult;
   }
   | {
-    readonly kind: "failed";
+    readonly kind: "unresolved";
+    readonly output: WriteChapterOutput;
+    readonly validation: ValidationResult;
     readonly issues: ReadonlyArray<AuditIssue>;
   };
 
-export async function retrySettlementAfterValidationFailure(
+export async function reconcileChapterStateAfterReview(
   params: SettlementRetryParams,
 ): Promise<SettlementRetryResult> {
   params.logWarn?.({
-    zh: `状态校验失败，正在仅重试结算层（第${params.chapterNumber}章）`,
-    en: `State validation failed; retrying settlement only for chapter ${params.chapterNumber}`,
+    zh: `状态投影需要对账，正在仅重算第${params.chapterNumber}章结算层`,
+    en: `State projection needs reconciliation; recalculating settlement for chapter ${params.chapterNumber}`,
   });
 
   const retryOutput = await params.writer.settleChapterState({
@@ -65,7 +67,7 @@ export async function retrySettlementAfterValidationFailure(
     chapterIntent: params.reducedControlInput?.chapterIntent,
     contextPackage: params.reducedControlInput?.contextPackage,
     ruleStack: params.reducedControlInput?.ruleStack,
-    validationFeedback: buildStateValidationFeedback(
+    validationFeedback: buildStateReconciliationFeedback(
       params.originalValidation.warnings,
       params.language,
     ),
@@ -83,7 +85,20 @@ export async function retrySettlementAfterValidationFailure(
       params.language,
     );
   } catch (error) {
-    throw new Error(`State validation retry failed for chapter ${params.chapterNumber}: ${String(error)}`);
+    const validation: ValidationResult = {
+      consistent: false,
+      reconciliationRequired: true,
+      warnings: [{
+        category: "state-validation-unavailable",
+        description: `State reconciliation could not be verified: ${String(error)}`,
+      }],
+    };
+    return {
+      kind: "unresolved",
+      output: retryOutput,
+      validation,
+      issues: buildStateReconciliationIssues(validation.warnings, params.language),
+    };
   }
 
   if (retryValidation.warnings.length > 0) {
@@ -96,21 +111,23 @@ export async function retrySettlementAfterValidationFailure(
     }
   }
 
-  if (retryValidation.passed && !retryValidation.repairRequired) {
+  if (retryValidation.consistent && !retryValidation.reconciliationRequired) {
     return {
-      kind: "recovered",
+      kind: "reconciled",
       output: retryOutput,
       validation: retryValidation,
     };
   }
 
   return {
-    kind: "failed",
-    issues: buildStateValidationIssues(retryValidation.warnings, params.language),
+    kind: "unresolved",
+    output: retryOutput,
+    validation: retryValidation,
+    issues: buildStateReconciliationIssues(retryValidation.warnings, params.language),
   };
 }
 
-export function buildStateValidationFeedback(
+export function buildStateReconciliationFeedback(
   warnings: ReadonlyArray<ValidationWarning>,
   language: LengthLanguage,
 ): string {
@@ -122,18 +139,18 @@ export function buildStateValidationFeedback(
 
   if (language === "en") {
     return [
-      "The previous settlement failed validation. Fix these contradictions against the chapter body:",
+      "The previous settlement needs reconciliation. Align these differences with the chapter body:",
       ...warnings.map((warning) => `- [${warning.category}] ${warning.description}`),
     ].join("\n");
   }
 
   return [
-    "上一次状态结算未通过校验。请对照正文修正以下矛盾：",
+    "上一次状态结算需要对账。请对照正文修正以下差异：",
     ...warnings.map((warning) => `- [${warning.category}] ${warning.description}`),
   ].join("\n");
 }
 
-export function buildStateValidationIssues(
+export function buildStateReconciliationIssues(
   warnings: ReadonlyArray<ValidationWarning>,
   language: LengthLanguage,
 ): ReadonlyArray<AuditIssue> {
@@ -143,8 +160,8 @@ export function buildStateValidationIssues(
       category: "state-validation",
       description: warning.description,
       suggestion: language === "en"
-        ? "Repair chapter state from the persisted body before continuing."
-        : "请先基于已保存正文修复本章 state，再继续后续章节。",
+        ? "Review or explicitly reconcile state before relying on this projection."
+        : "依赖这份状态投影前，请复核或显式执行状态对账。",
     }));
   }
 
@@ -152,10 +169,10 @@ export function buildStateValidationIssues(
     severity: "warning",
     category: "state-validation",
     description: language === "en"
-      ? "State validation still failed after settlement retry."
-      : "状态结算重试后仍未通过校验。",
+      ? "State reconciliation remains unresolved after recalculation."
+      : "状态结算重算后仍有未解决差异。",
     suggestion: language === "en"
-      ? "Repair chapter state from the persisted body before continuing."
-      : "请先基于已保存正文修复本章 state，再继续后续章节。",
+      ? "Review or explicitly reconcile state before relying on this projection."
+      : "依赖这份状态投影前，请复核或显式执行状态对账。",
   }];
 }

@@ -4,7 +4,7 @@ import type { BookConfig } from "../models/book.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { Logger } from "../utils/logger.js";
 import type { LengthLanguage } from "../utils/length-metrics.js";
-import { retrySettlementAfterValidationFailure } from "./chapter-state-recovery.js";
+import { reconcileChapterStateAfterReview } from "./chapter-state-recovery.js";
 
 export async function validateChapterTruthPersistence(params: {
   readonly writer: Pick<WriterAgent, "settleChapterState">;
@@ -49,7 +49,17 @@ export async function validateChapterTruthPersistence(params: {
     );
   } catch (error) {
     params.logger?.warn(`State validation error for chapter ${params.chapterNumber}: ${String(error)}`);
-    throw new Error(`Chapter state validation unavailable: ${String(error)}`);
+    return {
+      validation: {
+        consistent: false,
+        reconciliationRequired: true,
+        warnings: [{
+          category: "state-validation-unavailable",
+          description: `State validation was unavailable: ${String(error)}`,
+        }],
+      },
+      persistenceOutput,
+    };
   }
 
   if (validation.warnings.length > 0) {
@@ -62,8 +72,8 @@ export async function validateChapterTruthPersistence(params: {
     }
   }
 
-  if (!validation.passed || validation.repairRequired) {
-    const recovery = await retrySettlementAfterValidationFailure({
+  if (!validation.consistent || validation.reconciliationRequired) {
+    const recovery = await reconcileChapterStateAfterReview({
       writer: params.writer,
       validator: params.validator,
       book: params.book,
@@ -80,12 +90,8 @@ export async function validateChapterTruthPersistence(params: {
       logger: params.logger,
     });
 
-    if (recovery.kind === "recovered") {
-      persistenceOutput = recovery.output;
-      validation = recovery.validation;
-    } else {
-      throw new Error(recovery.issues.map((issue) => issue.description).join("; "));
-    }
+    persistenceOutput = recovery.output;
+    validation = recovery.validation;
   }
 
   return {

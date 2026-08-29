@@ -311,35 +311,11 @@ export class PlannerAgent extends BaseAgent {
         "## Thread refs",
         "none",
         "",
-        "## Scene and length budget",
-        `Plan 2-5 concrete scenes whose combined draft length stays within ${input.lengthSpec.hardMin}-${input.lengthSpec.hardMax} words and aims for ${input.lengthSpec.target} words. Give each scene a distinct action, consequence, and approximate word budget.`,
-        "",
-        "## Current task",
-        `Use the current chapter goal and authoritative book context to continue chapter ${input.chapterNumber} without inventing a new direction.`,
-        "",
-        "## What the reader is waiting for right now",
-        "Keep the reader's active expectation from the outline and previous chapter in focus; do not replace it with a generic scene.",
-        "",
-        "## To pay off / to keep buried",
-        "Pay off only the near-term promises already supported by context; keep larger secrets buried unless the outline explicitly asks for them.",
-        "",
-        "## What the slow / transitional beats carry",
-        "If a slower beat is needed, make it carry pressure, evidence, relationship movement, or a concrete setup for the next action.",
-        "",
-        "## Three-question check on the key choice",
-        "The protagonist's main choice must have a reason, match current interest, and stay consistent with the established persona.",
-        "",
-        "## Required end-of-chapter change",
-        "End with a concrete change in information, pressure, relationship, objective, or risk so the chapter is not only summary.",
-        "",
-        "## Hook ledger for this chapter",
-        "advance: keep the active promise moving; resolve: only settle what has evidence; defer: preserve larger threads for later chapters.",
-        "",
-        "## Do not",
-        "Do not contradict established facts, ignore the user's current instruction, or turn the fallback memo into a new outline.",
+        "## Runtime limits",
+        `Target ${input.lengthSpec.target} words; accepted range ${input.lengthSpec.hardMin}-${input.lengthSpec.hardMax}. Apply the activated long-writing Skill to the current governed context.`,
         "",
         "## Planner warning",
-        `The model failed to produce a valid chapter memo after ${MEMO_RETRY_LIMIT} attempts. Last parser error: ${input.errorMessage}`,
+        `Structured memo unavailable after ${MEMO_RETRY_LIMIT} attempts: ${input.errorMessage}`,
       ].join("\n");
     }
 
@@ -352,35 +328,11 @@ export class PlannerAgent extends BaseAgent {
       "## 关联线索",
       "无",
       "",
-      "## 场景与篇幅预算",
-      `规划 2-5 个有明确行动与后果的真实场景，总篇幅控制在 ${input.lengthSpec.hardMin}-${input.lengthSpec.hardMax} 字，目标约 ${input.lengthSpec.target} 字；为每个场景分配动态字数预算，不靠总结和重复内心戏凑字数。`,
-      "",
-      "## 当前任务",
-      `沿用当前章节目标和权威设定推进第 ${input.chapterNumber} 章，不临时改方向，也不把章节写成泛泛过渡。`,
-      "",
-      "## 读者此刻在等什么",
-      "延续大纲和上一章形成的读者期待，优先回应当前已经建立的压力、证据、关系或目标变化。",
-      "",
-      "## 该兑现的 / 暂不掀的",
-      "只兑现已有上下文支撑的近端承诺；更大的秘密、身份、幕后主使或终局信息，除非大纲明确要求，否则继续压住。",
-      "",
-      "## 日常/过渡承担什么任务",
-      "如果需要日常或过渡，它必须承担压力、证据、人物关系、目标变化或下一步行动铺垫，不能只是闲聊和气氛。",
-      "",
-      "## 关键抉择过三连问",
-      "主角本章的关键选择必须有原因、符合当前利益，并且不背离已经建立的人设和行为逻辑。",
-      "",
-      "## 章尾必须发生的改变",
-      "章尾至少要在信息、压力、关系、目标或风险上发生一个明确变化，避免只有剧情摘要没有推进。",
-      "",
-      "## 本章 hook 账",
-      "advance: 推进当前活跃承诺；resolve: 只结清已有证据支撑的线索；defer: 大线继续保留到更合适的位置。",
-      "",
-      "## 不要做",
-      "不要违背既成事实，不要无视用户当前指令，不要把 fallback memo 当成新大纲重写整本书。",
+      "## 运行限制",
+      `目标约 ${input.lengthSpec.target} 字；可接受范围 ${input.lengthSpec.hardMin}-${input.lengthSpec.hardMax} 字。按已激活的长篇写作 Skill 和当前受治理上下文执行。`,
       "",
       "## Planner warning",
-      `模型连续 ${MEMO_RETRY_LIMIT} 次没有产出合格章节 memo。最后一次解析错误：${input.errorMessage}`,
+      `连续 ${MEMO_RETRY_LIMIT} 次未取得结构化 memo：${input.errorMessage}`,
     ].join("\n");
   }
 
@@ -539,8 +491,8 @@ export class PlannerAgent extends BaseAgent {
     }
     const remaining = Math.max(0, cap - activeCount);
     return language === "en"
-      ? `### Hook Budget\n- ${activeCount} active hooks — approaching capacity (${cap}). Only ${remaining} new hook(s) allowed. Prioritize resolving existing debt over opening new threads.`
-      : `### 伏笔预算\n- 当前 ${activeCount} 条活跃伏笔——接近容量上限（${cap}）。仅剩 ${remaining} 个新坑位。优先回收旧债，不要轻易开新线。`;
+      ? `### Hook Budget\n- active: ${activeCount}; capacity: ${cap}; remaining: ${remaining}`
+      : `### 伏笔预算\n- 活跃：${activeCount}；容量：${cap}；剩余：${remaining}`;
   }
 
   private extractSection(content: string, headings: ReadonlyArray<string>): string | undefined {

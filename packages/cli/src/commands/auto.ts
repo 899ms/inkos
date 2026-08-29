@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { PipelineRunner, StateManager } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, getLegacyMigrationHint, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, getLegacyMigrationHint, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatAutoWriteAlreadyComplete,
   formatAutoWriteStart,
@@ -69,6 +69,7 @@ export const autoCommand = new Command("auto")
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         quiet: opts.quiet,
       }));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
       if (!opts.json) log(formatAutoWriteStart(language, bookId, startChapter, targetChapter));
 
@@ -80,7 +81,10 @@ export const autoCommand = new Command("auto")
 
         let result;
         try {
-          result = await pipeline.writeNextChapter(bookId, wordCount);
+          result = await pipeline.runWithAgentContext(
+            { activatedSkills },
+            () => pipeline.writeNextChapter(bookId, wordCount),
+          );
         } catch (e) {
           throw new Error(
             `Chapter ${chapter} failed, stopping auto-write (${results.length} chapter(s) completed this run): ${e instanceof Error ? e.message : String(e)}`,

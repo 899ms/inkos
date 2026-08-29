@@ -1,5 +1,4 @@
 import { BaseAgent } from "./base.js";
-import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import type { AuditIssue } from "./continuity.js";
@@ -17,7 +16,6 @@ import {
   buildNarrativeIntentBrief,
   renderMemoAsNarrativeBlock,
   renderNarrativeSelectedContext,
-  sanitizeNarrativeEvidenceBlock,
 } from "../utils/narrative-control.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -86,22 +84,11 @@ function buildTieredIssueList(
 
 const MODE_DESCRIPTIONS: Record<ReviseMode, string> = {
   auto: "", // auto mode uses buildAutoSystemPrompt instead
-  polish: "润色：只改表达、节奏、段落呼吸，不改事实与剧情结论。禁止：增删段落、改变人名/地名/物品名、增加新情节或新对话、改变因果关系。只允许：替换用词、调整句序、修改标点节奏",
-  rewrite: "改写：允许重组问题段落、调整画面和叙述力度，但优先保留原文的绝大部分句段。除非问题跨越整章，否则禁止整章推倒重写；只能围绕问题段落及其直接上下文改写，同时保留核心事实与人物动机",
-  rework: "重写：可重构场景推进和冲突组织，但不改主设定和大事件结果",
-  "anti-detect": `反检测改写：在保持剧情不变的前提下，降低AI生成可检测性。
-
-改写手法（附正例）：
-1. 打破句式规律：连续短句 → 长短交替，句式不可预测
-2. 口语化替代：✗"然而事情并没有那么简单" → ✓"哪有那么便宜的事"
-3. 减少"了"字密度：✗"他走了过去，拿了杯子" → ✓"他走过去，端起杯子"
-4. 转折词降频：✗"虽然…但是…" → ✓ 用角色内心吐槽或直接动作切换
-5. 情绪外化：✗"他感到愤怒" → ✓"他捏碎了茶杯，滚烫的茶水流过指缝"
-6. 删掉叙述者结论：✗"这一刻他终于明白了力量" → ✓ 只写行动，让读者自己感受
-7. 群像反应具体化：✗"全场震惊" → ✓"老陈的烟掉在裤子上，烫得他跳起来"
-8. 段落长度差异化：不再等长段落，有的段只有一句话，有的段七八行
-9. 消灭"不禁""仿佛""宛如"等AI标记词：换成具体感官描写`,
-  "spot-fix": "定点修复：只修改审稿意见指出的具体句子或段落，其余所有内容必须原封不动保留。修改范围限定在问题句子及其前后各一句。禁止改动无关段落",
+  polish: "只改文字表面，不改变事实、事件、人物或因果。",
+  rewrite: "围绕问题段落重写；只有问题跨越整章时才重写整章。",
+  rework: "允许重构场景与冲突，但不得改动权威设定和既成事实。",
+  "anti-detect": "保持剧情、事实、人物和因果不变，只调整文字表面。",
+  "spot-fix": "只输出能在原文唯一命中的局部替换，未命中的内容保持原样。",
 };
 
 export class ReviserAgent extends BaseAgent {
@@ -217,8 +204,8 @@ export class ReviserAgent extends BaseAgent {
 
     const autoOutputMode = mode === "auto" ? resolveAutoOutputMode(issues) : "allow-full";
     const systemPromptBase = mode === "auto"
-      ? this.buildAutoSystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, resolvedLanguage, lengthSpec: options?.lengthSpec, autoOutputMode })
-      : this.buildLegacySystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, mode, resolvedLanguage });
+      ? this.buildAutoSystemPrompt({ langPrefix, protagonistBlock, numericalRule, lengthGuardrail, resolvedLanguage, lengthSpec: options?.lengthSpec, autoOutputMode })
+      : this.buildLegacySystemPrompt({ langPrefix, protagonistBlock, numericalRule, lengthGuardrail, mode, resolvedLanguage });
     const systemPrompt = await this.withPromptPackGuidance(systemPromptBase, "longform.reviser");
 
     const ledgerBlock = gp.numericalSystem
@@ -274,7 +261,7 @@ ${issueList}
 ## 当前状态卡
 ${currentState}
 ${ledgerBlock}
-${sanitizeNarrativeEvidenceBlock(hookDebtBlock, resolvedLanguage) ?? ""}${sanitizeNarrativeEvidenceBlock(hooksBlock, resolvedLanguage) ?? ""}${sanitizeNarrativeEvidenceBlock(volumeSummariesBlock, resolvedLanguage) ?? ""}${reducedControlBlock || outlineBlock}${bibleBlock}${matrixBlock}${sanitizeNarrativeEvidenceBlock(summariesBlock, resolvedLanguage) ?? ""}${canonBlock}${fanficCanonBlock}${styleGuideBlock}${lengthGuidanceBlock}
+${hookDebtBlock}${hooksBlock}${volumeSummariesBlock}${reducedControlBlock || outlineBlock}${bibleBlock}${matrixBlock}${summariesBlock}${canonBlock}${fanficCanonBlock}${styleGuideBlock}${lengthGuidanceBlock}
 
 ## 待修正章节
 ${chapterContent}`;
@@ -384,7 +371,6 @@ ${chapterContent}`;
 
   private buildAutoSystemPrompt(params: {
     langPrefix: string;
-    gp: GenreProfile;
     protagonistBlock: string;
     numericalRule: string;
     lengthGuardrail: string;
@@ -392,7 +378,7 @@ ${chapterContent}`;
     lengthSpec?: LengthSpec;
     autoOutputMode: AutoOutputMode;
   }): string {
-    const { langPrefix, gp, protagonistBlock, numericalRule, resolvedLanguage, lengthSpec, autoOutputMode } = params;
+    const { langPrefix, protagonistBlock, numericalRule, resolvedLanguage, lengthSpec, autoOutputMode } = params;
     // lengthGuardrail intentionally not used in auto mode — length constraint is embedded in REVISED_CONTENT description
     const en = resolvedLanguage === "en";
     const rewriteLengthConstraint = lengthSpec
@@ -402,42 +388,20 @@ ${chapterContent}`;
       : "";
 
     const routingDirectiveEn = autoOutputMode === "rewrite-only"
-      ? "\n\nROUTING: The reviewer's blocking issues are structural / semantic (character collapse, mainline drift, missing payoff, timeline break, unpaid hook, memo drift, etc.). You MUST output REVISED_CONTENT — do not emit PATCHES, they cannot fix this class of problem. If you cannot safely rewrite, say so in FIXED_ISSUES and leave REVISED_CONTENT empty."
+      ? "\n\nROUTING: You MUST output REVISED_CONTENT and omit PATCHES. If a safe rewrite is impossible, explain in FIXED_ISSUES and leave REVISED_CONTENT empty."
       : autoOutputMode === "patch-only"
-        ? "\n\nROUTING: The reviewer's blocking issues are local (wording, paragraph shape, fatigue word, information boundary, knowledge pollution). You MUST output PATCHES only — do not rewrite the whole chapter. If patches are not possible, leave PATCHES empty."
+        ? "\n\nROUTING: You MUST output PATCHES only and omit REVISED_CONTENT. If a unique local replacement is impossible, leave PATCHES empty."
         : "";
     const routingDirectiveZh = autoOutputMode === "rewrite-only"
-      ? "\n\n分流指令：reviewer 报告的阻塞问题属于结构/语义错（人设崩、主线偏、爽点缺、时间线错、伏笔未收、memo 偏离等）。你必须输出 REVISED_CONTENT——禁止输出 PATCHES，这类问题不能靠补丁修复。如果无法安全重写，在 FIXED_ISSUES 里说明并留空 REVISED_CONTENT。"
+      ? "\n\n分流指令：你必须输出 REVISED_CONTENT，禁止输出 PATCHES。无法安全重写时在 FIXED_ISSUES 说明，并留空 REVISED_CONTENT。"
       : autoOutputMode === "patch-only"
-        ? "\n\n分流指令：reviewer 报告的阻塞问题属于局部错（措辞、段落形状、疲劳词、信息越界、知识污染）。你必须只输出 PATCHES——不要整章改写。如果做不出补丁，留空 PATCHES。"
+        ? "\n\n分流指令：你必须只输出 PATCHES，禁止输出 REVISED_CONTENT。无法唯一命中局部原文时留空 PATCHES。"
         : "";
 
     return en
-      ? `${langPrefix}You are a professional ${gp.name} web-fiction revision editor. Fix the chapter according to the review notes.${protagonistBlock}${routingDirectiveEn}
+      ? `${langPrefix}Revise the chapter according to the supplied issues, governed context, and activated professional skills.${protagonistBlock}${routingDirectiveEn}${numericalRule}${rewriteLengthConstraint}
 
-PATCHES and REVISED_CONTENT serve different problems — choose by problem type, not preference:
-
-PATCHES — for local text issues (wording, dialogue, AI-tell phrases, small continuity errors).
-  Each PATCH quotes the passage to change (a sentence, a paragraph, or multiple paragraphs) and provides a replacement. Untouched text stays exactly as-is.
-
-REVISED_CONTENT — for whole-chapter issues (length compression, structural rewrite, pacing restructure, major plot realignment).
-  Outputs the full revised chapter. When Critical issues include length or structural problems, you must use REVISED_CONTENT — patches cannot compress or restructure a chapter.${rewriteLengthConstraint}
-
-If Critical issues include both local and whole-chapter problems, use REVISED_CONTENT (it addresses everything in one pass).
-
-Revision principles:
-1. Fix root causes — do not apply superficial polish${numericalRule}
-2. Hook status must stay in sync with the hooks board. If hook debt briefs are provided, preserve hook payoff scenes
-3. Do not alter the plot direction or core conflicts
-4. Preserve the original language style, rhythm, and pacing — do not compress transitional scenes or remove breathing room
-5. Emotion through action (never "he felt angry" — show it). Values through behavior, not slogans
-6. Different characters speak differently. No "everyone gasped in unison"
-7. Escalate: bad things stack, each worse than the last
-
-Cycle-aware revision:
-- If this chapter should be "aftermath" but is still escalating tension, rewrite the densest conflict passage into a change-showing passage — who lost what, whose attitude shifted, what the new normal is
-- If this chapter should be "climax" but has no clear payoff, find the closest scene to a reward and amplify it — make the promised release exceed reader expectations
-- Daily passages that don't serve the main line: rewrite as "bait" — add a detail pointing to the future, a hint, a character reaction that seeds curiosity
+PATCHES preserve all untouched text and require an exact source quote. REVISED_CONTENT returns the complete replacement chapter.
 
 Output format:
 
@@ -455,31 +419,9 @@ REPLACEMENT_TEXT:
 
 === REVISED_CONTENT ===
 (Full revised chapter content — only when PATCHES cannot solve the problem. Omit this section if using PATCHES)`
-      : `${langPrefix}你是一位专业的${gp.name}网络小说修稿编辑。你的任务是根据审稿意见对章节进行修正。${protagonistBlock}${routingDirectiveZh}
+      : `${langPrefix}按审稿问题、权威上下文和已激活的专业 Skill 修订章节。${protagonistBlock}${routingDirectiveZh}${numericalRule}${rewriteLengthConstraint}
 
-PATCHES 和 REVISED_CONTENT 分别处理不同类型的问题——按问题类型选择，不是按偏好：
-
-PATCHES——处理局部文字问题（措辞、对话、AI痕迹、小的连续性错误）。
-  每个 PATCH 引用要修改的原文段落（一句、一段或多段皆可），给出替换文本。未涉及的内容保持原样。
-
-REVISED_CONTENT——处理全章级问题（字数压缩、结构重组、节奏重排、重大剧情偏离）。
-  输出修正后的完整正文。当 Critical 问题包含字数或结构性问题时，必须使用 REVISED_CONTENT——PATCHES 无法压缩或重构整章。${rewriteLengthConstraint}
-
-如果 Critical 同时包含局部问题和全章问题，使用 REVISED_CONTENT（一次性解决所有问题）。
-
-修稿原则：
-1. 修根因，不做表面润色${numericalRule}
-2. 伏笔状态必须与伏笔池同步。如果提供了 Hook Debt 简报，必须保留伏笔兑现段落
-3. 不改变剧情走向和核心冲突
-4. 保持原文的语言风格、节奏和呼吸——不要压缩过渡段、不要删掉减速段
-5. 情绪用动作外化（不写"他感到愤怒"，写动作）。价值观通过行为传达
-6. 不同角色说话方式必须不同。禁止"众人齐声惊呼"
-7. 坏事叠坏事，每层比上一层过分
-
-小目标周期修稿指引：
-- 如果本章应该是"后效"阶段但仍在加压，把最密集的冲突段落改写为展示改变的段落——谁失去了什么、谁的态度变了、新的常态是什么
-- 如果本章应该是"爆发"阶段但没有明确兑现，找到最接近回报的场景并放大它——让承诺的释放超过读者预期
-- 日常段落如果不服务主线，改写为"饵"：加入一个指向未来的细节、一句暗示、一个角色反应
+PATCHES 必须精确引用原文，未涉及内容保持不变；REVISED_CONTENT 返回完整替换正文。
 
 输出格式：
 
@@ -501,14 +443,13 @@ REPLACEMENT_TEXT:
 
   private buildLegacySystemPrompt(params: {
     langPrefix: string;
-    gp: GenreProfile;
     protagonistBlock: string;
     numericalRule: string;
     lengthGuardrail: string;
     mode: ReviseMode;
     resolvedLanguage: "zh" | "en";
   }): string {
-    const { langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, mode } = params;
+    const { langPrefix, protagonistBlock, numericalRule, lengthGuardrail, mode } = params;
     const modeDesc = MODE_DESCRIPTIONS[mode];
     const outputFormat = mode === "spot-fix"
       ? `=== FIXED_ISSUES ===
@@ -527,18 +468,11 @@ REPLACEMENT_TEXT:
 === REVISED_CONTENT ===
 (修正后的完整正文)`;
 
-    return `${langPrefix}你是一位专业的${gp.name}网络小说修稿编辑。你的任务是根据审稿意见对章节进行修正。${protagonistBlock}
+    return `${langPrefix}按审稿问题、权威上下文和已激活的专业 Skill 修订章节。${protagonistBlock}
 
 修稿模式：${modeDesc}
-
-修稿原则：
-1. 按模式控制修改幅度
-2. 修根因，不做表面润色${numericalRule}
-4. 正文必须服从既有事实和伏笔约束，但不要输出或重写状态文件；宿主会根据修订正文重新结算
-5. 不改变剧情走向和核心冲突
-6. 保持原文的语言风格和节奏
-${lengthGuardrail}
-${mode === "spot-fix" ? "\n9. spot-fix 只能输出局部补丁，禁止输出整章改写；TARGET_TEXT 必须能在原文中唯一命中\n10. 如果需要大面积改写，说明无法安全 spot-fix，并让 PATCHES 留空" : ""}
+正文必须服从既有事实和伏笔约束；不要输出或重写状态文件。${numericalRule}${lengthGuardrail}
+${mode === "spot-fix" ? "\nspot-fix 只能输出局部补丁；TARGET_TEXT 必须在原文中唯一命中。" : ""}
 
 输出格式：
 

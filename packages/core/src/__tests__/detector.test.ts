@@ -16,8 +16,6 @@ const baseConfig: DetectionConfig = {
   apiKeyEnv: "TEST_API_KEY",
   threshold: 0.5,
   enabled: true,
-  autoRewrite: false,
-  maxRetries: 3,
 };
 
 describe("detectAIContent", () => {

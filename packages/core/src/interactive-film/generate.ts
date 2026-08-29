@@ -6,11 +6,9 @@ import { StoryGraphSchema, type StoryGraph } from "./graph-schema.js";
 import { StoryGraphContentToolSchema } from "./tool-schemas.js";
 import { validateStoryGraph } from "./validation.js";
 
-const SYSTEM_PROMPT_ZH = `你是互动影游编剧。根据用户的故事前提，生成一个小而完整的可玩分支图。
-要求：恰好 1 个 type=start 节点；至少 1 个 branch 节点；至少 1 个 ending，并满足用户要求的更高数量；每条路径都能到达某个 ending；用变量、条件和效果表达真正影响后续的玩家选择。普通场景用 normal/explore/merge，不要都标成 start。完成后调用 submit_story_graph 提交分支图。`;
+const SYSTEM_PROMPT_ZH = `按已激活的互动影游 Skill 生成可玩分支图。结构要求：恰好 1 个 type=start 节点；至少 1 个 branch 和 1 个 ending；每条路径可达 ending；普通场景使用 normal/explore/merge。调用 submit_story_graph 提交。`;
 
-const SYSTEM_PROMPT_EN = `You are an interactive film scriptwriter. From the user's story premise, generate a small but complete playable branching graph.
-Requirements: exactly 1 node with type=start; at least 1 branch node; at least 1 ending and any higher counts the user requested; every path must reach some ending; use variables, conditions, and effects for choices that genuinely change later scenes. Use normal/explore/merge for ordinary scenes instead of marking them all start. Finish by calling submit_story_graph.`;
+const SYSTEM_PROMPT_EN = `Generate a playable branching graph with the activated interactive-film Skill. Structural requirements: exactly one type=start node; at least one branch and one ending; every path reaches an ending; ordinary scenes use normal/explore/merge. Submit through submit_story_graph.`;
 
 export interface GenerateStoryGraphInput {
   readonly projectId: string;

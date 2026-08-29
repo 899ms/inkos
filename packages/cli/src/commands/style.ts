@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { StateManager, analyzeStyle, PipelineRunner } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, runWithCliProfileSkills } from "../utils.js";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
@@ -74,7 +74,13 @@ styleCommand
         if (!opts.json) log("Generating qualitative style guide via LLM...");
         const config = await loadConfig();
         const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
-        await pipeline.generateStyleGuide(bookId, text, opts.name ?? file);
+        await runWithCliProfileSkills(
+          pipeline,
+          root,
+          "longform-novel",
+          () => pipeline.generateStyleGuide(bookId, text, opts.name ?? file),
+          { extraSkillIds: ["inkos-long-story-analysis"] },
+        );
         if (!opts.json) log("Style guide (style_guide.md) generated.");
       }
 

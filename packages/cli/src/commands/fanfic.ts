@@ -10,7 +10,7 @@ import {
   type BookConfig,
   type FanficMode,
 } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills, runWithCliProfileSkills } from "../utils.js";
 import {
   formatFanficCanonMissingError,
   formatFanficInvalidModeError,
@@ -73,10 +73,13 @@ fanficCommand
       if (!opts.json) log(`  Source: ${sourceName} (${sourceText.length} chars)`);
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import"],
+      });
       await executeExplicitCapabilityTool({
         projectRoot: root,
         binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default" },
-        tool: createFanficBookTool(pipeline, root),
+        tool: createFanficBookTool(pipeline, root, { defaultSkills: activatedSkills }),
         parameters: {
           title: book.title,
           sourceText,
@@ -178,7 +181,13 @@ fanficCommand
       if (!opts.json) log(`Refreshing fanfic canon for "${bookId}" from ${sourceName}...`);
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
-      await pipeline.importFanficCanon(bookId, sourceText, sourceName, mode);
+      await runWithCliProfileSkills(
+        pipeline,
+        root,
+        "longform-novel",
+        () => pipeline.importFanficCanon(bookId, sourceText, sourceName, mode),
+        { extraSkillIds: ["inkos-story-import"] },
+      );
 
       if (opts.json) {
         log(JSON.stringify({ bookId, source: sourceName, refreshedAt: new Date().toISOString() }));

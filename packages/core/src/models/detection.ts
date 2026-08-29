@@ -10,16 +10,11 @@ export interface DetectionHistoryEntry {
 
 /** Aggregated detection statistics. */
 export interface DetectionStats {
-  readonly totalDetections: number;
-  readonly totalRewrites: number;
-  readonly avgOriginalScore: number;
-  readonly avgFinalScore: number;
-  readonly avgScoreReduction: number;
-  readonly passRate: number;
+  readonly totalObservations: number;
+  readonly avgLatestScore: number;
   readonly chapterBreakdown: ReadonlyArray<{
     readonly chapterNumber: number;
-    readonly originalScore: number;
-    readonly finalScore: number;
-    readonly rewriteAttempts: number;
+    readonly latestScore: number;
+    readonly observationCount: number;
   }>;
 }

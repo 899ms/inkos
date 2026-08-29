@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WriterAgent, type WriteChapterOutput } from "../agents/writer.js";
 import { persistChapterArtifacts } from "../pipeline/chapter-persistence.js";
+import { reviewChapterDraft } from "../pipeline/chapter-review.js";
 import { validateChapterTruthPersistence } from "../pipeline/chapter-truth-validation.js";
 import { StateManager } from "../state/manager.js";
 import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { buildLengthSpec } from "../utils/length-metrics.js";
 
 describe("long-form harness mini-flow", () => {
   const roots: string[] = [];
@@ -63,13 +65,13 @@ describe("long-form harness mini-flow", () => {
     });
   });
 
-  it("stops before persistence when derived story state cannot be validated", async () => {
+  it("keeps the chapter persistable when state review is unavailable", async () => {
     const root = await tempRoot();
     const bookDir = join(root, "works", "novel", "source");
     await mkdir(join(bookDir, "story"), { recursive: true });
     const output = chapterOutput(2);
 
-    await expect(validateChapterTruthPersistence({
+    const result = await validateChapterTruthPersistence({
       writer: { settleChapterState: async () => output },
       validator: { validate: async () => { throw new Error("validator unavailable"); } },
       book: {
@@ -92,9 +94,45 @@ describe("long-form harness mini-flow", () => {
       previousTruth: { oldState: "state-v1", oldHooks: "hooks-v1", oldLedger: "" },
       language: "en",
       logWarn: () => undefined,
-    })).rejects.toThrow("Chapter state validation unavailable");
+    });
 
-    expect(await readdir(join(bookDir, "chapters")).catch(() => [])).toEqual([]);
+    expect({
+      content: result.persistenceOutput.content,
+      category: result.validation.warnings[0]?.category,
+      needsReconciliation: result.validation.reconciliationRequired,
+    }).toEqual({
+      content: output.content,
+      category: "state-validation-unavailable",
+      needsReconciliation: true,
+    });
+  });
+
+  it("keeps the chapter persistable when review observation is unavailable", async () => {
+    const output = chapterOutput(3);
+    const result = await reviewChapterDraft({
+      book: { genre: "other" },
+      bookDir: "/tmp/unused",
+      chapterNumber: 3,
+      output,
+      lengthSpec: buildLengthSpec(9, "en"),
+      initialUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      auditor: { auditChapter: async () => { throw new Error("review stream idle"); } },
+      normalize: (content) => content,
+      assertNotEmpty: () => undefined,
+      addUsage: (left) => left,
+      analyzeAITells: () => ({ issues: [] }),
+      analyzeSensitiveWords: () => ({ issues: [] }),
+      runPostWriteChecks: () => [],
+    });
+    expect({
+      content: result.content,
+      observation: result.review.issues[0]?.category,
+      parseFailed: result.review.parseFailed,
+    }).toEqual({
+      content: output.content,
+      observation: "review-unavailable",
+      parseFailed: true,
+    });
   });
 
   it("keeps failed output as a candidate until an authorized action accepts it", async () => {
@@ -135,7 +173,6 @@ function chapterOutput(chapterNumber: number): WriteChapterOutput {
     title: `Chapter ${chapterNumber}`,
     content: "The witness closes the ledger and leaves the room.",
     wordCount: 9,
-    preWriteCheck: "",
     postSettlement: "",
     updatedState: "# Current State\n\nThe witness has left.\n",
     updatedLedger: "",

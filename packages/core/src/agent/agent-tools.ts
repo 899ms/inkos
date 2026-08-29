@@ -2063,7 +2063,7 @@ export function createShortFictionRunTool(
     name: "short_fiction_run",
     description:
       "Create a standalone short fiction project from a direction. " +
-      "Runs outline -> outline review/revision -> full draft -> draft review/revision -> synopsis/selling points/cover prompt -> optional cover image. " +
+      "Runs outline -> complete draft -> review observation -> synopsis/selling points/cover prompt -> optional cover image. " +
       "Uses the user's direction and optional reference notes as input.",
     label: "Short Fiction",
     parameters: ShortFictionRunParams,
@@ -2089,10 +2089,8 @@ export function createShortFictionRunTool(
           direction: shortPayload?.direction ?? params.direction,
           runtimes: {
             planner: pipeline.createAgentContext("short-outline"),
-            outlineReview: pipeline.createAgentContext("short-outline-review"),
             writer: pipeline.createAgentContext("short-writer"),
             draftReview: pipeline.createAgentContext("short-draft-review"),
-            revise: pipeline.createAgentContext("short-revise"),
             package: pipeline.createAgentContext("short-package"),
           },
           ...((shortPayload?.reference ?? params.reference) ? { reference: { text: shortPayload?.reference ?? params.reference! } } : {}),

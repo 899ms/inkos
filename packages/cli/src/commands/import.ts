@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { loadChaptersFromPath, PipelineRunner, StateManager } from "@actalk/inkos-core";
 import { resolve } from "node:path";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, runWithCliProfileSkills } from "../utils.js";
 import {
   formatImportCanonComplete,
   formatImportCanonStart,
@@ -94,12 +94,18 @@ importCommand
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
 
-      const result = await pipeline.importChapters({
-        bookId,
-        chapters,
-        resumeFrom: opts.resumeFrom,
-        importMode: opts.series ? "series" : "continuation",
-      });
+      const result = await runWithCliProfileSkills(
+        pipeline,
+        root,
+        "longform-novel",
+        () => pipeline.importChapters({
+          bookId,
+          chapters,
+          resumeFrom: opts.resumeFrom,
+          importMode: opts.series ? "series" : "continuation",
+        }),
+        { extraSkillIds: ["inkos-story-import"] },
+      );
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));

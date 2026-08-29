@@ -23,17 +23,14 @@ describe("CLI mini-flows", () => {
   it("initializes a project and round-trips structured configuration", async () => {
     run(["init"]);
     run(["config", "set", "llm.provider", "anthropic"]);
-    run(["config", "set", "foundation.reviewRetries", "3"]);
     const shown = JSON.parse(run(["config", "show"]));
 
     expect({
       provider: shown.llm.provider,
-      foundationReviewRetries: shown.foundation.reviewRetries,
       worksDirectory: (await stat(join(projectDir, "works"))).isDirectory(),
       nodeVersion: (await readFile(join(projectDir, ".node-version"), "utf-8")).trim(),
     }).toEqual({
       provider: "anthropic",
-      foundationReviewRetries: 3,
       worksDirectory: true,
       nodeVersion: "22",
     });

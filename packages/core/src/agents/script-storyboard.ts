@@ -431,16 +431,14 @@ function buildScriptCreationSystemPrompt(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
     return [
       "You are a script-creation tool, not a novel-continuation engine.",
-      "This is a non-interactive production call after user confirmation. Execute the confirmed creation spec and source material now.",
-      "Never ask a question, offer options for the user to choose, or defer writing. Resolve unspecified creative details with a coherent working choice; they remain editable later.",
+      "Execute the confirmed spec with the activated script-writing Skill.",
       "The deliverable must include the exact Markdown headings `## Characters` and `## Script`, followed by a complete performable script rather than a proposal or outline.",
       "Output Markdown. No process notes, no model self-narration, no \"Here is\" preamble.",
     ].join("\n");
   }
   return [
     "你是剧本创作工具，不是小说续写器。",
-    "这是用户确认后的非交互生产调用。现在执行已确认的创作规格和源素材。",
-    "不得提问、给用户列待选方案或推迟落笔。未指定的创意细节采用连贯的工作版本，后续仍可编辑。",
+    "按已激活的剧本创作 Skill 执行确认规格。",
     "交付稿必须包含准确的 Markdown 标题 `## 人物` 和 `## 剧本正文`，并在其后给出完整可排演剧本，不能只交方案或大纲。",
     "输出 Markdown。不要写流程说明、模型自述或“以下是”。",
   ].join("\n");
@@ -487,12 +485,12 @@ function buildScriptCreationUserPrompt(input: ScriptCreationInput, language: "zh
 function buildStoryboardCreationSystemPrompt(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
     return [
-      "You are a storyboard-creation tool. Execute the confirmed visual spec and source material; unconfirmed choices remain adjustable.",
+      "Execute the confirmed visual spec with the activated storyboard Skill; unconfirmed choices remain adjustable.",
       "Output Markdown. No model self-narration or process explanation.",
     ].join("\n");
   }
   return [
-    "你是分镜创作工具。执行用户确认的视觉规格和源素材；未确认的选择保持可调整。",
+    "按已激活的分镜 Skill 执行确认的视觉规格；未确认选择保持可调整。",
     "输出 Markdown。不要写模型自述或流程解释。",
   ].join("\n");
 }
@@ -553,13 +551,13 @@ function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, langu
 function buildInteractiveFilmCreationSystemPrompt(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
     return [
-      "You are an interactive-film creation tool. Execute the confirmed spec and source material; unconfirmed choices remain adjustable.",
+      "Execute the confirmed spec with the activated interactive-film Skill; unconfirmed choices remain adjustable.",
       "Output must be Markdown with the specified sections. No model self-narration, process notes, or \"Here is\" preamble.",
       "Every storyboard image prompt must be its own standalone `Prompt: ...` line so downstream asset management can pick it up; include only the visual constraints the user has confirmed.",
     ].join("\n");
   }
   return [
-    "你是互动影游创作工具。执行用户确认的规格和源素材；未确认的选择保持可调整。",
+    "按已激活的互动影游 Skill 执行确认规格；未确认选择保持可调整。",
     "输出必须是 Markdown，包含指定小节。不要写模型自述、流程说明或“以下是”。",
     "分镜图提示词必须写成单独的 `Prompt: ...` 行，便于后续资产管理；只写用户确认过的视觉限制。",
   ].join("\n");

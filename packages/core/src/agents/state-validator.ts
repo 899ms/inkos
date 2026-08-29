@@ -7,8 +7,8 @@ export interface ValidationWarning {
 
 export interface ValidationResult {
   readonly warnings: ReadonlyArray<ValidationWarning>;
-  readonly passed: boolean;
-  readonly repairRequired?: boolean;
+  readonly consistent: boolean;
+  readonly reconciliationRequired: boolean;
 }
 
 export interface StateValidationAuthorityContext {
@@ -21,8 +21,8 @@ export interface StateValidationAuthorityContext {
  * Validates Settler output by comparing old and new truth files via LLM.
  * Catches contradictions, missing state changes, and temporal inconsistencies.
  *
- * Uses a minimal verdict protocol instead of requiring structured JSON:
- *   Line 1: PASS, REPAIR, or FAIL
+ * Uses a minimal reconciliation protocol instead of a prose-quality verdict:
+ *   Line 1: CLEAR or RECONCILE
  *   Remaining lines: free-form warnings (one per line, optional category prefix)
  */
 export class StateValidatorAgent extends BaseAgent {
@@ -45,7 +45,7 @@ export class StateValidatorAgent extends BaseAgent {
 
     // Skip validation if nothing changed
     if (!stateDiff && !hooksDiff) {
-      return { warnings: [], passed: true, repairRequired: false };
+      return { warnings: [], consistent: true, reconciliationRequired: false };
     }
 
     const langInstruction = language === "en"
@@ -64,33 +64,32 @@ Given the chapter text and the CHANGES made to truth files (state card + hooks p
 6. Cross-truth key-setting conflict — numbered rules, named laws, ranks, identities, locations, or relationship labels in the new truth files contradict the chapter text or the authority context
 
 Output format (simple, NOT JSON):
-- First line: exactly PASS, REPAIR, or FAIL (nothing else on this line)
+- First line: exactly CLEAR or RECONCILE (nothing else on this line)
 - Following lines: one warning per line, optionally prefixed with [category]
-- If no issues at all, just output: PASS
+- If no issues at all, just output: CLEAR
 
-Verdict semantics:
-- PASS: the truth-file projection is complete enough and consistent with the chapter.
-- REPAIR: the chapter itself is valid, but a state change or hook transition is missing, stale, or incomplete. The host will regenerate only the truth-file settlement.
-- FAIL: the proposed truth-file changes directly contradict the chapter or authority context.
+Reconciliation semantics:
+- CLEAR: the truth-file projection is complete enough and consistent with the chapter.
+- RECONCILE: the chapter remains valid, while a state change or hook transition is missing, stale, incomplete, or contradictory. The host may regenerate only the truth-file settlement.
 
 Example:
-PASS
+CLEAR
 [unsupported_change] State card says character moved to the forest, but text only shows intent
 [minor] Hook H03 advanced but text mention is brief
 
 If the chapter establishes a state change that the truth files missed:
-REPAIR
+RECONCILE
 [missing_state_update] The chapter moves Lin to the harbor, but the state card still says station
 
-Or if there are hard contradictions:
-FAIL
+Hard contradictions in truth projection also require reconciliation:
+RECONCILE
 [contradiction] State says character is dead but chapter text shows them speaking
 [unsupported_change] New location not mentioned anywhere in chapter text
 
-IMPORTANT: Output FAIL ONLY for hard contradictions — facts that directly conflict with the chapter text. Output REPAIR for missing state updates and hook-management omissions that should be regenerated. Do NOT fail for:
+Do not request reconciliation for:
 - Slightly ahead-of-text inferences
 - Reasonable extrapolations from text
-Minor details that do not affect ongoing continuity may remain warnings with PASS.`;
+Minor details that do not affect ongoing continuity may remain warnings with CLEAR.`;
 
     const authorityBlock = this.buildAuthorityContextBlock(authorityContext);
 
@@ -118,7 +117,7 @@ ${chapterContent}`;
 
       return this.parseResult(response.content);
     } catch (error) {
-      this.log?.warn(`State validation failed: ${error}`);
+      this.log?.warn(`State reconciliation review unavailable: ${error}`);
       throw error;
     }
   }
@@ -179,16 +178,16 @@ ${chapterContent}`;
     }
 
     const verdictLine = lines[0]!;
-    if (!/^(PASS|REPAIR|FAIL)$/i.test(verdictLine)) {
+    if (!/^(CLEAR|RECONCILE)$/i.test(verdictLine)) {
       throw new Error("State validator returned invalid response");
     }
-    const passed = /^PASS$/i.test(verdictLine);
-    const repairRequired = /^REPAIR$/i.test(verdictLine);
+    const consistent = /^CLEAR$/i.test(verdictLine);
+    const reconciliationRequired = /^RECONCILE$/i.test(verdictLine);
 
     const warnings: ValidationWarning[] = [];
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i]!;
-      if (/^(PASS|REPAIR|FAIL)$/i.test(line)) continue;
+      if (/^(CLEAR|RECONCILE)$/i.test(line)) continue;
 
       const categoryMatch = line.match(/^\[([^\]]+)\]\s*(.+)$/);
       if (categoryMatch) {
@@ -209,7 +208,7 @@ ${chapterContent}`;
       }
     }
 
-    return { warnings, passed, repairRequired };
+    return { warnings, consistent, reconciliationRequired };
   }
 
   private tryParseJsonResult(text: string): ValidationResult | null {
@@ -229,17 +228,17 @@ ${chapterContent}`;
     try {
       const parsed = JSON.parse(text) as {
         warnings?: Array<{ category?: string; description?: string }>;
-        passed?: boolean;
-        repairRequired?: boolean;
+        consistent?: boolean;
+        reconciliationRequired?: boolean;
       };
-      if (typeof parsed.passed !== "boolean") return null;
+      if (typeof parsed.consistent !== "boolean") return null;
       return {
         warnings: (parsed.warnings ?? []).map((w) => ({
           category: w.category ?? "unknown",
           description: w.description ?? "",
         })),
-        passed: parsed.passed,
-        repairRequired: parsed.repairRequired === true,
+        consistent: parsed.consistent,
+        reconciliationRequired: parsed.reconciliationRequired === true,
       };
     } catch {
       return null;

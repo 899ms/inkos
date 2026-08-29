@@ -22,8 +22,6 @@ export interface DetectionDraft {
   apiUrl: string;
   apiKeyEnv: string;
   threshold: number;
-  autoRewrite: boolean;
-  maxRetries: number;
   rest?: Record<string, unknown>;
 }
 
@@ -33,8 +31,6 @@ export const DEFAULT_DETECTION: DetectionDraft = {
   apiUrl: "",
   apiKeyEnv: "",
   threshold: 0.5,
-  autoRewrite: false,
-  maxRetries: 3,
 };
 
 export const NOTIFY_TYPES: ReadonlyArray<{ value: NotifyType; label: string }> = [
@@ -110,9 +106,7 @@ export function detectionDraftFromConfig(value: unknown): DetectionDraft {
     apiUrl: stringField(raw.apiUrl) ?? DEFAULT_DETECTION.apiUrl,
     apiKeyEnv: stringField(raw.apiKeyEnv) ?? DEFAULT_DETECTION.apiKeyEnv,
     threshold: numberField(raw.threshold, DEFAULT_DETECTION.threshold),
-    autoRewrite: booleanField(raw.autoRewrite, DEFAULT_DETECTION.autoRewrite),
-    maxRetries: numberField(raw.maxRetries, DEFAULT_DETECTION.maxRetries),
-    rest: omitKeys(raw, ["enabled", "provider", "apiUrl", "apiKeyEnv", "threshold", "autoRewrite", "maxRetries"]),
+    rest: omitKeys(raw, ["enabled", "provider", "apiUrl", "apiKeyEnv", "threshold"]),
   };
 }
 
@@ -125,7 +119,5 @@ export function buildDetectionConfig(det: DetectionDraft): Record<string, unknow
     apiKeyEnv: det.apiKeyEnv,
     threshold: det.threshold,
     enabled: true,
-    autoRewrite: det.autoRewrite,
-    maxRetries: det.maxRetries,
   };
 }

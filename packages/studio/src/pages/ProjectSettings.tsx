@@ -701,19 +701,9 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
               <span>{t("settings.detectionApiUrl")}</span>
               <input value={det.apiUrl} onChange={(e) => setDet((d) => ({ ...d, apiUrl: e.target.value }))} placeholder="https://..." className={`${fieldClass} font-mono`} />
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="text-xs text-muted-foreground space-y-1">
-                <span>{t("settings.detectionThreshold")} (0–1)</span>
-                <input type="number" min={0} max={1} step={0.05} value={det.threshold} onChange={(e) => setDet((d) => ({ ...d, threshold: Number(e.target.value) }))} className={fieldClass} />
-              </label>
-              <label className="text-xs text-muted-foreground space-y-1">
-                <span>{t("settings.detectionMaxRetries")} (1–10)</span>
-                <input type="number" min={1} max={10} step={1} value={det.maxRetries} onChange={(e) => setDet((d) => ({ ...d, maxRetries: Number(e.target.value) }))} className={fieldClass} />
-              </label>
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={det.autoRewrite} onChange={(e) => setDet((d) => ({ ...d, autoRewrite: e.target.checked }))} />
-              {t("settings.detectionAutoRewrite")}
+            <label className="text-xs text-muted-foreground space-y-1 block">
+              <span>{t("settings.detectionThreshold")} (0–1)</span>
+              <input type="number" min={0} max={1} step={0.05} value={det.threshold} onChange={(e) => setDet((d) => ({ ...d, threshold: Number(e.target.value) }))} className={fieldClass} />
             </label>
           </div>
         </Collapse>

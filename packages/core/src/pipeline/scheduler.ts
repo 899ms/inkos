@@ -3,7 +3,7 @@ import type { PipelineConfig } from "./runner.js";
 import { StateManager } from "../state/manager.js";
 import type { BookConfig } from "../models/book.js";
 import type { DetectionConfig } from "../models/project.js";
-import { detectChapter, detectAndRewrite } from "./detection-runner.js";
+import { detectChapter } from "./detection-runner.js";
 import type { Logger } from "../utils/logger.js";
 
 export interface SchedulerConfig extends PipelineConfig {
@@ -196,7 +196,7 @@ export class Scheduler {
       const result = await this.pipeline.writeNextChapter(bookId);
       this.recordChapterWritten();
       if (this.config.detection?.enabled) {
-        await this.runDetection(bookId, bookConfig, result.chapterNumber);
+        await this.runDetection(bookId, result.chapterNumber);
       }
       this.config.onChapterComplete?.(bookId, result.chapterNumber);
       return true;
@@ -208,28 +208,18 @@ export class Scheduler {
 
   private async runDetection(
     bookId: string,
-    bookConfig: BookConfig,
     chapterNumber: number,
   ): Promise<void> {
     if (!this.config.detection) return;
     try {
       const bookDir = this.state.bookDir(bookId);
       const chapterContent = await this.readChapterContent(bookDir, chapterNumber);
-      const detResult = await detectChapter(
+      await detectChapter(
         this.config.detection,
         chapterContent,
         chapterNumber,
+        bookDir,
       );
-      if (!detResult.passed && this.config.detection.autoRewrite) {
-        await detectAndRewrite(
-          this.config.detection,
-          { client: this.config.client, model: this.config.model, projectRoot: this.config.projectRoot },
-          bookDir,
-          chapterContent,
-          chapterNumber,
-          bookConfig.genre,
-        );
-      }
     } catch (e) {
       this.config.onError?.(bookId, e as Error);
     }

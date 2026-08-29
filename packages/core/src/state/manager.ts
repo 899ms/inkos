@@ -100,18 +100,6 @@ export class StateManager {
       StateManager.defaultCurrentFocus(language),
     );
 
-    // Ensure style_guide includes writing methodology even without reference text
-    const styleGuidePath = join(storyDir, "style_guide.md");
-    try {
-      const existing = await readFile(styleGuidePath, "utf-8");
-      if (!existing.includes("写作方法论") && !existing.includes("Writing Methodology")) {
-        const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-        await writeFile(styleGuidePath, `${existing}\n\n${buildWritingMethodologySection(language)}`, "utf-8");
-      }
-    } catch {
-      const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-      await writeFile(styleGuidePath, buildWritingMethodologySection(language), "utf-8");
-    }
   }
 
   async loadControlDocuments(bookId: string): Promise<{

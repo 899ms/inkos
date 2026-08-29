@@ -61,7 +61,6 @@ describe("generateStoryGraph structured worker", () => {
     expect(graph.nodes).toHaveLength(5);
     expect(runWorkerAgentToolMock).toHaveBeenCalledTimes(1);
     const [, , messages, tool] = runWorkerAgentToolMock.mock.calls[0];
-    expect(messages[0].content).toContain("interactive film scriptwriter");
     expect(messages[0].content).not.toContain("Output strictly JSON");
     expect(tool.name).toBe("submit_story_graph");
     expect(tool.parameters.type).toBe("object");

@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { PipelineRunner } from "@actalk/inkos-core";
-import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError, resolveBookId, resolveContext } from "../utils.js";
+import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError, resolveBookId, resolveContext, runWithCliProfileSkills } from "../utils.js";
 
 export const planCommand = new Command("plan")
   .description("Plan chapter input artifacts");
@@ -27,7 +27,9 @@ planCommand
         }),
       );
 
-      const result = await pipeline.planChapter(bookId, context);
+      const result = await runWithCliProfileSkills(
+        pipeline, root, "longform-novel", () => pipeline.planChapter(bookId, context),
+      );
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));

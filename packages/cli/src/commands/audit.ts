@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { PipelineRunner, StateManager } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, runWithCliProfileSkills } from "../utils.js";
 import {
   formatNotifyAuditBody,
   formatNotifyCommandTitle,
@@ -44,7 +44,13 @@ export const auditCommand = new Command("audit")
 
       if (!opts.json) log(`Auditing "${bookId}"${chapterNumber ? ` chapter ${chapterNumber}` : " (latest)"}...`);
 
-      const result = await pipeline.auditDraft(bookId, chapterNumber);
+      const result = await runWithCliProfileSkills(
+        pipeline,
+        root,
+        "longform-novel",
+        () => pipeline.auditDraft(bookId, chapterNumber),
+        { includeRecommended: true },
+      );
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));

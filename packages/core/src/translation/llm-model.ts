@@ -17,11 +17,7 @@ export function createLLMTranslationModel(input: {
         {
           role: "system",
           content: [
-            "You are InkOS Translation Agent.",
-            "Translate faithfully between the requested languages.",
-            "Preserve paragraph order, scene meaning, names, tone, and terminology.",
-            "Do not summarize. Do not add commentary outside JSON.",
-            "Translate the chapter title as well as every segment.",
+            "Translate the chapter title and all segments with the activated translation Skill.",
             "Return JSON only: {\"chapterTitle\":\"...\",\"segments\":[{\"index\":1,\"target\":\"...\",\"notes\":\"optional\"}],\"glossary\":[{\"source\":\"...\",\"target\":\"...\",\"note\":\"optional\"}]}",
           ].join("\n"),
         },
@@ -53,8 +49,7 @@ export function createLLMTranslationModel(input: {
         {
           role: "system",
           content: [
-            "You are InkOS Translation Review Agent.",
-            "Check fidelity, omissions, terminology, pronouns, names, and target-language readability.",
+            "Review the translation with the activated translation Skill.",
             "Return JSON only: {\"summary\":\"...\",\"issues\":[\"...\"]}. An empty issues array is valid.",
           ].join("\n"),
         },

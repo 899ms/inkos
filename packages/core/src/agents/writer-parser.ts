@@ -7,7 +7,6 @@ export interface CreativeOutput {
   readonly title: string;
   readonly content: string;
   readonly wordCount: number;
-  readonly preWriteCheck: string;
 }
 
 export function parseCreativeOutput(
@@ -40,7 +39,6 @@ export function parseCreativeOutput(
     title,
     content: chapterContent,
     wordCount: countChapterLength(chapterContent, countingMode),
-    preWriteCheck: extract("PRE_WRITE_CHECK"),
   };
 }
 
@@ -82,7 +80,7 @@ function fallbackExtractContent(raw: string, countingMode: LengthCountingMode): 
     const trimmed = line.trim();
     // Skip tag-like lines, empty lines at boundaries, and short key-value lines
     if (/^===\s*[A-Z_]+\s*===/.test(trimmed)) return false;
-    if (/^(PRE_WRITE_CHECK|CHAPTER_TITLE|章节标题|写作自检)[：:]/.test(trimmed)) return false;
+    if (/^(CHAPTER_TITLE|章节标题)[：:]/.test(trimmed)) return false;
     return true;
   });
   const result = proseLines.join("\n").trim();
@@ -144,7 +142,6 @@ export function parseWriterOutput(
     title: extract("CHAPTER_TITLE") || defaultChapterTitle(chapterNumber, countingMode),
     content: chapterContent,
     wordCount: countChapterLength(chapterContent, countingMode),
-    preWriteCheck: extract("PRE_WRITE_CHECK"),
     postSettlement: extract("POST_SETTLEMENT"),
     updatedState: extract("UPDATED_STATE") || defaultStatePlaceholder(countingMode),
     updatedLedger: genreProfile.numericalSystem

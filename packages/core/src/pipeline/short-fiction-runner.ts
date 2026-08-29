@@ -13,10 +13,7 @@ import {
   SHORT_FICTION_MIN_CHAPTERS,
   SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
   ShortFictionDraftReviewerAgent,
-  ShortFictionDraftReviserAgent,
   ShortFictionOutlineAgent,
-  ShortFictionOutlineReviewerAgent,
-  ShortFictionOutlineReviserAgent,
   ShortFictionPackagingAgent,
   ShortFictionWriterAgent,
   findIncompleteShortFictionChapters,
@@ -37,7 +34,7 @@ import {
 } from "../llm/cover-providers.js";
 import { loadSecrets } from "../llm/secrets.js";
 import { createRangeObservation, type Observation } from "../models/observation.js";
-import { buildLengthSpec, countChapterLength, isOutsideHardRange } from "../utils/length-metrics.js";
+import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath as projectPath } from "../utils/posix-path.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
@@ -48,10 +45,8 @@ const SHORT_FICTION_DRAFT_COMPLETION_ATTEMPTS = 3;
 
 export interface ShortFictionRunRuntimes {
   readonly planner: AgentContext;
-  readonly outlineReview: AgentContext;
   readonly writer: AgentContext;
   readonly draftReview: AgentContext;
-  readonly revise: AgentContext;
   readonly package: AgentContext;
 }
 
@@ -80,7 +75,6 @@ export interface ShortFictionRunResult {
   readonly storyId: string;
   readonly observations: ReadonlyArray<Observation>;
   readonly outlinePath: string;
-  readonly outlineReviewPath: string;
   readonly draftReviewPath: string;
   readonly finalMarkdownPath: string;
   readonly finalJsonPath: string;
@@ -178,14 +172,12 @@ async function produceShort(
         SHORT_FICTION_MAX_CHARS_PER_CHAPTER,
       );
 
-  // Resume the (3-stage) outline from disk if v002 already exists for this id —
-  // the writer + everything downstream only need the outline markdown.
+  // Resume the accepted outline from disk when this Work already exists.
   const resumedOutline = providedStoryId
-    ? await tryReadProjectText(root, join(shortWorkBaseDir(providedStoryId), "outline", "v002.md"))
+    ? await tryReadProjectText(root, join(shortWorkBaseDir(providedStoryId), "outline", "v001.md"))
     : undefined;
 
   let outlineMarkdown: string;
-  let outlineRevisionWarning: string | undefined;
   let storyId: string;
   let baseDir: string;
   let workTitle: string;
@@ -212,59 +204,11 @@ async function produceShort(
     workTitle = outlineV1.storyTitle || options.title?.trim() || storyId;
     await ensureShortWork(root, storyId, workTitle, language);
     await writeText(root, join(baseDir, "outline", "v001.md"), outlineV1.rawContent);
-
-    options.onProgress?.("Reviewing outline...");
-    const outlineReviewer = new ShortFictionOutlineReviewerAgent(options.runtimes.outlineReview);
-    const outlineReview = await outlineReviewer.reviewOutline({
-      direction: options.direction,
-      outline: outlineV1,
-      reference: options.reference,
-      language,
-    });
-    await writeText(root, join(baseDir, "reviews", "outline-v001.md"), outlineReview);
-
-    options.onProgress?.("Revising outline once...");
-    const outlineReviser = new ShortFictionOutlineReviserAgent(options.runtimes.planner);
-    try {
-      const outlineV2 = await outlineReviser.reviseOutline({
-        direction: options.direction,
-        outline: outlineV1,
-        review: outlineReview,
-        reference: options.reference,
-        chapterCount,
-        charsPerChapter,
-        language,
-      });
-      await writeText(root, join(baseDir, "outline", "v002.md"), outlineV2.rawContent);
-      outlineMarkdown = outlineV2.rawContent;
-    } catch (error) {
-      outlineRevisionWarning = error instanceof Error ? error.message : String(error);
-      outlineMarkdown = outlineV1.rawContent;
-      await writeText(root, join(baseDir, "outline", "v002.md"), outlineMarkdown);
-      await writeText(root, join(baseDir, "reviews", "outline-v002-warning.md"), language === "en"
-        ? [
-            "# Outline revision not adopted",
-            "",
-            "The complete first outline remains authoritative because the optional revision did not finish cleanly.",
-            "",
-            "## Reason",
-            "",
-            outlineRevisionWarning,
-          ].join("\n")
-        : [
-            "# 第二版大纲未采用",
-            "",
-            "可用的第一版大纲继续生效；可选修订没有完整结束，系统没有用残缺输出覆盖它。",
-            "",
-            "## 原因",
-            "",
-            outlineRevisionWarning,
-          ].join("\n"));
-    }
+    outlineMarkdown = outlineV1.rawContent;
   }
 
   let finalDraft: ShortFictionBatchDraft;
-  let revisionWarning: string | undefined;
+  let draftReviewWarning: string | undefined;
   let packageWarning: string | undefined;
   let salesPackage: ShortFictionSalesPackage;
   try {
@@ -277,10 +221,10 @@ async function produceShort(
       await writeDraftArtifacts(root, baseDir, "v001-partial", draft, language);
       options.onProgress?.(`Completed short fiction draft chapters: ${completedChapterNumbers.join(", ")}...`);
     };
-    const latestReviewedDraft = providedStoryId
-      ? await tryReadShortFictionDraft(root, join(baseDir, "drafts", "v002", "draft.json"))
+    const acceptedDraft = providedStoryId
+      ? await tryReadShortFictionDraft(root, join(baseDir, "drafts", "v001", "draft.json"))
       : undefined;
-    const resumedDraft = latestReviewedDraft ?? await tryReadShortFictionDraft(
+    const resumedDraft = acceptedDraft ?? await tryReadShortFictionDraft(
       root,
       join(baseDir, "drafts", "v001-partial", "draft.json"),
     );
@@ -325,64 +269,25 @@ async function produceShort(
     validateShortFictionDraftForFinal(draftV1, { expectedChapters: chapterCount, minimumChapterLength });
     await writeDraftArtifacts(root, baseDir, "v001", draftV1, language);
 
-    options.onProgress?.("Reviewing full draft...");
-    const draftReviewer = new ShortFictionDraftReviewerAgent(options.runtimes.draftReview);
-    const draftReview = await draftReviewer.reviewDraft({
-      direction: options.direction,
-      outlineMarkdown,
-      draft: draftV1,
-      chapterCount,
-      charsPerChapter,
-      language,
-    });
-    await writeText(root, join(baseDir, "reviews", "draft-v001.md"), draftReview);
-
     finalDraft = draftV1;
-    const chapterLengthSpec = buildLengthSpec(charsPerChapter, language);
-    const repairChapterNumbers = latestReviewedDraft
-      ? draftV1.chapters
-          .filter((chapter) => isOutsideHardRange(chapter.charCount, chapterLengthSpec))
-          .map((chapter) => chapter.number)
-      : undefined;
-    options.onProgress?.(repairChapterNumbers
-      ? `Revising remaining out-of-range chapters: ${repairChapterNumbers.join(", ")}...`
-      : "Revising full draft once...");
-    const reviser = new ShortFictionDraftReviserAgent(options.runtimes.revise);
+    options.onProgress?.("Reviewing completed short fiction...");
+    const draftReviewer = new ShortFictionDraftReviewerAgent(options.runtimes.draftReview);
     try {
-      const draftV2 = await reviser.reviseDraft({
+      const draftReview = await draftReviewer.reviewDraft({
         direction: options.direction,
         outlineMarkdown,
         draft: draftV1,
-        review: draftReview,
         chapterCount,
         charsPerChapter,
         language,
-        ...(repairChapterNumbers ? { chapterNumbers: repairChapterNumbers } : {}),
       });
-      validateShortFictionDraftForFinal(draftV2, { expectedChapters: chapterCount, minimumChapterLength });
-      await writeDraftArtifacts(root, baseDir, "v002", draftV2, language);
-      finalDraft = draftV2;
+      await writeText(root, join(baseDir, "reviews", "draft-v001.md"), draftReview);
     } catch (error) {
-      revisionWarning = error instanceof Error ? error.message : String(error);
-      await writeText(root, join(baseDir, "reviews", "draft-v002-warning.md"), language === "en"
-        ? [
-            "# Second revision not adopted",
-            "",
-            "The system refused to overwrite the complete first draft with an incomplete or unparsable revision.",
-            "",
-            "## Reason",
-            "",
-            revisionWarning,
-          ].join("\n")
-        : [
-            "# 第二轮改稿未采用",
-            "",
-            "系统没有用不完整或解析失败的改稿覆盖完整首稿。",
-            "",
-            "## 原因",
-            "",
-            revisionWarning,
-          ].join("\n"));
+      options.signal?.throwIfAborted();
+      draftReviewWarning = error instanceof Error ? error.message : String(error);
+      await writeText(root, join(baseDir, "reviews", "draft-v001.md"), language === "en"
+        ? `# Review unavailable\n\nThe complete draft remains available.\n\n## Reason\n\n${draftReviewWarning}`
+        : `# 审稿暂不可用\n\n完整正文已经保留。\n\n## 原因\n\n${draftReviewWarning}`);
     }
 
     await writeFinalArtifacts(root, baseDir, finalDraft, language);
@@ -434,14 +339,13 @@ async function produceShort(
       });
 
   const completionWarnings = [
-    outlineRevisionWarning ? `outline revision skipped: ${outlineRevisionWarning}` : "",
-    revisionWarning ? `draft revision skipped: ${revisionWarning}` : "",
+    draftReviewWarning ? `draft review unavailable: ${draftReviewWarning}` : "",
     packageWarning ? `packaging requires retry: ${packageWarning}` : "",
   ].filter(Boolean);
   const observations = [
     ...buildShortLengthObservations(finalDraft, charsPerChapter, language),
     ...completionWarnings.map((warning): Observation => ({
-      code: warning.startsWith("packaging") ? "package-generation" : "optional-revision",
+      code: warning.startsWith("packaging") ? "package-generation" : "draft-review",
       kind: "soft",
       status: "warning",
       summary: warning,
@@ -475,8 +379,7 @@ function buildShortRunResult(
   return {
     storyId,
     observations,
-    outlinePath: projectPath(join(baseDir, "outline", "v002.md")),
-    outlineReviewPath: projectPath(join(baseDir, "reviews", "outline-v001.md")),
+    outlinePath: projectPath(join(baseDir, "outline", "v001.md")),
     draftReviewPath: projectPath(join(baseDir, "reviews", "draft-v001.md")),
     finalMarkdownPath: projectPath(join(baseDir, "final", "full.md")),
     finalJsonPath: projectPath(join(baseDir, "final", "short-story.json")),

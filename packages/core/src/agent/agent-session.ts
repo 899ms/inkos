@@ -1006,6 +1006,10 @@ async function runAgentSessionUnlocked(
         return [];
       },
       profileSkills,
+      skillActivations: (...skillIds) => skillIds.flatMap((id) => {
+        const skill = skillResolution.availableSkills.find((candidate) => candidate.id === id);
+        return skill ? [{ skill, resources: [] }] : [];
+      }),
       interactiveFilmAuthoring: profileId === "interactive-film" && work !== null,
     });
     const episodeStore = new CreativeEpisodeStore(join(projectRoot, ".inkos", "harness.sqlite"));

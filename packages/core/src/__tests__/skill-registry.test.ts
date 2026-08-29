@@ -1,5 +1,12 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createSkillRegistry } from "../skills/index.js";
+import { appendActivatedSkillGuidance } from "../agents/base.js";
+import { createBuiltInWorkProfileRegistry } from "../harness/builtin-profiles.js";
+import { createSkillRegistry, loadAvailableAgentSkills } from "../skills/index.js";
+import { resolveProfileSkillActivations } from "../skills/activations.js";
+import { WorkProfileSchema } from "../harness/contracts.js";
 
 const externalSkill = {
   id: "writer-distillation",
@@ -55,5 +62,52 @@ describe("AgentSkills registry", () => {
     const registry = createSkillRegistry();
 
     expect(registry.resolveSkills({}).usedSkills.map((skill) => skill.id)).toEqual([]);
+  });
+
+  it("fails loudly when a required professional skill is unavailable", () => {
+    const profile = WorkProfileSchema.parse({
+      version: 2,
+      id: "script",
+      title: "Script",
+      capabilityIds: ["script"],
+      requiredSkillIds: ["inkos-script-writing"],
+    });
+
+    expect(() => resolveProfileSkillActivations([], profile)).toThrow(
+      'Profile "script" requires unavailable skill(s): inkos-script-writing',
+    );
+  });
+
+  it("loads a project Skill override through the Work Profile into worker guidance", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-skill-flow-"));
+    try {
+      const skillDir = join(root, ".agents", "skills", "inkos-long-writing");
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(join(skillDir, "SKILL.md"), [
+        "---",
+        "name: inkos-long-writing",
+        "description: Project long-form method.",
+        "---",
+        "PROJECT_LONGFORM_METHOD",
+      ].join("\n"));
+
+      const loaded = await loadAvailableAgentSkills({ projectRoot: root });
+      const registry = createSkillRegistry({ skills: loaded.skills });
+      const activations = resolveProfileSkillActivations(
+        registry.listSkills(),
+        createBuiltInWorkProfileRegistry().require("longform-novel"),
+      );
+      const messages = appendActivatedSkillGuidance(
+        [{ role: "system", content: "worker protocol" }],
+        activations,
+      );
+
+      expect(activations.map((item) => [item.skill.id, item.skill.source])).toEqual([
+        ["inkos-long-writing", "project"],
+      ]);
+      expect(messages[0]?.content).toContain("PROJECT_LONGFORM_METHOD");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { ArchitectAgent } from "../agents/architect.js";
-import { FoundationReviewerAgent } from "../agents/foundation-reviewer.js";
 import type { ArchitectOutput } from "../agents/architect.js";
 import type { BookConfig } from "../models/book.js";
 import type { LLMClient } from "../llm/provider.js";
@@ -142,9 +141,6 @@ describe("pipeline.reviseFoundation", () => {
         roles: [{ tier: "major", name: "林辞", content: "主角段落描写" }],
       };
       vi.spyOn(ArchitectAgent.prototype, "generateFoundation").mockResolvedValue(mockFoundation);
-      vi.spyOn(FoundationReviewerAgent.prototype, "review").mockResolvedValue({
-        passed: true, dimensions: [], overallFeedback: "ok",
-      } as unknown as Awaited<ReturnType<FoundationReviewerAgent["review"]>>);
 
       // Minimal config for PipelineRunner — 共用 TEST_CLIENT 避免重复。
       const state = new StateManager(root);
@@ -213,9 +209,6 @@ describe("pipeline.reviseFoundation", () => {
         roles: [{ tier: "major", name: "林辞", content: "新卡" }],
       };
       vi.spyOn(ArchitectAgent.prototype, "generateFoundation").mockResolvedValue(mockFoundation);
-      vi.spyOn(FoundationReviewerAgent.prototype, "review").mockResolvedValue({
-        passed: true, dimensions: [], overallFeedback: "ok",
-      } as unknown as Awaited<ReturnType<FoundationReviewerAgent["review"]>>);
 
       const state = new StateManager(root);
       const runner = new PipelineRunner({
@@ -299,9 +292,6 @@ describe("pipeline.reviseFoundation", () => {
           volumeMap: "## 段 1\n卷一 v2",
           roles: [{ tier: "major", name: "林辞", content: "新卡 v2" }],
         });
-      vi.spyOn(FoundationReviewerAgent.prototype, "review").mockResolvedValue({
-        passed: true, dimensions: [], overallFeedback: "ok",
-      } as unknown as Awaited<ReturnType<FoundationReviewerAgent["review"]>>);
 
       const state = new StateManager(root);
       const runner = new PipelineRunner({
@@ -367,9 +357,6 @@ describe("pipeline.reviseFoundation", () => {
           { tier: "major", name: "改名后的B", content: "改名后" },
         ],
       });
-      vi.spyOn(FoundationReviewerAgent.prototype, "review").mockResolvedValue({
-        passed: true, dimensions: [], overallFeedback: "ok",
-      } as unknown as Awaited<ReturnType<FoundationReviewerAgent["review"]>>);
 
       const state = new StateManager(root);
       const runner = new PipelineRunner({
@@ -428,9 +415,6 @@ describe("pipeline.reviseFoundation", () => {
         pendingHooks: "| hook_id |",
         // 故意不填 storyFrame / volumeMap / roles —— 模拟 LLM 回退 legacy
       } as unknown as Awaited<ReturnType<ArchitectAgent["generateFoundation"]>>);
-      vi.spyOn(FoundationReviewerAgent.prototype, "review").mockResolvedValue({
-        passed: true, dimensions: [], overallFeedback: "ok",
-      } as unknown as Awaited<ReturnType<FoundationReviewerAgent["review"]>>);
 
       const state = new StateManager(root);
       const runner = new PipelineRunner({
@@ -495,9 +479,6 @@ describe("pipeline.reviseFoundation", () => {
         storyFrame: "## 新", volumeMap: "## 新",
         roles: [{ tier: "major", name: "B", content: "新" }],
       });
-      vi.spyOn(FoundationReviewerAgent.prototype, "review").mockResolvedValue({
-        passed: true, dimensions: [], overallFeedback: "ok",
-      } as unknown as Awaited<ReturnType<FoundationReviewerAgent["review"]>>);
 
       const state = new StateManager(root);
       const runner = new PipelineRunner({

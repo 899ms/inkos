@@ -75,7 +75,6 @@ describe("WriterAgent parseOutput", () => {
     expect(result.title).toBe("吞天之始");
     expect(result.content).toContain("陈风站在悬崖边");
     expect(result.content).toContain("召唤他");
-    expect(result.preWriteCheck).toContain("检查项");
     expect(result.postSettlement).toContain("资源账本");
     expect(result.updatedState).toContain("状态卡");
     expect(result.updatedLedger).toContain("深渊果实");
@@ -152,19 +151,6 @@ describe("WriterAgent parseOutput", () => {
     expect(result.updatedState).toBe("(state card not updated)");
     expect(result.updatedLedger).toBe("(ledger not updated)");
     expect(result.updatedHooks).toBe("(hooks pool not updated)");
-  });
-
-  it("returns empty string for missing PRE_WRITE_CHECK", () => {
-    const output = [
-      "=== CHAPTER_TITLE ===",
-      "Title",
-      "",
-      "=== CHAPTER_CONTENT ===",
-      "Content.",
-    ].join("\n");
-
-    const result = callParseOutput(1, output);
-    expect(result.preWriteCheck).toBe("");
   });
 
   it("returns empty string for missing POST_SETTLEMENT", () => {
@@ -299,8 +285,7 @@ ${"黑暗中一道身影掠过屋顶，无声无息。".repeat(20)}`;
 
   it("falls back to longest prose block when no structure is found", () => {
     const prose = "这是一段完整的小说正文，描述了主角在黑暗中探索未知世界的经历。".repeat(10);
-    const raw = `PRE_WRITE_CHECK: 已完成自检
-CHAPTER_TITLE: 探索
+    const raw = `CHAPTER_TITLE: 探索
 
 ${prose}`;
 
@@ -321,10 +306,7 @@ ${prose}`;
   });
 
   it("still works with proper === TAG === format", () => {
-    const raw = `=== PRE_WRITE_CHECK ===
-自检完成
-
-=== CHAPTER_TITLE ===
+    const raw = `=== CHAPTER_TITLE ===
 正常标题
 
 === CHAPTER_CONTENT ===

@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { DEFAULT_REVISE_MODE, PipelineRunner, StateManager, type ReviseMode } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, runWithCliProfileSkills } from "../utils.js";
 import {
   formatNotifyCommandTitle,
   formatNotifyFailureBody,
@@ -47,7 +47,13 @@ export const reviseCommand = new Command("revise")
       const mode = opts.mode as ReviseMode;
       if (!opts.json) log(`Revising "${bookId}"${chapterNumber ? ` chapter ${chapterNumber}` : " (latest)"} [mode: ${mode}]...`);
 
-      const result = await pipeline.reviseDraft(bookId, chapterNumber, mode);
+      const result = await runWithCliProfileSkills(
+        pipeline,
+        root,
+        "longform-novel",
+        () => pipeline.reviseDraft(bookId, chapterNumber, mode),
+        { includeRecommended: true },
+      );
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));

@@ -8,10 +8,6 @@ import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
-import {
-  FoundationReviewerAgent,
-  FoundationReviewParseError,
-} from "../agents/foundation-reviewer.js";
 import { PlannerAgent, type PlanChapterOutput } from "../agents/planner.js";
 import { ComposerAgent, composeGovernedChapter, contextBudgetFromClient, type ComposeChapterOutput } from "../agents/composer.js";
 import { WriterAgent, type WriteChapterInput, type WriteChapterOutput } from "../agents/writer.js";
@@ -38,7 +34,6 @@ import type { ChapterMemo, ChapterTrace, ContextPackage, RuleStack } from "../mo
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import { buildLengthSpec, countChapterLength, formatLengthCount, isOutsideHardRange, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
 import { analyzeLongSpanFatigue } from "../utils/long-span-fatigue.js";
-import { buildWritingMethodologySection } from "../utils/writing-methodology.js";
 import {
   isNewLayoutBook,
   readCharacterContext,
@@ -49,7 +44,7 @@ import { loadNarrativeMemorySeed, loadSnapshotCurrentStateFacts } from "../state
 import { rewriteStructuredStateFromMarkdown } from "../state/state-bootstrap.js";
 import { readFile, readdir, writeFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { retrySettlementAfterValidationFailure } from "./chapter-state-recovery.js";
+import { buildStateReconciliationIssues, reconcileChapterStateAfterReview } from "./chapter-state-recovery.js";
 import { persistChapterArtifacts } from "./chapter-persistence.js";
 import { createWorkManifest, saveWorkManifest } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
@@ -58,20 +53,8 @@ import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
 import { selectBookReferenceContext } from "../references/reference-context.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
+import { loadAvailableAgentSkills, mergeActivatedSkillGuidance } from "../skills/index.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
-
-const SEQUENCE_LEVEL_CATEGORIES = new Set([
-  "Pacing Monotony", "节奏单调",
-  "Mood Monotony", "情绪单调",
-  "Title Collapse", "标题重复",
-  "Title Clustering", "标题聚集",
-  "Opening Pattern Repetition", "开头同构",
-  "Ending Pattern Repetition", "结尾同构",
-]);
-
-function isSequenceLevelCategory(category: string): boolean {
-  return SEQUENCE_LEVEL_CATEGORIES.has(category);
-}
 
 function reviewObservations(issues: ReadonlyArray<AuditIssue>) {
   return issues.map((issue, index) => ({
@@ -236,7 +219,6 @@ export interface PipelineConfig {
   readonly model: string;
   readonly projectRoot: string;
   readonly defaultLLMConfig?: LLMConfig;
-  readonly foundationReviewRetries?: number;
   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
   readonly radarSources?: ReadonlyArray<RadarSource>;
   readonly externalContext?: string;
@@ -491,115 +473,6 @@ export class PipelineRunner {
     }
   }
 
-  private async generateAndReviewFoundation(params: {
-    readonly generate: (reviewFeedback?: string) => Promise<ArchitectOutput>;
-    readonly reviewer: FoundationReviewerAgent;
-    readonly mode: "original" | "fanfic" | "series";
-    readonly sourceCanon?: string;
-    readonly styleGuide?: string;
-    readonly language: "zh" | "en";
-    readonly stageLanguage: LengthLanguage;
-    readonly targetChapters?: number;
-    readonly maxRetries?: number;
-  }): Promise<ArchitectOutput> {
-    const maxRetries = params.maxRetries ?? this.config.foundationReviewRetries ?? 2;
-    let foundation = await params.generate();
-
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      this.logStage(params.stageLanguage, {
-        zh: `审核基础设定（第${attempt + 1}轮）`,
-        en: `reviewing foundation (round ${attempt + 1})`,
-      });
-
-      let review;
-      try {
-        review = await params.reviewer.review({
-          foundation,
-          mode: params.mode,
-          sourceCanon: params.sourceCanon,
-          styleGuide: params.styleGuide,
-          language: params.language,
-          targetChapters: params.targetChapters,
-        });
-      } catch (error) {
-        if (!(error instanceof FoundationReviewParseError)) throw error;
-        this.logWarn(params.stageLanguage, {
-          zh: `基础设定审核输出无法解析，已保留当前版本且不会自动重生成：${error.message}`,
-          en: `Foundation review output could not be parsed; keeping the current version without automatic regeneration: ${error.message}`,
-        });
-        return foundation;
-      }
-
-      this.config.logger?.info(
-        `Foundation review: ${review.passed ? "ACCEPT" : "REVISE"}`,
-      );
-      for (const dim of review.dimensions) {
-        this.config.logger?.info(`  [${dim.passed ? "ACCEPT" : "REVISE"}] ${dim.name.slice(0, 40)}`);
-      }
-
-      if (review.passed) {
-        return foundation;
-      }
-
-      this.logWarn(params.stageLanguage, {
-        zh: "基础设定存在明确问题，正在按审核意见重新生成...",
-        en: "Foundation has concrete issues; regenerating from the review feedback...",
-      });
-
-      try {
-        foundation = await params.generate(this.buildFoundationReviewFeedback(review, params.language));
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        this.logWarn(params.stageLanguage, {
-          zh: `基础设定重生成失败，已保留并继续使用上一版完整设定：${detail}`,
-          en: `Foundation regeneration failed; preserving the previous complete foundation: ${detail}`,
-        });
-        return foundation;
-      }
-    }
-
-    this.logWarn(params.stageLanguage, {
-      zh: "基础设定修订预算已用完，保留最后一版完整设定并继续。",
-      en: "Foundation revision budget is exhausted; preserving the latest complete version.",
-    });
-    return foundation;
-  }
-
-  private buildFoundationReviewFeedback(
-    review: {
-      readonly dimensions: ReadonlyArray<{
-        readonly name: string;
-        readonly passed: boolean;
-        readonly feedback: string;
-      }>;
-      readonly overallFeedback: string;
-    },
-    language: "zh" | "en",
-  ): string {
-    const dimensionLines = review.dimensions
-      .map((dimension) => (
-        language === "en"
-          ? `- ${dimension.name}: ${dimension.feedback}`
-          : `- ${dimension.name}：${dimension.feedback}`
-      ))
-      .join("\n");
-
-    return language === "en"
-      ? [
-          "## Overall Feedback",
-          review.overallFeedback,
-          "",
-          "## Dimension Notes",
-          dimensionLines || "- none",
-        ].join("\n")
-      : [
-          "## 总评",
-          review.overallFeedback,
-          "",
-          "## 分项问题",
-          dimensionLines || "- 无",
-        ].join("\n");
-  }
 
   private agentCtx(bookId?: string): AgentContext {
     return {
@@ -697,7 +570,17 @@ export class PipelineRunner {
   // ---------------------------------------------------------------------------
 
   async runRadar(): Promise<RadarResult> {
-    const radar = new RadarAgent(this.agentCtxFor("radar"), this.config.radarSources);
+    const available = await loadAvailableAgentSkills({ projectRoot: this.config.projectRoot });
+    const marketSkill = [...available.skills].reverse().find((skill) => skill.id === "inkos-long-market-research");
+    if (!marketSkill) throw new Error("Radar requires unavailable skill: inkos-long-market-research");
+    const baseContext = this.agentCtxFor("radar");
+    const radar = new RadarAgent({
+      ...baseContext,
+      activatedSkills: mergeActivatedSkillGuidance(
+        baseContext.activatedSkills ?? [],
+        [{ skill: marketSkill, resources: [] }],
+      ),
+    }, this.config.radarSources);
     return radar.scan();
   }
 
@@ -713,20 +596,7 @@ export class PipelineRunner {
 
     this.logStage(stageLanguage, { zh: "生成基础设定", en: "generating foundation" });
     const { profile: gp } = await this.loadGenreProfile(book.genre);
-    const reviewer = new FoundationReviewerAgent(this.agentCtxFor("foundation-reviewer", book.id));
-    const resolvedLanguage = (book.language ?? gp.language) === "en" ? "en" as const : "zh" as const;
-    const foundation = await this.generateAndReviewFoundation({
-      generate: (reviewFeedback) => architect.generateFoundation(
-        book,
-        effectiveExternalContext,
-        reviewFeedback,
-      ),
-      reviewer,
-      mode: "original",
-      language: resolvedLanguage,
-      stageLanguage,
-      targetChapters: book.targetChapters,
-    });
+    const foundation = await architect.generateFoundation(book, effectiveExternalContext);
     let published = false;
     try {
       this.logStage(stageLanguage, { zh: "保存书籍配置", en: "saving book config" });
@@ -863,26 +733,6 @@ export class PipelineRunner {
       },
     });
 
-    const reviewer = new FoundationReviewerAgent(this.agentCtxFor("foundation-reviewer", bookId));
-    const resolvedLanguage = (book.language ?? "zh") === "en" ? "en" as const : "zh" as const;
-    try {
-      const review = await reviewer.review({
-        foundation,
-        mode: "original",
-        language: resolvedLanguage,
-        targetChapters: book.targetChapters,
-      } as Parameters<FoundationReviewerAgent["review"]>[0]);
-      if (!review.passed) {
-        this.config.logger?.warn?.(
-          `[reviseFoundation] Foundation review did not pass; accepting rewrite. Feedback: ${review.overallFeedback ?? ""}`,
-        );
-      }
-    } catch (error) {
-      this.config.logger?.warn?.(
-        `[reviseFoundation] Foundation review failed and was skipped: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-
     const outlineDir = join(storyDir, "outline");
     await mkdir(outlineDir, { recursive: true });
     await mkdir(join(storyDir, "roles", "主要角色"), { recursive: true });
@@ -976,26 +826,11 @@ export class PipelineRunner {
     this.logStage(stageLanguage, { zh: "导入同人正典", en: "importing fanfic canon" });
     const fanficCanon = await this.importFanficCanon(book.id, sourceText, sourceName, fanficMode);
 
-    // Step 2: Generate foundation with review loop
+    // Step 2: Generate the foundation once; later revisions are explicit actions.
     const architect = new ArchitectAgent(this.agentCtxFor("architect", book.id));
-    const reviewer = new FoundationReviewerAgent(this.agentCtxFor("foundation-reviewer", book.id));
     this.logStage(stageLanguage, { zh: "生成同人基础设定", en: "generating fanfic foundation" });
     const { profile: gp } = await this.loadGenreProfile(book.genre);
-    const resolvedLanguage = (book.language ?? gp.language) === "en" ? "en" as const : "zh" as const;
-    const foundation = await this.generateAndReviewFoundation({
-      generate: (reviewFeedback) => architect.generateFanficFoundation(
-        book,
-        fanficCanon,
-        fanficMode,
-        reviewFeedback,
-      ),
-      reviewer,
-      mode: "fanfic",
-      sourceCanon: fanficCanon,
-      language: resolvedLanguage,
-      stageLanguage,
-      targetChapters: book.targetChapters,
-    });
+    const foundation = await architect.generateFanficFoundation(book, fanficCanon, fanficMode);
     this.logStage(stageLanguage, { zh: "写入基础设定文件", en: "writing foundation files" });
     await architect.writeFoundationFiles(
       bookDir,
@@ -1037,20 +872,12 @@ export class PipelineRunner {
     const parentCanon = await this.importCanon(book.id, parentBookId);
 
     const architect = new ArchitectAgent(this.agentCtxFor("architect", book.id));
-    const reviewer = new FoundationReviewerAgent(this.agentCtxFor("foundation-reviewer", book.id));
     const { profile: gp } = await this.loadGenreProfile(book.genre);
     const resolvedLanguage = (book.language ?? gp.language) === "en" ? "en" as const : "zh" as const;
     const spinoffContext = buildSpinoffFoundationContext(parentCanon, direction, resolvedLanguage);
 
     this.logStage(stageLanguage, { zh: "生成番外基础设定", en: "generating side-story foundation" });
-    const foundation = await this.generateAndReviewFoundation({
-      generate: (reviewFeedback) => architect.generateFoundation(book, spinoffContext, reviewFeedback),
-      reviewer,
-      mode: "original",
-      language: resolvedLanguage,
-      stageLanguage,
-      targetChapters: book.targetChapters,
-    });
+    const foundation = await architect.generateFoundation(book, spinoffContext);
 
     this.logStage(stageLanguage, { zh: "写入基础设定文件", en: "writing foundation files" });
     await architect.writeFoundationFiles(bookDir, foundation, gp.numericalSystem, book.language ?? gp.language);
@@ -1465,8 +1292,8 @@ export class PipelineRunner {
         settledRevision.updatedHooks,
         language,
       );
-      if (!stateValidation.passed || stateValidation.repairRequired) {
-        const recovery = await retrySettlementAfterValidationFailure({
+      if (!stateValidation.consistent || stateValidation.reconciliationRequired) {
+        const recovery = await reconcileChapterStateAfterReview({
           writer,
           validator: stateValidator,
           book,
@@ -1488,9 +1315,6 @@ export class PipelineRunner {
           language,
           logger: this.config.logger,
         });
-        if (recovery.kind === "failed") {
-          throw new Error(recovery.issues.map((issue) => issue.description).join("; "));
-        }
         settledRevision = recovery.output;
         stateValidation = recovery.validation;
       }
@@ -1526,6 +1350,7 @@ export class PipelineRunner {
       const lengthReviewIssue = this.buildLengthReviewIssue(targetChapter, revisedCount, lengthSpec);
       const postRevisionIssues = [
         ...postRevision.auditResult.issues,
+        ...buildStateReconciliationIssues(stateValidation.warnings, language),
         ...(lengthReviewIssue ? [lengthReviewIssue] : []),
       ];
       const postRevisionBlockingIssues = [
@@ -1856,7 +1681,6 @@ export class PipelineRunner {
       normalizePostWriteSurface,
       validatePostWrite: postWriteValidate,
     } = await import("../agents/post-write-validator.js");
-    const { validateHookLedger } = await import("../utils/hook-ledger-validator.js");
     const { readBookRules } = await import("../agents/rules-reader.js");
     const parsedBookRules = (await readBookRules(bookDir))?.rules ?? null;
 
@@ -1901,11 +1725,7 @@ export class PipelineRunner {
             description: violation.description,
             suggestion: violation.suggestion,
           }));
-        const memoBody = writeInput.chapterMemo?.body ?? "";
-        return [
-          ...structuralIssues,
-          ...(memoBody ? validateHookLedger(memoBody, content) : []),
-        ];
+        return structuralIssues;
       },
     });
     totalUsage = reviewResult.totalUsage;
@@ -1913,7 +1733,6 @@ export class PipelineRunner {
     let finalWordCount = reviewResult.wordCount;
     let auditResult = reviewResult.review;
 
-    this.throwIfOperationAborted();
     this.throwIfOperationAborted();
     // 4. Save the final chapter and truth files from a single persistence source
     this.logStage(stageLanguage, { zh: "落盘最终章节", en: "persisting final chapter" });
@@ -2057,6 +1876,15 @@ export class PipelineRunner {
       logger: this.config.logger,
     });
     persistenceOutput = truthValidation.persistenceOutput;
+    if (!truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired) {
+      auditResult = {
+        ...auditResult,
+        issues: [
+          ...auditResult.issues,
+          ...buildStateReconciliationIssues(truthValidation.validation.warnings, pipelineLang),
+        ],
+      };
+    }
 
     // 4.2 Final paragraph shape check on persisted content (post-normalize, post-revise)
     {
@@ -2223,8 +2051,8 @@ export class PipelineRunner {
       pipelineLang,
     );
 
-    if (!validation.passed) {
-      const recovery = await retrySettlementAfterValidationFailure({
+    if (!validation.consistent) {
+      const recovery = await reconcileChapterStateAfterReview({
         writer,
         validator,
         book,
@@ -2248,7 +2076,7 @@ export class PipelineRunner {
         logWarn: (message) => this.logWarn(pipelineLang, message),
         logger: this.config.logger,
       });
-      if (recovery.kind !== "recovered") {
+      if (recovery.kind !== "reconciled") {
         throw new Error(
           recovery.issues[0]?.description
             ?? `Chapter sync still failed for chapter ${targetChapter}.`,
@@ -2258,7 +2086,7 @@ export class PipelineRunner {
       validation = recovery.validation;
     }
 
-    if (!validation.passed) {
+    if (!validation.consistent) {
       throw new Error(`Chapter sync still failed for chapter ${targetChapter}.`);
     }
 
@@ -2326,70 +2154,25 @@ export class PipelineRunner {
     } else {
       try {
         // LLM qualitative extraction (language-aware prompt)
+        const styleSections = lang === "en"
+          ? ["Narrative Voice & Tone", "Dialogue Style", "Scene Description", "Transitions", "Pacing", "Diction", "Emotional Expression", "Distinctive Habits"]
+          : ["叙事声音与语气", "对话风格", "场景描写特征", "转折与衔接", "节奏特征", "词汇偏好", "情绪表达方式", "独特习惯"];
         const styleSystemPrompt = lang === "en"
-          ? `You are a literary style analyst. Analyze the writing style of the reference text and extract qualitative, imitable features.
-
-Output format (Markdown):
-## Narrative Voice & Tone
-(detached / fervent / ironic / warm / ..., with 1-2 quoted lines from the text)
-
-## Dialogue Style
-(shared traits in how characters speak: sentence length, verbal tics, dialect markers, dialogue rhythm)
-
-## Scene Description
-(sensory preferences, choice of imagery, description density, how setting ties to emotion)
-
-## Transitions & Connective Technique
-(how scenes switch, how time jumps are handled, paragraph-to-paragraph transitions)
-
-## Pacing
-(distribution of long vs short sentences, paragraph-length preference, how climaxes and lulls alternate)
-
-## Diction
-(signature high-frequency word choices, figurative/rhetorical tendencies, degree of colloquialism)
-
-## Emotional Expression
-(direct lyricism vs externalized action, frequency and style of interior monologue)
-
-## Distinctive Habits
-(any personal writing habits worth imitating)
-
-Base the analysis on the text's actual features, not generalities. Support each section with 1-2 quoted lines from the original.`
-          : `你是一位文学风格分析专家。分析参考文本的写作风格，提取可供模仿的定性特征。
-
-输出格式（Markdown）：
-## 叙事声音与语气
-（冷峻/热烈/讽刺/温情/...，附1-2个原文例句）
-
-## 对话风格
-（角色说话的共性特征：句子长短、口头禅倾向、方言痕迹、对话节奏）
-
-## 场景描写特征
-（五感偏好、意象选择、描写密度、环境与情绪的关联方式）
-
-## 转折与衔接手法
-（场景如何切换、时间跳跃的处理方式、段落间的过渡特征）
-
-## 节奏特征
-（长短句分布、段落长度偏好、高潮/舒缓的交替方式）
-
-## 词汇偏好
-（高频特色用词、比喻/修辞倾向、口语化程度）
-
-## 情绪表达方式
-（直白抒情 vs 动作外化、内心独白的频率和风格）
-
-## 独特习惯
-（任何值得模仿的个人写作习惯）
-
-分析必须基于原文实际特征，不要泛泛而谈。每个部分用1-2个原文例句佐证。`;
+          ? `Analyze the sample with the activated long-story-analysis Skill. Return evidence-backed Markdown using these H2 sections only:\n${styleSections.map((section) => `## ${section}`).join("\n")}`
+          : `按已激活的长篇拆稿 Skill 分析样本。只返回有原文证据的 Markdown，并使用以下二级标题：\n${styleSections.map((section) => `## ${section}`).join("\n")}`;
         const styleUserPrompt = lang === "en"
           ? `Analyze the writing style of the following reference text:\n\n${sample}`
           : `分析以下参考文本的写作风格：\n\n${sample}`;
+        const available = await loadAvailableAgentSkills({ projectRoot: this.config.projectRoot });
+        const analysisSkill = available.skills.find((skill) => skill.id === "inkos-long-story-analysis");
+        if (!analysisSkill) throw new Error("Style analysis requires unavailable skill: inkos-long-story-analysis");
         const response = await runWorkerAgent(this.config.client, this.config.model, appendActivatedSkillGuidance([
           { role: "system", content: styleSystemPrompt },
           { role: "user", content: styleUserPrompt },
-        ], this.currentActivatedSkills()), { temperature: 0.3, signal: this.currentAbortSignal() });
+        ], mergeActivatedSkillGuidance(
+          this.currentActivatedSkills() ?? [],
+          [{ skill: analysisSkill, resources: [] }],
+        )), { temperature: 0.3, signal: this.currentAbortSignal() });
         qualitativeGuide = response.content.trim()
           ? response.content
           : this.buildDeterministicStyleGuide(profile, {
@@ -2408,10 +2191,8 @@ Base the analysis on the text's actual features, not generalities. Support each 
       }
     }
 
-    const craftMethodology = buildWritingMethodologySection(lang);
-    const fullStyleGuide = `${qualitativeGuide}\n\n${craftMethodology}`;
-    await writeFile(join(storyDir, "style_guide.md"), fullStyleGuide, "utf-8");
-    return fullStyleGuide;
+    await writeFile(join(storyDir, "style_guide.md"), qualitativeGuide, "utf-8");
+    return qualitativeGuide;
   }
 
   private buildDeterministicStyleGuide(
@@ -2604,16 +2385,13 @@ Base the analysis on the text's actual features, not generalities. Support each 
 
         const architect = new ArchitectAgent(this.agentCtxFor("architect", input.bookId));
         const isSeries = input.importMode === "series";
-        const foundation = isSeries
-          ? await this.generateAndReviewFoundation({
-              generate: (reviewFeedback) => architect.generateFoundationFromImport(book, foundationSource, undefined, reviewFeedback, { importMode: "series" }),
-              reviewer: new FoundationReviewerAgent(this.agentCtxFor("foundation-reviewer", input.bookId)),
-              mode: "series",
-              language: resolvedLanguage === "en" ? "en" : "zh",
-              stageLanguage: resolvedLanguage,
-              targetChapters: book.targetChapters,
-            })
-          : await architect.generateFoundationFromImport(book, foundationSource);
+        const foundation = await architect.generateFoundationFromImport(
+          book,
+          foundationSource,
+          undefined,
+          undefined,
+          { importMode: isSeries ? "series" : "continuation" },
+        );
         this.throwIfOperationAborted();
         await architect.writeFoundationFiles(
           bookDir,

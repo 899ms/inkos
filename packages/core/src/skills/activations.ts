@@ -8,6 +8,12 @@ export function resolveProfileSkillActivations(
   options: { readonly includeRecommended?: boolean } = {},
 ): ActivatedSkillGuidance[] {
   const byId = new Map(availableSkills.map((skill) => [skill.id, skill]));
+  const missingRequired = profile.requiredSkillIds.filter((id) => !byId.has(id));
+  if (missingRequired.length > 0) {
+    throw new Error(
+      `Profile "${profile.id}" requires unavailable skill(s): ${missingRequired.join(", ")}`,
+    );
+  }
   const ids = options.includeRecommended
     ? [...profile.requiredSkillIds, ...profile.recommendedSkillIds]
     : profile.requiredSkillIds;

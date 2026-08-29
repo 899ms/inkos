@@ -30,8 +30,6 @@ describe("project settings form model", () => {
       apiUrl: "https://detector.example.com/api",
       apiKeyEnv: "DETECT_KEY",
       threshold: 0.7,
-      autoRewrite: true,
-      maxRetries: 4,
     });
 
     expect(draft.enabled).toBe(false);

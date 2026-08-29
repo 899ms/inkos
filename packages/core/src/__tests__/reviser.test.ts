@@ -100,7 +100,7 @@ describe("ReviserAgent", () => {
     }
   });
 
-  it("keeps rewrite mode local-first instead of encouraging full-chapter replacement", async () => {
+  it("does not apply patch output when full rewrite mode requires revised content", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-reviser-rewrite-guardrail-test-"));
     const bookDir = join(root, "book");
     await mkdir(join(bookDir, "story"), { recursive: true });
@@ -144,15 +144,9 @@ describe("ReviserAgent", () => {
     });
 
     try {
-      await agent.reviseChapter(bookDir, "原始正文。", 1, [CRITICAL_ISSUE], "rewrite", "xuanhuan");
-
-      const messages = chatSpy.mock.calls[0]?.[0] as
-        | ReadonlyArray<{ content: string }>
-        | undefined;
-      const systemPrompt = messages?.[0]?.content ?? "";
-
-      expect(systemPrompt).toContain("优先保留原文的绝大部分句段");
-      expect(systemPrompt).toContain("除非问题跨越整章");
+      const output = await agent.reviseChapter(bookDir, "原始正文。", 1, [CRITICAL_ISSUE], "rewrite", "xuanhuan");
+      expect(output.revisedContent).toBe("原始正文。");
+      expect(output.fixedIssues).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -442,7 +436,7 @@ describe("ReviserAgent", () => {
     }
   });
 
-  it("sanitizes reduced governed control input so raw hook ids and source labels do not enter reviser prompts", async () => {
+  it("preserves governed evidence pointers and hook ids for the reviser", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-reviser-governed-sanitize-test-"));
     const bookDir = join(root, "book");
     await mkdir(join(bookDir, "story"), { recursive: true });
@@ -535,12 +529,11 @@ describe("ReviserAgent", () => {
       );
 
       const userPrompt = (chatSpy.mock.calls[0]?.[0] as ReadonlyArray<{ content: string }> | undefined)?.[1]?.content ?? "";
-      expect(userPrompt).not.toContain("runtime/hook_debt#H001");
       expect(userPrompt).not.toContain("## Hook Agenda");
-      expect(userPrompt).not.toContain("H001");
-      expect(userPrompt).not.toContain("H002");
-      expect(userPrompt).not.toContain("前几章");
-      expect(userPrompt).not.toContain("本章要做的");
+      expect(userPrompt).toContain("H001");
+      expect(userPrompt).toContain("H002");
+      expect(userPrompt).toContain("前几章");
+      expect(userPrompt).toContain("本章要做的是");
       expect(userPrompt).toContain("Bring the focus back to the mentor oath conflict.");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -700,8 +693,8 @@ describe("ReviserAgent", () => {
         | undefined;
       const userPrompt = messages?.[1]?.content ?? "";
 
-      expect(userPrompt).not.toContain("story/chapter_summaries.md#99");
-      expect(userPrompt).not.toContain("story/pending_hooks.md#mentor-oath");
+      expect(userPrompt).toContain("story/chapter_summaries.md#99");
+      expect(userPrompt).toContain("story/pending_hooks.md#mentor-oath");
       expect(userPrompt).not.toContain("story/story_bible.md");
       expect(userPrompt).not.toContain("story/volume_outline.md");
       expect(userPrompt).toContain("The jade seal cannot be destroyed.");

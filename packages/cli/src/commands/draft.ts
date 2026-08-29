@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { PipelineRunner } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveContext, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveContext, resolveBookId, log, logError, runWithCliProfileSkills } from "../utils.js";
 
 export const draftCommand = new Command("draft")
   .description("Write a draft chapter (no audit/revise)")
@@ -23,7 +23,9 @@ export const draftCommand = new Command("draft")
 
       if (!opts.json) log(`Writing draft for "${bookId}"...`);
 
-      const result = await pipeline.writeDraft(bookId, context, wordCount);
+      const result = await runWithCliProfileSkills(
+        pipeline, root, "longform-novel", () => pipeline.writeDraft(bookId, context, wordCount),
+      );
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));

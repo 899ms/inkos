@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { createLLMClient, StateManager, createLogger, createStderrSink, createJsonLineSink, resolveEffectiveLLMConfig, loadLLMEnvLayers, GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH, type EffectiveLLMConfigResult, type LLMApiFormat, type LLMConfigCliOverrides, type ProjectConfig, type PipelineConfig, type LogSink } from "@actalk/inkos-core";
+import { createLLMClient, StateManager, createLogger, createStderrSink, createJsonLineSink, resolveEffectiveLLMConfig, loadLLMEnvLayers, GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH, createBuiltInWorkProfileRegistry, loadAvailableAgentSkills, mergeActivatedSkillGuidance, resolveProfileSkillActivations, type ActivatedSkillGuidance, type EffectiveLLMConfigResult, type LLMApiFormat, type LLMConfigCliOverrides, type ProjectConfig, type PipelineConfig, type PipelineRunner, type LogSink } from "@actalk/inkos-core";
 
 export { GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH };
 
@@ -27,6 +27,37 @@ export async function resolveContext(opts: {
 
 export function findProjectRoot(): string {
   return process.cwd();
+}
+
+export async function resolveCliProfileSkills(
+  projectRoot: string,
+  profileId: string,
+  options: { readonly includeRecommended?: boolean; readonly extraSkillIds?: ReadonlyArray<string> } = {},
+): Promise<ActivatedSkillGuidance[]> {
+  const available = await loadAvailableAgentSkills({ projectRoot });
+  const profileSkills = resolveProfileSkillActivations(
+    available.skills,
+    createBuiltInWorkProfileRegistry().require(profileId),
+    { includeRecommended: options.includeRecommended },
+  );
+  const byId = new Map(available.skills.map((skill) => [skill.id, skill]));
+  const extras = (options.extraSkillIds ?? []).map((id) => {
+    const skill = byId.get(id);
+    if (!skill) throw new Error(`CLI operation requires unavailable skill: ${id}`);
+    return { skill, resources: [] };
+  });
+  return mergeActivatedSkillGuidance(profileSkills, extras);
+}
+
+export async function runWithCliProfileSkills<T>(
+  pipeline: PipelineRunner,
+  projectRoot: string,
+  profileId: string,
+  operation: () => Promise<T>,
+  options: { readonly includeRecommended?: boolean; readonly extraSkillIds?: ReadonlyArray<string> } = {},
+): Promise<T> {
+  const activatedSkills = await resolveCliProfileSkills(projectRoot, profileId, options);
+  return pipeline.runWithAgentContext({ activatedSkills }, operation);
 }
 
 export async function loadConfig(options?: {
@@ -137,7 +168,6 @@ export function buildPipelineConfig(
     model: config.llm.model,
     projectRoot: root,
     defaultLLMConfig: config.llm,
-    foundationReviewRetries: config.foundation.reviewRetries,
     modelOverrides: config.modelOverrides,
     notifyChannels: extra?.notifyChannels ?? config.notify,
     radarSources: extra?.radarSources,

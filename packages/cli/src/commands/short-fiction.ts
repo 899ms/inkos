@@ -39,11 +39,9 @@ shortCommand
   .option("--chars <n>", "Per-chapter length: zh characters (900-1200) or en words (600-800)")
   .option("--llm-base-url <url>", "Override LLM base URL")
   .option("--model <model>", "Fallback model for all short stages")
-  .option("--planner-model <model>", "Model for outline creation/revision")
-  .option("--outline-review-model <model>", "Model for outline review")
+  .option("--planner-model <model>", "Model for outline creation")
   .option("--writer-model <model>", "Model for first full draft")
   .option("--draft-review-model <model>", "Model for draft review")
-  .option("--revise-model <model>", "Model for second full draft")
   .option("--package-model <model>", "Model for synopsis and cover prompt packaging")
   .option("--cover-base-url <url>", "OpenAI-compatible Responses API base URL for cover generation, e.g. https://api.openai.com/v1")
   .option("--cover-endpoint <url>", "Exact Responses endpoint for cover generation; overrides --cover-base-url")
@@ -86,10 +84,8 @@ shortCommand
       const modelOverrides = { ...(config.modelOverrides ?? {}) };
       const stageModels = {
         "short-outline": models.planner,
-        "short-outline-review": models.outlineReview,
         "short-writer": models.writer,
         "short-draft-review": models.draftReview,
-        "short-revise": models.revise,
         "short-package": models.package,
       };
       for (const [stage, model] of Object.entries(stageModels)) {
@@ -161,10 +157,8 @@ interface ShortRunOptions {
   readonly llmBaseUrl?: string;
   readonly model?: string;
   readonly plannerModel?: string;
-  readonly outlineReviewModel?: string;
   readonly writerModel?: string;
   readonly draftReviewModel?: string;
-  readonly reviseModel?: string;
   readonly packageModel?: string;
   readonly coverBaseUrl?: string;
   readonly coverEndpoint?: string;
@@ -182,20 +176,16 @@ function parseShortFictionLanguage(value: string): ShortFictionLanguage {
 
 interface ShortRunModels {
   readonly planner?: string;
-  readonly outlineReview?: string;
   readonly writer?: string;
   readonly draftReview?: string;
-  readonly revise?: string;
   readonly package?: string;
 }
 
 function resolveShortRunModels(options: ShortRunOptions): ShortRunModels {
   return {
     planner: options.plannerModel || options.model,
-    outlineReview: options.outlineReviewModel || options.model,
     writer: options.writerModel || options.model,
     draftReview: options.draftReviewModel || options.model,
-    revise: options.reviseModel || options.model,
     package: options.packageModel || options.model,
   };
 }

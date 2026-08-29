@@ -525,7 +525,6 @@ describe("storyboard creation runner", () => {
     const [, , messages] = chatCompletionMock.mock.calls[0]!;
     const system = messages[0].content as string;
     const user = messages[1].content as string;
-    expect(system).toContain("storyboard-creation tool");
     expect(system).not.toMatch(/[一-鿿]/);
     expect(user).toContain("## Storyboard Spec");
     expect(user).toContain("## Image Prompts");
@@ -586,7 +585,6 @@ describe("storyboard creation runner", () => {
     const [, , messages] = chatCompletionMock.mock.calls[0]!;
     const system = messages[0].content as string;
     const user = messages[1].content as string;
-    expect(system).toContain("interactive-film creation tool");
     expect(system).not.toMatch(/[一-鿿]/);
     expect(user).toContain("## Story Tree");
     expect(user).toContain("## Variables and Flags");

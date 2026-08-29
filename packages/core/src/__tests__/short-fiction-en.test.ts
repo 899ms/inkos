@@ -5,10 +5,6 @@ import { join } from "node:path";
 import {
   buildShortFictionDraftReviewSystemPrompt,
   buildShortFictionDraftReviewUserPrompt,
-  buildShortFictionDraftRevisionFollowup,
-  buildShortFictionOutlineReviewSystemPrompt,
-  buildShortFictionOutlineReviewUserPrompt,
-  buildShortFictionOutlineRevisionFollowup,
   buildShortFictionOutlineSystemPrompt,
   buildShortFictionOutlineUserPrompt,
   buildShortFictionPackageSystemPrompt,
@@ -18,7 +14,6 @@ import {
 } from "../prompts/short-fiction.js";
 import {
   ShortFictionDraftReviewerAgent,
-  ShortFictionDraftReviserAgent,
   ShortFictionPackagingAgent,
   ShortFictionWriterAgent,
   parseShortFictionBatchDraft,
@@ -48,18 +43,6 @@ describe("short-fiction English prompt branch", () => {
     const enPrompts: Record<string, string> = {
       outlineSystem: buildShortFictionOutlineSystemPrompt("en"),
       outlineUser: buildShortFictionOutlineUserPrompt(OUTLINE_INPUT, "en"),
-      outlineReviewSystem: buildShortFictionOutlineReviewSystemPrompt("en"),
-      outlineReviewUser: buildShortFictionOutlineReviewUserPrompt({
-        direction: OUTLINE_INPUT.direction,
-        outline: { rawContent: "the plan body" },
-      }, "en"),
-      outlineRevisionFollowup: buildShortFictionOutlineRevisionFollowup({
-        direction: OUTLINE_INPUT.direction,
-        outline: { rawContent: "the plan body" },
-        review: "the back half sags",
-        chapterCount: 12,
-        charsPerChapter: 650,
-      }, "en"),
       writerSystem: buildShortFictionWriterSystemPrompt("en"),
       writerUser: buildShortFictionWriterUserPrompt(DRAFT_INPUT, "en"),
       continuationUser: buildShortFictionWriterUserPrompt({
@@ -71,10 +54,6 @@ describe("short-fiction English prompt branch", () => {
       draftReviewUser: buildShortFictionDraftReviewUserPrompt({
         ...DRAFT_INPUT,
         draftMarkdown: "# The Draft Body",
-      }, "en"),
-      draftRevisionFollowup: buildShortFictionDraftRevisionFollowup({
-        ...DRAFT_INPUT,
-        review: "fix the timeline in chapter 4",
       }, "en"),
       packageSystem: buildShortFictionPackageSystemPrompt("en"),
       packageUser: buildShortFictionPackageUserPrompt({
@@ -97,15 +76,13 @@ describe("short-fiction English prompt branch", () => {
     expect(prompt).toContain("=== SHORT_FICTION_OPENING_HOOK ===");
     expect(prompt).toContain("=== CHAPTER 1 TITLE ===");
     expect(prompt).toContain("=== CHAPTER 12 CONTENT ===");
-    expect(prompt).toContain("650 words per chapter");
+    expect(prompt).toContain("about 650 words each");
   });
 
   it("keeps the zh default identical to the explicit zh branch", () => {
     expect(buildShortFictionWriterSystemPrompt()).toBe(buildShortFictionWriterSystemPrompt("zh"));
     expect(buildShortFictionOutlineSystemPrompt()).toBe(buildShortFictionOutlineSystemPrompt("zh"));
-    expect(buildShortFictionWriterSystemPrompt()).toContain("中文短篇 BatchWriter");
     const zhWriterUser = buildShortFictionWriterUserPrompt({ ...DRAFT_INPUT, charsPerChapter: 1000 });
-    expect(zhWriterUser).toContain("高潮即场景");
     expect(zhWriterUser).toContain("每章约 1000 字");
   });
 });
@@ -172,7 +149,7 @@ describe("short-fiction runner English branch", () => {
 
   function runtimes(projectRoot: string) {
     const context = { client: { provider: "openai" } as never, model: "fake", projectRoot };
-    return { planner: context, outlineReview: context, writer: context, draftReview: context, revise: context, package: context };
+    return { planner: context, writer: context, draftReview: context, package: context };
   }
 
   it("bounds en charsPerChapter in words (600-800), rejecting the zh char range", async () => {
@@ -189,7 +166,7 @@ describe("short-fiction runner English branch", () => {
   it("threads language and the en word default through the pipeline and artifacts", async () => {
     const CH = 12;
     await mkdir(join(root, "works", "extra-floor", "source", "outline"), { recursive: true });
-    await writeFile(join(root, "works", "extra-floor", "source", "outline", "v002.md"), "## Existing plan", "utf-8");
+    await writeFile(join(root, "works", "extra-floor", "source", "outline", "v001.md"), "## Existing plan", "utf-8");
 
     const draftMd = [
       "=== SHORT_FICTION_TITLE ===",
@@ -205,7 +182,6 @@ describe("short-fiction runner English branch", () => {
 
     const writeDraft = vi.spyOn(ShortFictionWriterAgent.prototype, "writeDraft").mockResolvedValue(draft);
     vi.spyOn(ShortFictionDraftReviewerAgent.prototype, "reviewDraft").mockResolvedValue("reads fine");
-    vi.spyOn(ShortFictionDraftReviserAgent.prototype, "reviseDraft").mockResolvedValue(draft);
     vi.spyOn(ShortFictionPackagingAgent.prototype, "generatePackage").mockResolvedValue({
       title: "The Extra Floor", intro: "An elevator hook.", sellingPoints: ["reversal"], coverPrompt: "", rawContent: "",
     });
