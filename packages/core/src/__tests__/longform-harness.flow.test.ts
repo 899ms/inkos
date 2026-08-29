@@ -43,7 +43,6 @@ describe("long-form harness mini-flow", () => {
       saveTruthFiles: async () => undefined,
       saveChapterIndex: (index) => state.saveChapterIndex("novel", index),
       markBookActiveIfNeeded: async () => undefined,
-      persistAuditDriftGuidance: async () => undefined,
       snapshotState: async () => undefined,
       syncCurrentStateFactHistory: async () => undefined,
       logSnapshotStage: () => undefined,

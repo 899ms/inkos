@@ -443,6 +443,23 @@ function hasUnansweredTerminalToolResult(messages: AgentMessage[]): boolean {
   return false;
 }
 
+export function turnHasObservableOutcome(messages: ReadonlyArray<AgentMessage>): boolean {
+  return messages.some((message) => {
+    if (!message || typeof message !== "object" || !("role" in message)) return false;
+    const role = (message as { role?: unknown }).role;
+    if (role === "toolResult") return true;
+    if (role !== "assistant" || !("content" in message)) return false;
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) return false;
+    return content.some((block) => {
+      if (!block || typeof block !== "object" || !("type" in block)) return false;
+      const typed = block as { type?: unknown; text?: unknown };
+      return typed.type === "toolCall"
+        || (typed.type === "text" && typeof typed.text === "string" && typed.text.trim().length > 0);
+    });
+  });
+}
+
 async function runInAgentSessionQueue<T>(
   projectRoot: string,
   sessionId: string,
@@ -1233,7 +1250,10 @@ async function runAgentSessionUnlocked(
       )
     ));
     const turnAborted = finalAssistant?.stopReason === "aborted";
-    errorMessage = assistantErrorMessage(finalAssistant) ?? (turnAborted ? "Agent turn aborted." : undefined);
+    const turnMessages = agent.state.messages.slice(turnMessageStartIndex);
+    errorMessage = assistantErrorMessage(finalAssistant)
+      ?? (turnAborted ? "Agent turn aborted." : undefined)
+      ?? (!turnHasObservableOutcome(turnMessages) ? "Agent returned no text or tool result." : undefined);
     if (errorMessage) {
       const failedError = errorMessage;
       await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({

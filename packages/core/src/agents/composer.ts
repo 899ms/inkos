@@ -610,11 +610,6 @@ async function collectSelectedContext(
       ),
       maybeContextSource(
         storyDir,
-        "audit_drift.md",
-        "Carry forward audit drift guidance from the previous chapter without polluting hard state facts.",
-      ),
-      maybeContextSource(
-        storyDir,
         "current_state.md",
         "Preserve hard state facts referenced by the active chapter brief or hard constraints.",
       ),

@@ -127,7 +127,6 @@ export function isProtectedContextSource(source: string): boolean {
   return source === "runtime/chapter_memo"
     || source === "story/current_focus.md"
     || source === "story/author_intent.md"
-    || source === "story/audit_drift.md"
     || source === "story/outline/story_frame.md"
     || source.startsWith("story/outline/story_frame.md#")
     || source === "story/story_bible.md"

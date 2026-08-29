@@ -1279,7 +1279,19 @@ export class PipelineRunner {
       chapterNumber: targetChapter,
       language,
     });
-    const result = evaluation.auditResult;
+    const lengthSpec = buildLengthSpec(book.chapterWordCount, language);
+    const lengthIssue = this.buildLengthReviewIssue(
+      targetChapter,
+      countChapterLength(content, lengthSpec.countingMode),
+      lengthSpec,
+    );
+    const result: AuditResult = {
+      ...evaluation.auditResult,
+      issues: [
+        ...evaluation.auditResult.issues,
+        ...(lengthIssue ? [lengthIssue] : []),
+      ],
+    };
 
     // Update index with audit result
     const index = await this.state.loadChapterIndex(bookId);
@@ -1293,15 +1305,6 @@ export class PipelineRunner {
         : ch,
     );
     await this.state.saveChapterIndex(bookId, updated);
-    const latestChapter = index.length > 0 ? Math.max(...index.map((chapter) => chapter.number)) : targetChapter;
-    if (targetChapter === latestChapter) {
-      await this.persistAuditDriftGuidance({
-        bookDir,
-        chapterNumber: targetChapter,
-        issues: result.issues.filter((issue) => issue.severity === "critical" || issue.severity === "warning"),
-        language,
-      }).catch(() => undefined);
-    }
 
     await this.emitWebhook("review-complete", bookId, targetChapter, {
       summary: result.summary,
@@ -1518,12 +1521,17 @@ export class PipelineRunner {
                 ledger: settledRevision.updatedLedger || undefined,
                 hooks: settledRevision.updatedHooks,
               },
-            },
+          },
       });
-      const effectivePostRevision = this.restoreActionableAuditIfLost(
-        preRevision,
-        postRevision,
-      );
+      const lengthReviewIssue = this.buildLengthReviewIssue(targetChapter, revisedCount, lengthSpec);
+      const postRevisionIssues = [
+        ...postRevision.auditResult.issues,
+        ...(lengthReviewIssue ? [lengthReviewIssue] : []),
+      ];
+      const postRevisionBlockingIssues = [
+        ...postRevision.revisionBlockingIssues,
+        ...(lengthReviewIssue ? [lengthReviewIssue] : []),
+      ];
       const revisionBaseCount = countChapterLength(content, lengthSpec.countingMode);
       const lengthWarnings = this.buildLengthWarnings(
         targetChapter,
@@ -1539,7 +1547,7 @@ export class PipelineRunner {
         lengthWarning: lengthWarnings.length > 0,
       });
 
-      const remainingIssues = effectivePostRevision.revisionBlockingIssues
+      const remainingIssues = postRevisionBlockingIssues
         .filter((issue) => issue.severity === "warning" || issue.severity === "critical")
         .slice(0, 6)
         .map((issue) => ({
@@ -1592,7 +1600,7 @@ export class PipelineRunner {
             ...ch,
             wordCount: revisedCount,
             updatedAt: new Date().toISOString(),
-            observations: reviewObservations(effectivePostRevision.auditResult.issues),
+            observations: reviewObservations(postRevisionIssues),
             provenance: "edited" as const,
             lengthWarnings,
             lengthTelemetry,
@@ -1617,16 +1625,6 @@ export class PipelineRunner {
         return ch;
       });
       await this.state.saveChapterIndex(bookId, updatedIndex);
-      if (isLatestChapter) {
-        await this.persistAuditDriftGuidance({
-          bookDir,
-          chapterNumber: targetChapter,
-          issues: effectivePostRevision.auditResult.issues.filter(
-            (issue) => issue.severity === "critical" || issue.severity === "warning",
-          ),
-          language,
-        }).catch(() => undefined);
-      }
 
       // Re-snapshot
       this.logStage(stageLanguage, {
@@ -2111,12 +2109,6 @@ export class PipelineRunner {
       },
       saveChapterIndex: (index) => this.state.saveChapterIndex(bookId, index),
       markBookActiveIfNeeded: () => this.markBookActiveIfNeeded(bookId),
-      persistAuditDriftGuidance: (issues) => this.persistAuditDriftGuidance({
-        bookDir,
-        chapterNumber,
-        issues,
-        language: stageLanguage,
-      }).catch(() => undefined),
       snapshotState: () => this.state.snapshotState(bookId, chapterNumber),
       syncCurrentStateFactHistory: () => this.syncCurrentStateFactHistory(bookId, chapterNumber),
       logSnapshotStage: () =>
@@ -3117,6 +3109,28 @@ Base the analysis on the text's actual features, not generalities. Support each 
     ];
   }
 
+  private buildLengthReviewIssue(
+    chapterNumber: number,
+    finalCount: number,
+    lengthSpec: LengthSpec,
+  ): AuditIssue | undefined {
+    if (!isOutsideHardRange(finalCount, lengthSpec)) return undefined;
+    const language = this.languageFromLengthSpec(lengthSpec);
+    return {
+      severity: "warning",
+      category: "length-budget",
+      description: this.localize(language, {
+        zh: `第${chapterNumber}章当前版本为 ${finalCount} 字，超出硬区间 ${lengthSpec.hardMin}-${lengthSpec.hardMax} 字。`,
+        en: `Chapter ${chapterNumber} currently has ${finalCount} words, outside the hard range ${lengthSpec.hardMin}-${lengthSpec.hardMax}.`,
+      }),
+      suggestion: this.localize(language, {
+        zh: `围绕 ${lengthSpec.target} 字调整当前版本。`,
+        en: `Revise the current artifact toward ${lengthSpec.target} words.`,
+      }),
+      repairScope: "structural",
+    };
+  }
+
   private buildLengthTelemetry(params: {
     lengthSpec: LengthSpec;
     writerCount: number;
@@ -3140,118 +3154,10 @@ Base the analysis on the text's actual features, not generalities. Support each 
     };
   }
 
-  private async persistAuditDriftGuidance(params: {
-    readonly bookDir: string;
-    readonly chapterNumber: number;
-    readonly issues: ReadonlyArray<AuditIssue>;
-    readonly language: LengthLanguage;
-  }): Promise<void> {
-    const storyDir = join(params.bookDir, "story");
-    const driftPath = join(storyDir, "audit_drift.md");
-    const statePath = join(storyDir, "current_state.md");
-    const currentState = await readFile(statePath, "utf-8").catch(() => "");
-    const sanitizedState = this.stripAuditDriftCorrectionBlock(currentState).trimEnd();
-
-    if (sanitizedState !== currentState) {
-      await writeFile(statePath, sanitizedState, "utf-8");
-    }
-
-    if (params.issues.length === 0) {
-      await rm(driftPath, { force: true }).catch(() => undefined);
-      return;
-    }
-
-    const block = [
-      this.localize(params.language, {
-        zh: "# 审计纠偏",
-        en: "# Audit Drift",
-      }),
-      "",
-      this.localize(params.language, {
-        zh: "## 审计纠偏（自动生成，下一章写作前参照）",
-        en: "## Audit Drift Correction",
-      }),
-      "",
-      this.localize(params.language, {
-        zh: `> 第${params.chapterNumber}章审计发现以下问题，下一章写作时必须避免：`,
-        en: `> Chapter ${params.chapterNumber} audit found the following issues to avoid in the next chapter:`,
-      }),
-      ...params.issues.map((issue) => `> - [${issue.severity}] ${issue.category}: ${issue.description}`),
-      "",
-    ].join("\n");
-
-    await writeFile(driftPath, block, "utf-8");
-  }
-
-  private stripAuditDriftCorrectionBlock(currentState: string): string {
-    const headers = [
-      "## 审计纠偏（自动生成，下一章写作前参照）",
-      "## Audit Drift Correction",
-      "# 审计纠偏",
-      "# Audit Drift",
-    ];
-
-    let cutIndex = -1;
-    for (const header of headers) {
-      const index = currentState.indexOf(header);
-      if (index >= 0 && (cutIndex < 0 || index < cutIndex)) {
-        cutIndex = index;
-      }
-    }
-
-    if (cutIndex < 0) {
-      return currentState;
-    }
-
-    return currentState.slice(0, cutIndex).trimEnd();
-  }
-
   private logLengthWarnings(lengthWarnings: ReadonlyArray<string>): void {
     for (const warning of lengthWarnings) {
       this.config.logger?.warn(warning);
     }
-  }
-
-  private restoreLostAuditIssues(previous: AuditResult, next: AuditResult): AuditResult {
-    if (next.issues.length > 0 || previous.issues.length === 0) {
-      return next;
-    }
-
-    return {
-      ...next,
-      issues: previous.issues,
-      summary: next.summary || previous.summary,
-    };
-  }
-
-  private restoreActionableAuditIfLost(
-    previous: {
-      auditResult: AuditResult;
-      aiTellCount: number;
-      blockingCount: number;
-      criticalCount: number;
-      revisionBlockingIssues: ReadonlyArray<AuditIssue>;
-    },
-    next: {
-      auditResult: AuditResult;
-      aiTellCount: number;
-      blockingCount: number;
-      criticalCount: number;
-      revisionBlockingIssues: ReadonlyArray<AuditIssue>;
-    },
-  ): MergedAuditEvaluation {
-    const auditResult = this.restoreLostAuditIssues(previous.auditResult, next.auditResult);
-    if (auditResult === next.auditResult) {
-      return next;
-    }
-
-    return {
-      ...next,
-      auditResult,
-      revisionBlockingIssues: previous.revisionBlockingIssues,
-      blockingCount: previous.blockingCount,
-      criticalCount: previous.criticalCount,
-    };
   }
 
   private async evaluateMergedAudit(params: {

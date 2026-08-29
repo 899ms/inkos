@@ -1,4 +1,4 @@
-import type { AuditIssue, AuditResult } from "../agents/continuity.js";
+import type { AuditResult } from "../agents/continuity.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { LengthTelemetry } from "../models/length-governance.js";
 
@@ -21,7 +21,6 @@ export async function persistChapterArtifacts(params: {
   readonly saveTruthFiles: () => Promise<void>;
   readonly saveChapterIndex: (index: ReadonlyArray<ChapterMeta>) => Promise<void>;
   readonly markBookActiveIfNeeded: () => Promise<void>;
-  readonly persistAuditDriftGuidance: (issues: ReadonlyArray<AuditIssue>) => Promise<void>;
   readonly snapshotState: () => Promise<void>;
   readonly syncCurrentStateFactHistory: () => Promise<void>;
   readonly logSnapshotStage: () => void;
@@ -57,10 +56,6 @@ export async function persistChapterArtifacts(params: {
   await params.saveChapterIndex(updatedIndex);
   await params.markBookActiveIfNeeded();
 
-  const driftIssues = params.auditResult.issues.filter(
-    (issue) => issue.severity === "critical" || issue.severity === "warning",
-  );
-  await params.persistAuditDriftGuidance(driftIssues);
   params.logSnapshotStage();
   await params.snapshotState();
   await params.syncCurrentStateFactHistory();
