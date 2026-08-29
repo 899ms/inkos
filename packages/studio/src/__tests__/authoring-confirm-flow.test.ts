@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStudioServer } from "../api/server.js";
@@ -13,13 +13,19 @@ const INKOS_CONFIG = JSON.stringify({
   notify: [],
 });
 
-describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
+describe("Studio Pi mini-flow", () => {
   let root: string;
   const prev = process.env.INKOS_AGENT_LLM_STUB;
-  beforeAll(() => { process.env.INKOS_AGENT_LLM_STUB = "1"; });
+  const prevScenario = process.env.INKOS_AGENT_LLM_STUB_SCENARIO;
+  beforeAll(() => {
+    process.env.INKOS_AGENT_LLM_STUB = "1";
+    process.env.INKOS_AGENT_LLM_STUB_SCENARIO = "interactive-film-structure";
+  });
   afterAll(() => {
     if (prev === undefined) delete process.env.INKOS_AGENT_LLM_STUB;
     else process.env.INKOS_AGENT_LLM_STUB = prev;
+    if (prevScenario === undefined) delete process.env.INKOS_AGENT_LLM_STUB_SCENARIO;
+    else process.env.INKOS_AGENT_LLM_STUB_SCENARIO = prevScenario;
   });
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "if-confirm-"));
@@ -34,6 +40,27 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
+  it("answers ordinary discussion without creating another Work", async () => {
+    const app = createStudioServer({} as never, root);
+    const sessionId = "1000000000-chat";
+    await createAndPersistBookSession(root, null, sessionId, "chat");
+    const before = await readdir(join(root, "works"));
+
+    const response = await app.request("/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "先讨论人物关系，不要开始生产",
+        sessionKind: "chat",
+        actionSource: "free-text",
+        sessionId,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await readdir(join(root, "works"))).toEqual(before);
+  });
+
   it("free-text proposes draft_structure, confirm creates the graph", async () => {
     const app = createStudioServer({} as never, root);
     const sessionId = "1000000000-test";
@@ -42,7 +69,6 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
     // Pre-create the session so the agent endpoint can load it
     await createAndPersistBookSession(root, bookId, sessionId, "interactive-film-authoring");
 
-    // Step 1: free-text instruction → stubbed agent proposes draft_structure via propose_action
     const propose = await app.request("/api/v1/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -65,8 +91,6 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
       },
     });
 
-    // Step 2: confirm the proposed action → executeConfirmedProductionAction runs draft_structure
-    // stubChatCompletion returns STRUCTURE_JSON (4 nodes) when prompt mentions "骨架/nodes/结构"
     const confirm = await app.request("/api/v1/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -82,7 +106,6 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
     });
     expect(confirm.status).toBe(200);
 
-    // Assert the story graph was created with at least 4 nodes
     const graph = await loadStoryGraph(root, bookId);
     expect(graph?.nodes.length).toBeGreaterThanOrEqual(4);
   });

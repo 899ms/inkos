@@ -61,6 +61,7 @@
     "build": "node ../../scripts/clean-package-dist.mjs && tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
+    "test:flows": "vitest run src/__tests__/*.flow.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

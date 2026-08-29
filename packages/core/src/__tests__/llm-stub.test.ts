@@ -3,9 +3,12 @@ import { isLlmStubEnabled, stubChatCompletion } from "../agent/llm-stub.js";
 
 describe("llm-stub", () => {
   const prev = process.env.INKOS_AGENT_LLM_STUB;
+  const prevScenario = process.env.INKOS_AGENT_LLM_STUB_SCENARIO;
   afterEach(() => {
     if (prev === undefined) delete process.env.INKOS_AGENT_LLM_STUB;
     else process.env.INKOS_AGENT_LLM_STUB = prev;
+    if (prevScenario === undefined) delete process.env.INKOS_AGENT_LLM_STUB_SCENARIO;
+    else process.env.INKOS_AGENT_LLM_STUB_SCENARIO = prevScenario;
   });
 
   it("isLlmStubEnabled reflects the env var", () => {
@@ -15,11 +18,12 @@ describe("llm-stub", () => {
     expect(isLlmStubEnabled()).toBe(false);
   });
 
-  it("stubChatCompletion returns a valid structure JSON for a structure prompt", () => {
+  it("returns the scripted structure fixture without interpreting prompt text", () => {
+    process.env.INKOS_AGENT_LLM_STUB_SCENARIO = "interactive-film-structure";
     const res = stubChatCompletion(
       [
-        { role: "system", content: "生成分支骨架 JSON：{nodes:[...]}" },
-        { role: "user", content: "三幕" },
+        { role: "system", content: "arbitrary system" },
+        { role: "user", content: "arbitrary input" },
       ],
       "stub-model",
     );

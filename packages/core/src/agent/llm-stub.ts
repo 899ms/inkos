@@ -21,17 +21,6 @@ const EMPTY_USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-function lastUserText(context: { messages?: Array<{ role: string; content: unknown }> }): string {
-  const msgs = context.messages ?? [];
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    if (m.role === "user") {
-      return typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-    }
-  }
-  return "";
-}
-
 function alreadyProposed(
   context: { messages?: Array<{ role: string; content: unknown; toolName?: string }> },
 ): boolean {
@@ -64,20 +53,19 @@ function alreadyProposed(
 }
 
 /**
- * Returns a deterministic AssistantMessageEventStream that either emits a
- * propose_action toolCall (when the latest user text mentions "结构/骨架/structure"
- * and propose_action hasn't run yet) or a plain "好的。" text reply.
+ * Returns a deterministic AssistantMessageEventStream selected by the explicit
+ * test scenario. The stub never interprets user text to choose a workflow.
  *
  * Mirrors localAssistantStopStream in agent-session.ts exactly — same
  * createAssistantMessageEventStream() + queueMicrotask pattern.
  */
 export function stubAgentStream(model: Model<Api>, context: unknown): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
-  const text = lastUserText(context as { messages?: Array<{ role: string; content: unknown }> });
   const proposed = alreadyProposed(
     context as { messages?: Array<{ role: string; content: unknown; toolName?: string }> },
   );
-  const wantStructure = !proposed && /结构|骨架|structure/i.test(text);
+  const wantStructure = !proposed
+    && process.env.INKOS_AGENT_LLM_STUB_SCENARIO === "interactive-film-structure";
 
   const content = wantStructure
     ? [
@@ -151,15 +139,14 @@ const NODE_JSON = JSON.stringify({
 
 /**
  * Deterministic replacement for the chatCompletion network call.
- * Returns STRUCTURE_JSON when the prompt mentions structure/骨架/nodes,
- * otherwise a single node JSON.
  */
 export function stubChatCompletion(
-  messages: ReadonlyArray<LLMMessage>,
+  _messages: ReadonlyArray<LLMMessage>,
   _model: string,
 ): LLMResponse {
-  const joined = messages.map((m) => m.content).join("\n");
-  const content = /骨架|nodes|结构/i.test(joined) ? STRUCTURE_JSON : NODE_JSON;
+  const content = process.env.INKOS_AGENT_LLM_STUB_SCENARIO === "interactive-film-structure"
+    ? STRUCTURE_JSON
+    : NODE_JSON;
   return {
     content,
     usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },

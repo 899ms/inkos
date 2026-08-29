@@ -45,6 +45,7 @@
     "dev": "tsc --watch",
     "pretest": "pnpm run build",
     "test": "vitest run --passWithNoTests",
+    "test:flows": "vitest run src/__tests__/cli.flow.test.ts src/__tests__/tui-agent-session.test.ts",
     "pretypecheck": "pnpm run prepare:workspace-core",
     "typecheck": "tsc --noEmit"
   },

@@ -27,6 +27,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:flows": "vitest run src/__tests__/*.flow.test.ts src/__tests__/authoring-confirm-flow.test.ts",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
   },

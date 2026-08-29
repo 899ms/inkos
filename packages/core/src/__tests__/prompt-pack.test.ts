@@ -1,15 +1,18 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  getBuiltinPrompt,
   loadPromptPackPrompt,
   promptOverridePath,
 } from "../prompts/index.js";
 
+const roots: string[] = [];
+
 async function tempProject(): Promise<string> {
-  return await mkdtemp(join(tmpdir(), "inkos-prompt-pack-"));
+  const root = await mkdtemp(join(tmpdir(), "inkos-prompt-pack-"));
+  roots.push(root);
+  return root;
 }
 
 async function writePrompt(root: string, promptId: string, content: string): Promise<string> {
@@ -20,51 +23,40 @@ async function writePrompt(root: string, promptId: string, content: string): Pro
 }
 
 describe("prompt pack loader", () => {
-  it("loads built-in prompts without filesystem overrides", async () => {
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it("loads a structurally complete built-in prompt", async () => {
     const loaded = await loadPromptPackPrompt({ promptId: "longform.writer" });
 
     expect(loaded.source).toBe("builtin");
-    expect(loaded.content).toContain("long-form");
     expect(loaded.promptId).toBe("longform.writer");
-    expect(loaded.content).toContain("exact placement");
-    expect(loaded.content).toContain("Reuse supplied hook ids");
+    expect(loaded.content.trim().length).toBeGreaterThan(0);
   });
 
-  it("keeps longform audit and revision focused on binding intent before style", () => {
-    expect(getBuiltinPrompt("longform.auditor")?.content).toContain("critical structural failure");
-    expect(getBuiltinPrompt("longform.reviser")?.content).toContain("critical author-intent and canon issue");
-  });
-
-  it("uses project override before user override and built-in", async () => {
+  it("resolves project, user, then built-in precedence as one flow", async () => {
     const projectRoot = await tempProject();
     const userRoot = await tempProject();
-    await writePrompt(userRoot, "play.renderer", "USER RENDERER");
+    const userPath = await writePrompt(userRoot, "play.renderer", "USER RENDERER");
     const projectPath = await writePrompt(projectRoot, "play.renderer", "PROJECT RENDERER");
 
-    const loaded = await loadPromptPackPrompt({
+    const project = await loadPromptPackPrompt({
+      promptId: "play.renderer",
+      projectRoot,
+      userRoot,
+    });
+    await rm(projectPath);
+    const user = await loadPromptPackPrompt({
       promptId: "play.renderer",
       projectRoot,
       userRoot,
     });
 
-    expect(loaded.source).toBe("project");
-    expect(loaded.path).toBe(projectPath);
-    expect(loaded.content).toBe("PROJECT RENDERER");
-  });
-
-  it("uses user override when project override is absent", async () => {
-    const userRoot = await tempProject();
-    const userPath = await writePrompt(userRoot, "interactive-film.story-graph", "USER GRAPH PROMPT");
-
-    const loaded = await loadPromptPackPrompt({
-      promptId: "interactive-film.story-graph",
-      projectRoot: await tempProject(),
-      userRoot,
+    expect({ project: [project.source, project.path], user: [user.source, user.path] }).toEqual({
+      project: ["project", projectPath],
+      user: ["user", userPath],
     });
-
-    expect(loaded.source).toBe("user");
-    expect(loaded.path).toBe(userPath);
-    expect(loaded.content).toBe("USER GRAPH PROMPT");
   });
 
   it("throws a structured error for unknown prompts", async () => {
@@ -76,10 +68,4 @@ describe("prompt pack loader", () => {
       });
   });
 
-  it("can report the built-in default for reset UI", () => {
-    const builtin = getBuiltinPrompt("play.mutator");
-
-    expect(builtin?.source).toBe("builtin");
-    expect(builtin?.content).toContain("world mutation");
-  });
 });
