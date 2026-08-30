@@ -316,7 +316,6 @@ function recordManualEditObservation(
           ...chapter.observations.filter((existing) => existing.code !== "manual-edit-review"),
           {
             code: "manual-edit-review",
-            kind: "soft" as const,
             summary: issue,
             evidence: [],
           },

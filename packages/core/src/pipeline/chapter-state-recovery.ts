@@ -1,7 +1,6 @@
 import type { Observation } from "../models/observation.js";
 import type {
   ValidationResult,
-  ValidationWarning,
 } from "../agents/state-validator.js";
 import type { StateValidatorAgent } from "../agents/state-validator.js";
 import type { WriteChapterOutput } from "../agents/writer.js";
@@ -43,7 +42,7 @@ export type SettlementRetryResult =
     readonly kind: "unresolved";
     readonly output: WriteChapterOutput;
     readonly validation: ValidationResult;
-    readonly issues: ReadonlyArray<Observation>;
+    readonly observations: ReadonlyArray<Observation>;
   };
 
 export async function reconcileChapterStateAfterReview(
@@ -66,7 +65,7 @@ export async function reconcileChapterStateAfterReview(
     chapterIntent: params.reducedControlInput.chapterIntent,
     contextPackage: params.reducedControlInput.contextPackage,
     validationFeedback: buildStateReconciliationFeedback(
-      params.originalValidation.warnings,
+      params.originalValidation.observations,
       params.language,
     ),
   });
@@ -86,26 +85,27 @@ export async function reconcileChapterStateAfterReview(
     const validation: ValidationResult = {
       consistent: false,
       reconciliationRequired: true,
-      warnings: [{
-        category: "state-validation-unavailable",
-        description: `State reconciliation could not be verified: ${String(error)}`,
+      observations: [{
+        code: "state-validation-unavailable",
+        summary: `State reconciliation could not be verified: ${String(error)}`,
+        evidence: [],
       }],
     };
     return {
       kind: "unresolved",
       output: retryOutput,
       validation,
-      issues: buildStateReconciliationIssues(validation.warnings, params.language),
+      observations: validation.observations,
     };
   }
 
-  if (retryValidation.warnings.length > 0) {
+  if (retryValidation.observations.length > 0) {
     params.logWarn?.({
-      zh: `状态校验重试后，第${params.chapterNumber}章仍有 ${retryValidation.warnings.length} 条警告`,
-      en: `State validation retry still reports ${retryValidation.warnings.length} warning(s) for chapter ${params.chapterNumber}`,
+      zh: `状态校验重试后，第${params.chapterNumber}章仍有 ${retryValidation.observations.length} 条观察`,
+      en: `State validation retry still reports ${retryValidation.observations.length} observation(s) for chapter ${params.chapterNumber}`,
     });
-    for (const warning of retryValidation.warnings) {
-      params.logger?.warn(`  [${warning.category}] ${warning.description}`);
+    for (const observation of retryValidation.observations) {
+      params.logger?.warn(`  [${observation.code}] ${observation.summary}`);
     }
   }
 
@@ -121,15 +121,17 @@ export async function reconcileChapterStateAfterReview(
     kind: "unresolved",
     output: retryOutput,
     validation: retryValidation,
-    issues: buildStateReconciliationIssues(retryValidation.warnings, params.language),
+    observations: retryValidation.observations.length > 0
+      ? retryValidation.observations
+      : [unresolvedStateObservation(params.language)],
   };
 }
 
 export function buildStateReconciliationFeedback(
-  warnings: ReadonlyArray<ValidationWarning>,
+  observations: ReadonlyArray<Observation>,
   language: LengthLanguage,
 ): string {
-  if (warnings.length === 0) {
+  if (observations.length === 0) {
     return language === "en"
       ? "The previous settlement contradicted the chapter text. Reconcile truth files strictly to the body."
       : "上一次状态结算与正文矛盾。请严格以正文为准修正 truth files。";
@@ -138,35 +140,24 @@ export function buildStateReconciliationFeedback(
   if (language === "en") {
     return [
       "The previous settlement needs reconciliation. Align these differences with the chapter body:",
-      ...warnings.map((warning) => `- [${warning.category}] ${warning.description}`),
+      ...observations.map((observation) => `- [${observation.code}] ${observation.summary}`),
     ].join("\n");
   }
 
   return [
     "上一次状态结算需要对账。请对照正文修正以下差异：",
-    ...warnings.map((warning) => `- [${warning.category}] ${warning.description}`),
+    ...observations.map((observation) => `- [${observation.code}] ${observation.summary}`),
   ].join("\n");
 }
 
-export function buildStateReconciliationIssues(
-  warnings: ReadonlyArray<ValidationWarning>,
+export function unresolvedStateObservation(
   language: LengthLanguage,
-): ReadonlyArray<Observation> {
-  if (warnings.length > 0) {
-    return warnings.map((warning) => ({
-      code: warning.category || "state-validation",
-      kind: "hard" as const,
-      summary: warning.description,
-      evidence: [],
-    }));
-  }
-
-  return [{
+): Observation {
+  return {
     code: "state-validation",
-    kind: "hard",
     summary: language === "en"
       ? "State reconciliation remains unresolved after recalculation."
       : "状态结算重算后仍有未解决差异。",
     evidence: [],
-  }];
+  };
 }

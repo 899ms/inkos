@@ -7,7 +7,7 @@ import type { ActivatedSkillGuidance } from "../../agent/skill-tool.js";
 import { defaultChapterLength } from "../../utils/length-metrics.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../../utils/book-id.js";
 import { mergeActivatedSkillGuidance } from "../../skills/activations.js";
-import { runAsWorkflowTrajectory, runWithAgentTrajectoryRole } from "../../llm/agent-trajectory.js";
+import { runAsWorkflowTrajectory } from "../../llm/agent-trajectory.js";
 
 interface LongformToolOptions {
   readonly actionPayload?: ActionPayload;
@@ -35,7 +35,7 @@ const FoundationRevisionParams = Type.Object({
 const WriteChaptersParams = Type.Object({
   instruction: Type.String(),
   bookId: Type.Optional(Type.String()),
-  chapterCount: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+  chapterCount: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
@@ -77,10 +77,13 @@ function activatedSkills(options: LongformToolOptions, worker: string): Activate
 function runPipeline<T>(
   pipeline: PipelineRunner,
   signal: AbortSignal | undefined,
-  skills: ReadonlyArray<ActivatedSkillGuidance>,
+  options: LongformToolOptions,
   task: () => Promise<T>,
 ): Promise<T> {
-  return runAsWorkflowTrajectory(() => pipeline.runWithAgentContext({ signal, activatedSkills: skills }, task));
+  return runAsWorkflowTrajectory(() => pipeline.runWithAgentContext({
+    signal,
+    workerSkills: (agent) => activatedSkills(options, agent),
+  }, task));
 }
 
 function progress(onUpdate: AgentToolUpdateCallback | undefined, message: string): void {
@@ -96,8 +99,7 @@ export function createBookFoundationTool(
     label: "Create long-form Work",
     description: "Create one long-form Work foundation from the confirmed instruction.",
     parameters: BookCreateParams,
-    async execute(toolCallId, params: Static<typeof BookCreateParams>, signal, onUpdate) {
-      return runWithAgentTrajectoryRole("subagent", async () => {
+    async execute(_toolCallId, params: Static<typeof BookCreateParams>, signal, onUpdate) {
         const payload = options.actionPayload?.createBook;
         const title = payload?.title?.trim() || params.title?.trim();
         if (!title) throw new Error("create_book requires title.");
@@ -110,7 +112,7 @@ export function createBookFoundationTool(
         const skills = activatedSkills(options, "architect");
         const now = new Date().toISOString();
         progress(onUpdate, `Creating foundation for "${id}"...`);
-        await runPipeline(pipeline, signal, skills, () => pipeline.initBook({
+        const book = {
           id,
           title,
           genre: payload?.genre ?? params.genre ?? "other",
@@ -121,7 +123,10 @@ export function createBookFoundationTool(
           chapterWordCount: payload?.chapterWordCount ?? params.chapterWordCount ?? defaultChapterLength(language),
           createdAt: now,
           updatedAt: now,
-        }, { externalContext: params.instruction }));
+        } as const;
+        await runPipeline(pipeline, signal, options, () => (
+          pipeline.initBook(book, { externalContext: params.instruction })
+        ));
         return textResult(`Created long-form Work "${title}" (${id}).`, {
           kind: "book_created",
           workId: id,
@@ -129,7 +134,6 @@ export function createBookFoundationTool(
           title,
           skillIds: skills.map((skill) => skill.skill.id),
         });
-      }, toolCallId);
     },
   };
 }
@@ -144,18 +148,16 @@ export function createFoundationRevisionTool(
     label: "Revise foundation",
     description: "Rebuild the active Work foundation from an explicit revision instruction.",
     parameters: FoundationRevisionParams,
-    async execute(toolCallId, params: Static<typeof FoundationRevisionParams>, signal, onUpdate) {
-      return runWithAgentTrajectoryRole("subagent", async () => {
+    async execute(_toolCallId, params: Static<typeof FoundationRevisionParams>, signal, onUpdate) {
         const bookId = resolveBookId("revise_foundation", params.bookId, activeBookId);
         const skills = activatedSkills(options, "architect");
         progress(onUpdate, `Revising foundation for "${bookId}"...`);
-        await runPipeline(pipeline, signal, skills, () => pipeline.reviseFoundation(bookId, params.instruction));
+        await runPipeline(pipeline, signal, options, () => pipeline.reviseFoundation(bookId, params.instruction));
         return textResult(`Revised foundation for "${bookId}".`, {
           kind: "foundation_revised",
           bookId,
           skillIds: skills.map((skill) => skill.skill.id),
         });
-      }, toolCallId);
     },
   };
 }
@@ -170,12 +172,11 @@ export function createWriteChaptersTool(
     label: "Write chapters",
     description: "Write one or more consecutive chapters for the active Work.",
     parameters: WriteChaptersParams,
-    async execute(toolCallId, params: Static<typeof WriteChaptersParams>, signal, onUpdate) {
-      return runWithAgentTrajectoryRole("subagent", async () => {
+    async execute(_toolCallId, params: Static<typeof WriteChaptersParams>, signal, onUpdate) {
         const bookId = resolveBookId("write_chapters", params.bookId, activeBookId);
         const count = params.chapterCount ?? 1;
         const skills = activatedSkills(options, "writer");
-        const results = await runPipeline(pipeline, signal, skills, () => pipeline.writeChapters(bookId, count, {
+        const results = await runPipeline(pipeline, signal, options, () => pipeline.writeChapters(bookId, count, {
           wordCount: params.chapterWordCount,
           externalContext: params.instruction,
           onChapterComplete(result, completed, total) {
@@ -183,7 +184,7 @@ export function createWriteChaptersTool(
           },
         }));
         const first = results[0];
-        const observations = results.flatMap((result) => result.review.issues);
+        const observations = results.flatMap((result) => result.review.observations);
         return textResult(`Completed ${results.length} chapter(s) for "${bookId}".`, {
           kind: results.length === 1 ? "chapter_written" : "chapters_written",
           bookId,
@@ -203,11 +204,10 @@ export function createWriteChaptersTool(
             chapterNumber: result.chapterNumber,
             title: result.title,
             wordCount: result.wordCount,
-            observations: result.review.issues,
+            observations: result.review.observations,
             ...(result.contextTrace ? { contextTrace: result.contextTrace } : {}),
           })),
         });
-      }, toolCallId);
     },
   };
 }
@@ -222,22 +222,19 @@ export function createReviewChapterTool(
     label: "Review chapter",
     description: "Review one persisted chapter and record evidence-backed observations.",
     parameters: ReviewChapterParams,
-    async execute(toolCallId, params: Static<typeof ReviewChapterParams>, signal) {
-      return runWithAgentTrajectoryRole("subagent", async () => {
+    async execute(_toolCallId, params: Static<typeof ReviewChapterParams>, signal) {
         const bookId = resolveBookId("review_chapter", params.bookId, activeBookId);
         const skills = activatedSkills(options, "auditor");
-        const review = await runPipeline(pipeline, signal, skills, () => pipeline.reviewChapter(bookId, params.chapterNumber));
-        return textResult(`Reviewed chapter ${review.chapterNumber}; ${review.issues.length} observation(s).`, {
+        const review = await runPipeline(pipeline, signal, options, () => pipeline.reviewChapter(bookId, params.chapterNumber));
+        return textResult(`Reviewed chapter ${review.chapterNumber}; ${review.observations.length} observation(s).`, {
           kind: "chapter_review",
           workId: bookId,
           bookId,
           chapterNumber: review.chapterNumber,
           summary: review.summary,
-          issues: review.issues,
-          observations: review.issues,
+          observations: review.observations,
           skillIds: skills.map((skill) => skill.skill.id),
         });
-      }, toolCallId);
     },
   };
 }
@@ -252,15 +249,14 @@ export function createReviseChapterTool(
     label: "Revise chapter",
     description: "Revise one persisted chapter from the user's explicit instruction and current observations.",
     parameters: ReviseChapterParams,
-    async execute(toolCallId, params: Static<typeof ReviseChapterParams>, signal) {
-      return runWithAgentTrajectoryRole("subagent", async () => {
+    async execute(_toolCallId, params: Static<typeof ReviseChapterParams>, signal) {
         const bookId = resolveBookId("revise_chapter", params.bookId, activeBookId);
         const mode = (params.mode ?? "rewrite") as ReviseMode;
         const skills = activatedSkills(options, "reviser");
         const result = await runPipeline(
           pipeline,
           signal,
-          skills,
+          options,
           () => pipeline.reviseDraft(bookId, params.chapterNumber, mode, params.instruction),
         );
         return textResult(
@@ -273,12 +269,10 @@ export function createReviseChapterTool(
             mode,
             wordCount: result.wordCount,
             changed: result.changed,
-            fixedIssues: result.fixedIssues,
             observations: result.observations,
             skillIds: skills.map((skill) => skill.skill.id),
           },
         );
-      }, toolCallId);
     },
   };
 }

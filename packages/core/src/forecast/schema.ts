@@ -4,15 +4,11 @@ import { z } from "zod";
 // A forecast never becomes canon by itself — it is planning material stored
 // under story/runtime/narrative-forecasts/ and compared by the author.
 
-export const FORECAST_MIN_BRANCHES = 2;
-export const FORECAST_MAX_BRANCHES = 5;
 export const FORECAST_DEFAULT_BRANCHES = 3;
-export const FORECAST_MIN_HORIZON = 1;
-export const FORECAST_MAX_HORIZON = 10;
 export const FORECAST_DEFAULT_HORIZON = 5;
 
 export const ForecastRiskSchema = z.object({
-  kind: z.enum(["continuity", "causality", "character"]),
+  kind: z.string().min(1),
   description: z.string().min(1),
 });
 export type ForecastRisk = z.infer<typeof ForecastRiskSchema>;
@@ -61,11 +57,11 @@ export const NarrativeForecastSchema = z.object({
   createdAt: z.string().min(1),
   language: z.enum(["zh", "en"]),
   divergence: z.string().min(1),
-  horizon: z.number().int().min(FORECAST_MIN_HORIZON).max(FORECAST_MAX_HORIZON),
+  horizon: z.number().int().positive(),
   baseChapter: z.number().int().min(0),
   contextFingerprint: z.string().min(1),
   status: ForecastStatusSchema,
-  branches: z.array(ForecastBranchSchema).min(FORECAST_MIN_BRANCHES).max(FORECAST_MAX_BRANCHES),
+  branches: z.array(ForecastBranchSchema).min(1),
 }).superRefine((forecast, ctx) => {
   const seen = new Set<string>();
   for (const branch of forecast.branches) {
@@ -87,6 +83,6 @@ export const ForecastModelBranchSchema = ForecastBranchSchema.omit({ branchId: t
 export type ForecastModelBranch = z.infer<typeof ForecastModelBranchSchema>;
 
 export const ForecastModelOutputSchema = z.object({
-  branches: z.array(ForecastModelBranchSchema).min(FORECAST_MIN_BRANCHES).max(FORECAST_MAX_BRANCHES),
+  branches: z.array(ForecastModelBranchSchema).min(1),
 });
 export type ForecastModelOutput = z.infer<typeof ForecastModelOutputSchema>;

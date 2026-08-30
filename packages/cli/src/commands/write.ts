@@ -68,7 +68,7 @@ writeCommand
             chapterNumber: result.chapterNumber,
             title: result.title,
             wordCount: result.wordCount,
-            observations: result.review.issues,
+            observations: result.review.observations,
           })) {
             log(line);
           }
@@ -95,7 +95,7 @@ writeCommand
             chapterNumber: r.chapterNumber,
             title: r.title,
             wordCount: r.wordCount,
-            observationCount: r.review.issues.length,
+            observationCount: r.review.observations.length,
           }))),
         }, config);
       }
@@ -227,7 +227,7 @@ writeCommand
           chapterNumber: result.chapterNumber,
           title: result.title,
           wordCount: result.wordCount,
-          observations: result.review.issues,
+          observations: result.review.observations,
         })) {
           log(line);
         }
@@ -293,7 +293,7 @@ writeCommand
           chapterNumber: result.chapterNumber,
           title: result.title,
           wordCount: result.wordCount,
-          observations: result.review.issues,
+          observations: result.review.observations,
         })) {
           log(line);
         }

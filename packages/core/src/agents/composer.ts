@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { BaseAgent } from "./base.js";
 import { SemanticContextCompilerAgent } from "./semantic-context-compiler.js";
 import type { ContextFragment } from "../harness/context-compiler.js";
-import { semanticInputBudget } from "../llm/semantic-input.js";
+import { semanticInputBudget, splitTextByEstimatedTokens } from "../llm/semantic-input.js";
 import type { BookConfig } from "../models/book.js";
 import {
   ContextPackageSchema,
@@ -353,12 +353,12 @@ export class ComposerAgent extends BaseAgent {
     const groups = groupMemoryCandidates(request.candidates, budget);
     const selected = new Set<string>();
     for (const group of groups) {
-      const candidates = group.map((candidate) => [
-        `id: ${candidate.id}`,
-        `kind: ${candidate.kind}`,
-        `source: ${candidate.source}`,
-        `title: ${candidate.title}`,
-        candidate.excerpt,
+      const candidates = group.map((entry) => [
+        `id: ${entry.selectionId}`,
+        `kind: ${entry.candidate.kind}`,
+        `source: ${entry.candidate.source}`,
+        `title: ${entry.candidate.title}`,
+        entry.excerpt,
       ].join("\n")).join("\n\n");
       const ids = await this.submitSelectedSources([
         {
@@ -369,8 +369,11 @@ export class ComposerAgent extends BaseAgent {
           role: "user",
           content: [`Chapter: ${request.chapterNumber}`, "Current task:", request.query, "", "Candidates:", candidates].join("\n"),
         },
-      ], new Set(group.map((candidate) => candidate.id)), 2048);
-      for (const id of ids) selected.add(id);
+      ], new Set(group.map((entry) => entry.selectionId)), 2048);
+      for (const id of ids) {
+        const entry = group.find((candidate) => candidate.selectionId === id);
+        if (entry) selected.add(entry.candidate.id);
+      }
     }
     return [...selected];
   }
@@ -488,32 +491,46 @@ function semanticCandidateLabel(
   return "大纲段落";
 }
 
+interface MemorySelectionChunk {
+  readonly selectionId: string;
+  readonly candidate: MemorySemanticSelectionRequest["candidates"][number];
+  readonly excerpt: string;
+}
+
 function groupMemoryCandidates(
   candidates: MemorySemanticSelectionRequest["candidates"],
   budgetTokens: number | undefined,
-): Array<MemorySemanticSelectionRequest["candidates"]> {
+): MemorySelectionChunk[][] {
   if (candidates.length === 0) return [];
-  if (budgetTokens === undefined) return [candidates];
-  const groups: Array<Array<MemorySemanticSelectionRequest["candidates"][number]>> = [];
-  let current: Array<MemorySemanticSelectionRequest["candidates"][number]> = [];
+  const chunks = candidates.flatMap((candidate): MemorySelectionChunk[] => {
+    if (budgetTokens === undefined) return [{ selectionId: candidate.id, candidate, excerpt: candidate.excerpt }];
+    const metadata = [candidate.id, candidate.kind, candidate.source, candidate.title].join("\n");
+    const excerptBudget = Math.max(1, budgetTokens - estimateTextTokens(metadata) - 64);
+    const excerpts = splitTextByEstimatedTokens(candidate.excerpt, excerptBudget);
+    return excerpts.map((excerpt, index) => ({
+      selectionId: excerpts.length === 1 ? candidate.id : `${candidate.id}:part-${index + 1}`,
+      candidate,
+      excerpt,
+    }));
+  });
+  if (budgetTokens === undefined) return [chunks];
+  const groups: MemorySelectionChunk[][] = [];
+  let current: MemorySelectionChunk[] = [];
   let currentTokens = 0;
-  for (const candidate of candidates) {
+  for (const entry of chunks) {
     const tokens = estimateTextTokens([
-      candidate.id,
-      candidate.kind,
-      candidate.source,
-      candidate.title,
-      candidate.excerpt,
+      entry.selectionId,
+      entry.candidate.kind,
+      entry.candidate.source,
+      entry.candidate.title,
+      entry.excerpt,
     ].join("\n"));
-    if (tokens > budgetTokens) {
-      throw new Error(`Story-memory candidate exceeds semantic selection budget: ${candidate.id}`);
-    }
     if (current.length > 0 && currentTokens + tokens > budgetTokens) {
       groups.push(current);
       current = [];
       currentTokens = 0;
     }
-    current.push(candidate);
+    current.push(entry);
     currentTokens += tokens;
   }
   if (current.length > 0) groups.push(current);

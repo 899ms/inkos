@@ -177,7 +177,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
               ...session.messages.filter(
                 (message) => !(message.timestamp === streamTs && message.role === "assistant"),
               ),
-              { role: "assistant" as const, content: `\u2717 ${errorMsg}`, timestamp: Date.now() },
+              { role: "assistant" as const, kind: "error" as const, content: errorMsg, timestamp: Date.now() },
             ];
         return {
           messages,
@@ -189,7 +189,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
   addErrorMessage: (sessionId, errorMsg) =>
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, (session) => ({
-        messages: [...session.messages, { role: "assistant", content: `\u2717 ${errorMsg}`, timestamp: Date.now() }],
+        messages: [...session.messages, { role: "assistant", kind: "error", content: errorMsg, timestamp: Date.now() }],
         lastError: errorMsg,
       })),
     })),

@@ -5,7 +5,7 @@ import { renderNarrativeSelectedContext } from "../utils/narrative-control.js";
 import type { Observation } from "../models/observation.js";
 
 export interface AuditResult {
-  readonly issues: ReadonlyArray<Observation>;
+  readonly observations: ReadonlyArray<Observation>;
   readonly summary: string;
   readonly unavailable?: boolean;
   readonly tokenUsage?: {
@@ -33,8 +33,8 @@ export class ContinuityAuditor extends BaseAgent {
   ): Promise<AuditResult> {
     const isEnglish = options.language === "en";
     const systemPrompt = isEnglish
-      ? "Audit this chapter against the activated review Skill and supplied governed context. Use only concrete evidence. Do not estimate length; the host computes it. Submit observations and a concise summary through the review tool. An empty issues array is valid."
-      : "按已激活的审稿 Skill 和输入的 governed context 审查本章。只报告有证据的问题，不估算字数，字数由宿主计算。通过结果工具提交观察和简短结论，issues 为空是合法结果。";
+      ? "Audit this chapter against the activated review Skill and supplied governed context. Use only concrete evidence. Do not estimate length; the host computes it. Submit observations and a concise summary through the review tool. An empty observations array is valid."
+      : "按已激活的审稿 Skill 和输入的 governed context 审查本章。只报告有证据的问题，不估算字数，字数由宿主计算。通过结果工具提交观察和简短结论，observations 为空是合法结果。";
     const governedContext = renderNarrativeSelectedContext(
       options.contextPackage.selectedContext,
       options.language,
@@ -59,7 +59,7 @@ export class ContinuityAuditor extends BaseAgent {
       { temperature: options.temperature ?? 0.3 },
     );
     return {
-      issues: result.issues,
+      observations: result.observations,
       summary: result.summary,
       tokenUsage: usage,
     };

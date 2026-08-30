@@ -27,11 +27,7 @@ const ChoiceToolSchema = Type.Object({
   targetNodeId: Type.String({ minLength: 1 }),
   condition: Type.Optional(ConditionToolSchema),
   effects: Type.Array(EffectToolSchema),
-  weight: Type.Optional(Type.Union([
-    Type.Literal("light"),
-    Type.Literal("heavy"),
-    Type.Literal("critical"),
-  ])),
+  weight: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
 const DialogueLineToolSchema = Type.Object({
@@ -90,12 +86,7 @@ const WorldAnchorToolSchema = Type.Object({
 const CharacterToolSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
   name: Type.String(),
-  role: Type.Union([
-    Type.Literal("protagonist"),
-    Type.Literal("antagonist"),
-    Type.Literal("support"),
-    Type.Literal("other"),
-  ]),
+  role: Type.String(),
   motivation: Type.String(),
   voiceProfile: Type.Optional(Type.Object({
     speakingRhythm: Type.String(),
@@ -106,12 +97,7 @@ const CharacterToolSchema = Type.Object({
 
 const VariableToolSchema = Type.Object({
   name: Type.String({ minLength: 1 }),
-  type: Type.Union([
-    Type.Literal("flag"),
-    Type.Literal("counter"),
-    Type.Literal("relationship"),
-    Type.Literal("item"),
-  ]),
+  type: Type.String(),
   default: VarValueToolSchema,
   desc: Type.String(),
 }, { additionalProperties: false });
@@ -120,12 +106,7 @@ const EndingToolSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
   nodeId: Type.String({ minLength: 1 }),
   title: Type.String(),
-  type: Type.Union([
-    Type.Literal("good"),
-    Type.Literal("bad"),
-    Type.Literal("neutral"),
-    Type.Literal("secret"),
-  ]),
+  type: Type.String(),
   description: Type.String(),
 }, { additionalProperties: false });
 

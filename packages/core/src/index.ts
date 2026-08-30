@@ -336,11 +336,7 @@ export {
 
 // Narrative forecast (issue #342): non-canonical multi-branch story projection
 export {
-  FORECAST_MIN_BRANCHES,
-  FORECAST_MAX_BRANCHES,
   FORECAST_DEFAULT_BRANCHES,
-  FORECAST_MIN_HORIZON,
-  FORECAST_MAX_HORIZON,
   FORECAST_DEFAULT_HORIZON,
   NarrativeForecastSchema,
   ForecastBranchSchema,

@@ -2,6 +2,7 @@ import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { commitAtomicFileSet } from "../../utils/atomic-file-set.js";
 import { loadWorkManifest } from "../work-store.js";
+import { syncWorkSourceArtifacts } from "../source-sync.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -23,7 +24,13 @@ export function createReplaceWorkArtifactTool(
       "this cannot create arbitrary files or edit binary artifacts.",
     parameters: ReplaceWorkArtifactParams,
     async execute(_toolCallId, params: Static<typeof ReplaceWorkArtifactParams>) {
-      const work = await loadWorkManifest(projectRoot, workId);
+      let work = await loadWorkManifest(projectRoot, workId);
+      await syncWorkSourceArtifacts({
+        projectRoot,
+        workId,
+        accept: work.status === "active",
+      });
+      work = await loadWorkManifest(projectRoot, workId);
       if (!["short-fiction", "script", "storyboard", "translation", "visual-asset"].includes(work.profileId)) {
         throw new Error(`Work profile "${work.profileId}" requires a domain-specific edit action.`);
       }

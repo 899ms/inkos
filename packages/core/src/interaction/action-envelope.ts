@@ -42,7 +42,7 @@ export const CreateBookActionPayloadSchema = z.object({
 }).strict();
 
 export const WriteNextActionPayloadSchema = z.object({
-  chapterCount: z.number().int().min(1).max(20).default(1),
+  chapterCount: z.number().int().min(1).default(1),
 }).strict();
 
 export const ShortRunActionPayloadSchema = z.object({
@@ -64,7 +64,7 @@ export const PlayStartActionPayloadSchema = z.object({
   language: z.enum(["zh", "en"]).optional(),
   mode: PlayModeSchema.optional(),
   initialScene: z.string().min(1).optional(),
-  suggestedActions: z.array(z.string().min(1)).min(1).max(4).optional(),
+  suggestedActions: z.array(z.string().min(1)).optional(),
 }).strict();
 
 export const GenerateCoverActionPayloadSchema = z.object({
@@ -75,13 +75,7 @@ export const GenerateCoverActionPayloadSchema = z.object({
   outputDir: z.string().min(1).optional(),
 }).strict();
 
-export const ScriptTargetFormatSchema = z.enum([
-  "vertical_short_drama",
-  "screenplay",
-  "audio_drama",
-  "interactive_script",
-  "general_script",
-]);
+export const ScriptTargetFormatSchema = z.string().trim().min(1);
 
 export const ScriptCreateActionPayloadSchema = z.object({
   title: z.string().min(1).optional(),
@@ -135,7 +129,7 @@ export const FanficCreateActionPayloadSchema = z.object({
   sourceText: z.string().min(1).optional(),
   sourcePath: z.string().min(1).optional(),
   sourceName: z.string().min(1).optional(),
-  mode: z.enum(["canon", "au", "ooc", "cp"]).optional(),
+  mode: z.string().trim().min(1).optional(),
   genre: z.string().min(1).optional(),
   platform: PlatformSchema.optional(),
   language: z.enum(["zh", "en"]).optional(),

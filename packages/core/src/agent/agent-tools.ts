@@ -36,16 +36,14 @@ import {
 } from "../interaction/action-envelope.js";
 import { ResearchSearchConfigSchema } from "../models/project.js";
 import { searchWeb } from "../utils/web-search.js";
-import {
-  runAsWorkflowTrajectory,
-  runWithAgentTrajectoryRole,
-} from "../llm/agent-trajectory.js";
+import { runAsWorkflowTrajectory } from "../llm/agent-trajectory.js";
 import type { ActivatedSkillGuidance } from "./skill-tool.js";
 import {
   activatedSkillIds,
   mergeActivatedSkillGuidance,
 } from "../skills/activations.js";
 import { listWorkManifests, loadWorkManifest } from "../harness/work-store.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -112,12 +110,21 @@ function buildAgentBookConfig(input: {
   };
 }
 
-async function assertBookDoesNotExist(projectRoot: string, bookId: string): Promise<void> {
+async function assertBookCreatable(projectRoot: string, bookId: string): Promise<boolean> {
   try {
-    await stat(new StateManager(projectRoot).bookDir(bookId));
+    const work = await loadWorkManifest(projectRoot, bookId);
+    if (work.status === "draft") return true;
     throw new Error(`Book "${bookId}" already exists.`);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        await stat(new StateManager(projectRoot).bookDir(bookId));
+        throw new Error(`Book "${bookId}" already exists without a Work manifest.`);
+      } catch (sourceError) {
+        if ((sourceError as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw sourceError;
+      }
+    }
     throw error;
   }
 }
@@ -178,7 +185,6 @@ type SuggestedActionParamType = Static<typeof SuggestedActionParam>;
 
 function validateSuggestedActions(value: readonly SuggestedActionParamType[] | undefined): string[] {
   if (value === undefined) return [];
-  if (value.length > 4) throw new Error("Play suggestedActions supports at most four actions.");
   const actions = value.map((action) => action.trim());
   if (actions.some((action) => !action)) throw new Error("Play suggestedActions cannot contain an empty action.");
   if (new Set(actions).size !== actions.length) throw new Error("Play suggestedActions must be unique.");
@@ -296,13 +302,7 @@ const ProposeActionParams = Type.Object({
   scriptCreate: Type.Optional(Type.Object({
     title: Type.String({ description: "Confirmed script project title." }),
     sourceKind: Type.Optional(Type.String({ description: "Source type, e.g. novel excerpt, original idea, outline, existing script." })),
-    targetFormat: Type.Optional(Type.Union([
-      Type.Literal("vertical_short_drama"),
-      Type.Literal("screenplay"),
-      Type.Literal("audio_drama"),
-      Type.Literal("interactive_script"),
-      Type.Literal("general_script"),
-    ], { description: "Confirmed script output format." })),
+    targetFormat: Type.Optional(Type.String({ description: "Confirmed script output format in the user's own terms." })),
     sourceText: Type.Optional(Type.String({ description: "User-provided source text. For long sources, prefer sourcePath instead of summarizing." })),
     sourcePath: Type.Optional(Type.String({ description: "Optional project-relative source file path." })),
     requirements: Type.Optional(Type.String({ description: "Confirmed script format, production constraints, tone, episode structure, or user preferences." })),
@@ -347,12 +347,7 @@ const ProposeActionParams = Type.Object({
     sourceText: Type.Optional(Type.String({ description: "Provided canon/source text. Prefer sourcePath for uploaded or long files." })),
     sourcePath: Type.Optional(Type.String({ description: "Project-relative uploaded canon/source file path." })),
     sourceName: Type.Optional(Type.String({ description: "Human-readable source work name." })),
-    mode: Type.Optional(Type.Union([
-      Type.Literal("canon"),
-      Type.Literal("au"),
-      Type.Literal("ooc"),
-      Type.Literal("cp"),
-    ], { description: "Confirmed fanfiction mode." })),
+    mode: Type.Optional(Type.String({ description: "Confirmed fanfiction boundary in the user's own terms." })),
     genre: Type.Optional(Type.String({ description: "Confirmed genre." })),
     platform: Type.Optional(Type.String({ minLength: 1 })),
     language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
@@ -1176,9 +1171,7 @@ const FanficCreateParams = Type.Object({
   sourceText: Type.Optional(Type.String({ description: "Canon/source text. Prefer sourcePath for long material." })),
   sourcePath: Type.Optional(Type.String({ description: "Project-relative uploaded canon/source path." })),
   sourceName: Type.Optional(Type.String({ description: "Human-readable source work name." })),
-  mode: Type.Optional(Type.Union([
-    Type.Literal("canon"), Type.Literal("au"), Type.Literal("ooc"), Type.Literal("cp"),
-  ])),
+  mode: Type.Optional(Type.String({ description: "Fanfiction boundary in the user's own terms." })),
   genre: Type.Optional(Type.String()),
   platform: Type.Optional(Type.String({ minLength: 1 })),
   language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
@@ -1211,7 +1204,7 @@ export function createFanficBookTool(
         ...params,
         fanficMode: mode,
       }, { targetChapters: 100 });
-      await assertBookDoesNotExist(projectRoot, book.id);
+      await assertBookCreatable(projectRoot, book.id);
       const activatedSkills = resolveProductionToolSkills(options);
       onUpdate?.(textResult(`Creating fanfiction book "${book.title}" from ${source.name}...`));
       await runPipelineWithAgentContext(pipeline, signal, activatedSkills, () => (
@@ -1270,7 +1263,7 @@ export function createSpinoffBookTool(
         targetChapters: params.targetChapters ?? parent.targetChapters,
         chapterWordCount: params.chapterWordCount ?? parent.chapterWordCount,
       });
-      await assertBookDoesNotExist(projectRoot, book.id);
+      await assertBookCreatable(projectRoot, book.id);
       const activatedSkills = resolveProductionToolSkills(options);
       onUpdate?.(textResult(`Creating side story "${book.title}" from parent book "${parent.title}"...`));
       await runPipelineWithAgentContext(pipeline, signal, activatedSkills, () => (
@@ -1326,7 +1319,7 @@ export function createImitationBookTool(
         purpose: "reference",
       });
       const book = buildAgentBookConfig(params);
-      await assertBookDoesNotExist(projectRoot, book.id);
+      await assertBookCreatable(projectRoot, book.id);
       const activatedSkills = resolveProductionToolSkills(options);
       onUpdate?.(textResult(`Creating original book "${book.title}" with style reference ${reference.name}...`));
       await runPipelineWithAgentContext(pipeline, signal, activatedSkills, () => (
@@ -1394,18 +1387,24 @@ export function createContinuationImportTool(
           throw new Error("continuation_import requires title when no existing bookId is selected.");
         }
         const book = buildAgentBookConfig({ ...params, title: params.title.trim() });
-        await assertBookDoesNotExist(projectRoot, book.id);
-        await state.saveBookConfig(book.id, book);
+        const resumingDraft = await assertBookCreatable(projectRoot, book.id);
+        await pipeline.prepareDraftBook(book);
         bookId = book.id;
         created = true;
+        if (resumingDraft) {
+          onUpdate?.(textResult(`Resuming continuation import for draft Work "${bookId}"...`));
+        }
       }
 
       const existingChapterCount = (await state.getNextChapterNumber(bookId)) - 1;
-      if (existingChapterCount > 0 && params.resumeFrom === undefined) {
+      const draftWork = created ? await loadWorkManifest(projectRoot, bookId) : null;
+      if (existingChapterCount > 0 && params.resumeFrom === undefined && draftWork?.status !== "draft") {
         throw new Error(`Book "${bookId}" already has ${existingChapterCount} chapter(s); resumeFrom is required.`);
       }
       const chapters = await loadChaptersFromPath(sourcePath, params.splitPattern);
-      const resumeFrom = created ? undefined : params.resumeFrom;
+      const resumeFrom = existingChapterCount > 0 && draftWork?.status === "draft"
+        ? params.resumeFrom ?? existingChapterCount + 1
+        : created ? undefined : params.resumeFrom;
       const activatedSkills = resolveProductionToolSkills(options);
       onUpdate?.(textResult(`Importing ${chapters.length} chapter(s) into "${bookId}" and rebuilding story state...`));
       let result: Awaited<ReturnType<PipelineRunner["importChapters"]>>;
@@ -1422,7 +1421,13 @@ export function createContinuationImportTool(
           throw new Error(`Continuation import produced no persisted chapters for "${bookId}".`);
         }
       } catch (error) {
-        if (created) await rm(state.bookDir(bookId), { recursive: true, force: true });
+        if (created) {
+          await syncWorkSourceArtifacts({ projectRoot, workId: bookId, accept: false });
+          throw new Error(
+            `Continuation import is incomplete; draft Work "${bookId}" and imported candidate artifacts were preserved. ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
+        }
         throw error;
       }
       return textResult(
@@ -1603,13 +1608,7 @@ const ScriptCreateParams = Type.Object({
   sourceKind: Type.Optional(Type.String({
     description: "Source type, e.g. novel excerpt, original idea, outline, existing script.",
   })),
-  targetFormat: Type.Optional(Type.Union([
-    Type.Literal("vertical_short_drama"),
-    Type.Literal("screenplay"),
-    Type.Literal("audio_drama"),
-    Type.Literal("interactive_script"),
-    Type.Literal("general_script"),
-  ], { description: "Confirmed script output format." })),
+  targetFormat: Type.Optional(Type.String({ description: "Confirmed script output format in the user's own terms." })),
   sourceText: Type.Optional(Type.String({
     description: "User-provided source text. For long sources, prefer sourcePath instead of summarizing.",
   })),
@@ -2046,15 +2045,22 @@ export function createPlayStartTool(
       const initialScene = playPayload?.initialScene?.trim() || params.initialScene;
       const playLanguage = playPayload?.language ?? options.language ?? "zh";
       const existingWorld = await store.loadWorld(worldId);
-      const world = await store.createWorld({
-        id: worldId,
-        title: title.trim(),
-        premise: premise?.trim() ?? "",
-        worldContract: worldContract?.trim() ?? "",
-        visualContract: visualContract?.trim() ?? "",
-        mode: playMode ?? params.mode ?? "open",
-        language: playLanguage,
-      });
+      const world = existingWorld
+        ? await store.updateWorld(worldId, {
+            premise: premise?.trim() ?? existingWorld.premise,
+            worldContract: worldContract?.trim() ?? existingWorld.worldContract,
+            visualContract: visualContract?.trim() ?? existingWorld.visualContract,
+            mode: playMode ?? params.mode ?? existingWorld.mode,
+          }, { accept: false })
+        : await store.createWorld({
+            id: worldId,
+            title: title.trim(),
+            premise: premise?.trim() ?? "",
+            worldContract: worldContract?.trim() ?? "",
+            visualContract: visualContract?.trim() ?? "",
+            mode: playMode ?? params.mode ?? "open",
+            language: playLanguage,
+          });
       await store.ensureRun(world.id, runId);
 
       const existingTranscript = await store.readTranscript(world.id, runId);
@@ -2124,7 +2130,7 @@ export function createPlayStartTool(
         }
       } catch (error) {
         _signal?.throwIfAborted();
-        if (!existingWorld) await store.removeWorld(world.id);
+        await syncWorkSourceArtifacts({ projectRoot, workId: world.id, accept: false });
         throw error;
       }
 
@@ -2452,7 +2458,6 @@ export function createPlayStepTool(
             observations: step.mutation.blocked
               ? [{
                   code: "play-action-blocked",
-                  kind: "soft",
                   summary: step.mutation.blockedReason || step.mutation.summary,
                   evidence: [],
                 }]
@@ -2729,20 +2734,20 @@ export function createResyncChapterStateTool(
           allowNewHooks: params.allowNewHooks,
         }),
       );
-      const issues = result.audit.issues;
+      const observations = result.audit.observations;
       const zh = options.language !== "en";
       const summary = [
         zh
-          ? `第 ${result.chapter.chapterNumber} 章正文未改动；状态、摘要与伏笔已重建，记录 ${issues.length} 条审查观察。`
-          : `Chapter ${result.chapter.chapterNumber} prose was unchanged; state, summaries, and hooks were rebuilt with ${issues.length} review observation(s).`,
-        ...issues.map((issue) => `- [${issue.kind}] ${issue.summary}`),
+          ? `第 ${result.chapter.chapterNumber} 章正文未改动；状态、摘要与伏笔已重建，记录 ${observations.length} 条审查观察。`
+          : `Chapter ${result.chapter.chapterNumber} prose was unchanged; state, summaries, and hooks were rebuilt with ${observations.length} review observation(s).`,
+        ...observations.map((observation) => `- ${observation.code}: ${observation.summary}`),
       ].join("\n");
       return textResult(summary, {
         kind: "chapter_state_resynced",
         workId: bookId,
         bookId,
         chapterNumber: result.chapter.chapterNumber,
-        observations: issues,
+        observations,
         summary: result.audit.summary,
         skillIds: activatedSkillIds(activatedSkills),
       });

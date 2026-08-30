@@ -9,10 +9,10 @@ import {
   type ArtifactManifest,
   type WorkManifest,
 } from "./contracts.js";
-import { loadWorkManifest, saveWorkManifest, workDirectory } from "./work-store.js";
+import { loadWorkManifest, workDirectory } from "./work-store.js";
 import { createWorkManifest } from "./work-store.js";
 import { createCurrentArtifact } from "./artifact-revisions.js";
-import type { AtomicFileWrite } from "../utils/atomic-file-set.js";
+import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 
 export function createInitialWorkManifestWrite(input: {
   readonly workId: string;
@@ -73,20 +73,24 @@ export async function syncWorkSourceArtifacts(input: {
   const presentWorkPaths = new Set(files.map((file) => toPosixPath(join("source", file))));
   const updatedAt = input.updatedAt ?? new Date().toISOString();
   const artifacts = [...manifest.artifacts];
+  const snapshotWrites: AtomicFileWrite[] = [];
 
   for (const file of files) {
     const workPath = toPosixPath(join("source", file));
     const bytes = await readFile(join(sourceRoot, file));
     const checksum = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    const revisionId = revisionIdFor(checksum);
     const existingIndex = artifacts.findIndex((artifact) => (
       artifact.revisions.some((revision) => revision.path === workPath)
     ));
+    const artifactId = existingIndex >= 0 ? artifacts[existingIndex]!.id : artifactIdFor(file);
+    const snapshotPath = revisionSnapshotPath(artifactId, revisionId, file);
     if (existingIndex < 0) {
-      const revisionId = revisionIdFor(checksum);
       const revision = ArtifactRevisionSchema.parse({
         id: revisionId,
         parentRevisionId: null,
         path: workPath,
+        snapshotPath,
         contentType: contentTypeFor(file),
         status: input.accept ? "current" : "candidate",
         checksum,
@@ -95,23 +99,35 @@ export async function syncWorkSourceArtifacts(input: {
         createdAt: updatedAt,
       });
       artifacts.push(ArtifactManifestSchema.parse({
-        id: artifactIdFor(file),
+        id: artifactId,
         kind: artifactKindFor(file),
         currentRevisionId: input.accept ? revision.id : null,
         revisions: [revision],
         metadata: { sourcePath: toPosixPath(join("works", input.workId, workPath)) },
       }));
+      snapshotWrites.push(snapshotWrite(input.workId, snapshotPath, bytes));
       continue;
     }
     const existing = artifacts[existingIndex]!;
     const current = existing.revisions.find((revision) => revision.id === existing.currentRevisionId);
-    if (current?.checksum === checksum) continue;
-    const revisionId = revisionIdFor(checksum);
+    if (current?.checksum === checksum) {
+      if (!current.snapshotPath) {
+        artifacts[existingIndex] = ArtifactManifestSchema.parse({
+          ...existing,
+          revisions: existing.revisions.map((revision) => (
+            revision.id === current.id ? { ...revision, snapshotPath } : revision
+          )),
+        });
+        snapshotWrites.push(snapshotWrite(input.workId, snapshotPath, bytes));
+      }
+      continue;
+    }
     const prior = existing.revisions.find((revision) => revision.id === revisionId);
     const revision = prior ?? ArtifactRevisionSchema.parse({
       id: revisionId,
       parentRevisionId: existing.currentRevisionId,
       path: workPath,
+      snapshotPath,
       contentType: contentTypeFor(file),
       status: input.accept ? "current" : "candidate",
       checksum,
@@ -124,7 +140,11 @@ export async function syncWorkSourceArtifacts(input: {
       currentRevisionId: input.accept ? revision.id : existing.currentRevisionId,
       revisions: prior
         ? existing.revisions.map((item) => {
-            if (item.id === prior.id && input.accept) return { ...item, status: "current" as const };
+            if (item.id === prior.id) return {
+              ...item,
+              snapshotPath: item.snapshotPath ?? snapshotPath,
+              ...(input.accept ? { status: "current" as const } : {}),
+            };
             if (input.accept && item.status === "current") return { ...item, status: "superseded" as const };
             return item;
           })
@@ -135,6 +155,7 @@ export async function syncWorkSourceArtifacts(input: {
             revision,
           ],
     });
+    if (!prior?.snapshotPath) snapshotWrites.push(snapshotWrite(input.workId, snapshotPath, bytes));
   }
 
   for (let index = 0; index < artifacts.length; index += 1) {
@@ -159,8 +180,29 @@ export async function syncWorkSourceArtifacts(input: {
     artifacts,
     updatedAt,
   });
-  await saveWorkManifest(input.projectRoot, next);
+  await commitAtomicFileSet({
+    rootDir: input.projectRoot,
+    writes: [
+      ...snapshotWrites,
+      {
+        relativePath: join("works", input.workId, "work.json"),
+        content: `${JSON.stringify(next, null, 2)}\n`,
+      },
+    ],
+  });
   return next;
+}
+
+function revisionSnapshotPath(artifactId: string, revisionId: string, sourcePath: string): string {
+  const extension = extname(sourcePath).toLowerCase();
+  return toPosixPath(join("revisions", artifactId, `${revisionId}${extension}`));
+}
+
+function snapshotWrite(workId: string, snapshotPath: string, content: Uint8Array): AtomicFileWrite {
+  return {
+    relativePath: join("works", workId, snapshotPath),
+    content,
+  };
 }
 
 async function listFiles(root: string): Promise<string[]> {

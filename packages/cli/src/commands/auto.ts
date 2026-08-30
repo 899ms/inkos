@@ -94,7 +94,7 @@ export const autoCommand = new Command("auto")
             chapterNumber: result.chapterNumber,
             title: result.title,
             wordCount: result.wordCount,
-            observations: result.review.issues,
+            observations: result.review.observations,
           })) {
             log(line);
           }
@@ -121,7 +121,7 @@ export const autoCommand = new Command("auto")
             chapterNumber: r.chapterNumber,
             title: r.title,
             wordCount: r.wordCount,
-            observationCount: r.review.issues.length,
+            observationCount: r.review.observations.length,
           }))),
         }, config);
       }

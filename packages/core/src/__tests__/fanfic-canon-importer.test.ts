@@ -40,11 +40,7 @@ describe("FanficCanonImporter", () => {
       "submitStructured",
     ).mockResolvedValue({
       result: {
-        worldRules: "尾部世界规则：TAIL_CANON_MARKER。",
-        characterProfiles: "| 甲 | 主角 | 克制 |",
-        keyEvents: "| 1 | 尾部事件 | 甲 | 必须保留 TAIL_CANON_MARKER |",
-        powerSystem: "（原作无明确力量体系）",
-        writingStyle: "句式克制。",
+        canonMarkdown: "## 关键事实\n\nTAIL_CANON_MARKER 是尾部关键正典。",
       },
       usage: ZERO_USAGE,
     });
@@ -58,6 +54,7 @@ describe("FanficCanonImporter", () => {
     const finalMessages = submitSpy.mock.calls[0]?.[0] as Array<{ role: string; content: string }>;
     expect(finalMessages[1]?.content).toContain("片段2资料：TAIL_CANON_MARKER");
     expect(finalMessages[0]?.content).not.toContain("已截断");
-    expect(result.worldRules).toContain("TAIL_CANON_MARKER");
+    expect(result.fullDocument).toContain("TAIL_CANON_MARKER");
+    expect(result.fullDocument).not.toContain("力量体系");
   });
 });

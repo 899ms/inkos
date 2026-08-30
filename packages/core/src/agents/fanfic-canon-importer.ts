@@ -5,11 +5,6 @@ import { estimateTextTokens } from "../llm/provider.js";
 import { semanticInputBudget, splitTextByEstimatedTokens } from "../llm/semantic-input.js";
 
 export interface FanficCanonOutput {
-  readonly worldRules: string;
-  readonly characterProfiles: string;
-  readonly keyEvents: string;
-  readonly powerSystem: string;
-  readonly writingStyle: string;
   readonly fullDocument: string;
 }
 
@@ -26,8 +21,8 @@ export class FanficCanonImporter extends BaseAgent {
   ): Promise<FanficCanonOutput> {
     const source = await this.prepareSourceText(sourceText, sourceName, language);
     const systemPrompt = language === "en"
-      ? `Compile source-grounded fan-fiction canon with the activated import and fan-fiction Skills. Mode: ${fanficMode}. Submit all canonical sections through the result tool.${source.compiled ? " The input is a traceable semantic source package." : ""}`
-      : `按已激活的导入与同人 Skills 编译有来源依据的同人正典。模式：${fanficMode}。通过结果工具提交全部正典小节。${source.compiled ? "输入是可追溯的语义资料包。" : ""}`;
+      ? `Compile source-grounded fan-fiction canon with the activated import and fan-fiction Skills. Mode: ${fanficMode}. Submit one readable Markdown canon document through the result tool. Include only source-evidenced sections relevant to this work; do not manufacture a genre-specific system.${source.compiled ? " The input is a traceable semantic source package." : ""}`
+      : `按已激活的导入与同人 Skills 编译有来源依据的同人正典。模式：${fanficMode}。通过结果工具提交一份可读 Markdown 正典文档；只保留原作有证据且对本作有用的内容，不强造题材专属体系。${source.compiled ? "输入是可追溯的语义资料包。" : ""}`;
 
     const { result } = await this.submitStructured(
       [
@@ -45,42 +40,23 @@ export class FanficCanonImporter extends BaseAgent {
       { temperature: 0.3 },
     );
 
-    const worldRules = result.worldRules.trim();
-    const characterProfiles = result.characterProfiles.trim();
-    const keyEvents = result.keyEvents.trim();
-    const powerSystem = result.powerSystem.trim();
-    const writingStyle = result.writingStyle.trim();
-    if ([worldRules, characterProfiles, keyEvents, powerSystem, writingStyle].some((section) => !section)) {
-      throw new Error("Fanfic canon compiler returned an empty required section.");
-    }
-
+    const canonMarkdown = result.canonMarkdown.trim();
+    if (!canonMarkdown) throw new Error("Fanfic canon compiler returned an empty document.");
     const headings = language === "en"
-      ? ["Fan-fiction Canon", "World Rules", "Character Profiles", "Key Event Timeline", "Power System", "Source Style", "Source", "Material", "Mode"]
-      : ["同人正典", "世界规则", "角色档案", "关键事件时间线", "力量体系", "原作写作风格", "来源", "素材", "同人模式"];
+      ? ["Fan-fiction Canon", "Source", "Material", "Mode", "Canon"]
+      : ["同人正典", "来源", "素材", "同人模式", "正典内容"];
     const fullDocument = [
       `# ${headings[0]}（${sourceName}）`,
       "",
       `## ${headings[1]}`,
-      worldRules,
-      "",
-      `## ${headings[2]}`,
-      characterProfiles,
-      "",
-      `## ${headings[3]}`,
-      keyEvents,
+      `- ${headings[2]}: ${sourceName}`,
+      `- ${headings[3]}: ${fanficMode}`,
       "",
       `## ${headings[4]}`,
-      powerSystem,
-      "",
-      `## ${headings[5]}`,
-      writingStyle,
-      "",
-      `## ${headings[6]}`,
-      `- ${headings[7]}: ${sourceName}`,
-      `- ${headings[8]}: ${fanficMode}`,
+      canonMarkdown,
     ].join("\n");
 
-    return { worldRules, characterProfiles, keyEvents, powerSystem, writingStyle, fullDocument };
+    return { fullDocument };
   }
 
   private async prepareSourceText(

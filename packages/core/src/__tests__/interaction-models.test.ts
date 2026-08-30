@@ -39,6 +39,7 @@ describe("interaction models", () => {
     expect(SessionKindSchema.parse("interactive-film")).toBe("interactive-film");
     expect(SessionKindSchema.parse("work")).toBe("work");
     expect(ScriptTargetFormatSchema.parse("vertical_short_drama")).toBe("vertical_short_drama");
+    expect(ScriptTargetFormatSchema.parse("舞台剧分场本")).toBe("舞台剧分场本");
     expect(PlayModeSchema.parse("guided")).toBe("guided");
 
     expect(normalizeActionSource(undefined)).toBe("free-text");
@@ -49,13 +50,10 @@ describe("interaction models", () => {
     expect(normalizePlayMode(null)).toBeUndefined();
 
     expect(ActionPayloadSchema.parse({
-      writeNext: { chapterCount: 5 },
-    })).toEqual({
-      writeNext: { chapterCount: 5 },
-    });
-    expect(ActionPayloadSchema.safeParse({
       writeNext: { chapterCount: 21 },
-    }).success).toBe(false);
+    })).toEqual({
+      writeNext: { chapterCount: 21 },
+    });
   });
 
   it("validates structured script and storyboard creation payloads", () => {

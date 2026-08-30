@@ -5,7 +5,7 @@ import { findProjectRoot, log, logError } from "../utils.js";
 export const statusCommand = new Command("status")
   .description("Show project status")
   .argument("[book-id]", "Book ID (optional, shows all if omitted)")
-  .option("--chapters", "Show per-chapter status and issues")
+  .option("--chapters", "Show per-chapter status and observations")
   .option("--json", "Output JSON")
   .action(async (bookIdArg: string | undefined, opts) => {
     try {
@@ -77,7 +77,7 @@ export const statusCommand = new Command("status")
               const icon = ch.observations.length > 0 ? "!" : "+";
               log(`    [${icon}] Ch.${ch.number} "${ch.title}" | ${formatLengthCount(ch.wordCount, countingMode)} | ${ch.provenance}`);
               for (const observation of ch.observations) {
-                log(`        [${observation.kind}] ${observation.code}: ${observation.summary}`);
+                log(`        ${observation.code}: ${observation.summary}`);
               }
             }
           }

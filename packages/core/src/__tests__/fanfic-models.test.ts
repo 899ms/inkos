@@ -23,8 +23,8 @@ const rules = {
 } as const;
 
 describe("fanfic metadata contracts", () => {
-  it("keeps derivative metadata explicit across every supported mode", () => {
-    const modes = ["canon", "au", "ooc", "cp"] as const;
+  it("preserves user-defined fanfiction boundaries", () => {
+    const modes = ["canon", "au", "ooc", "cp", "原作结局十年后的低魔后日谈"] as const;
     expect(modes.map((fanficMode) => BookConfigSchema.parse({
       ...book,
       fanficMode,
@@ -32,8 +32,8 @@ describe("fanfic metadata contracts", () => {
     }).fanficMode)).toEqual(modes);
   });
 
-  it("rejects unknown fanfic modes", () => {
-    expect(() => BookConfigSchema.parse({ ...book, fanficMode: "invalid" })).toThrow();
+  it("rejects an empty fanfiction boundary", () => {
+    expect(() => BookConfigSchema.parse({ ...book, fanficMode: "" })).toThrow();
   });
 
   it("requires the complete v2 book-rules surface", () => {

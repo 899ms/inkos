@@ -22,6 +22,9 @@ import {
 } from "../harness/index.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { loadTranslationManifest } from "../translation/run-store.js";
+import { createSkillRegistry } from "../skills/index.js";
+import { createUseSkillTool, hydrateActivatedSkillGuidance, type ActivatedSkillGuidance } from "../agent/skill-tool.js";
+import { PipelineRunner } from "../pipeline/runner.js";
 
 describe("creative harness mini-flows", () => {
   const roots: string[] = [];
@@ -61,7 +64,7 @@ describe("creative harness mini-flows", () => {
             segments: request.segments.map((segment) => ({ index: segment.index, target: `译：${segment.source}` })),
             glossary: [],
           }),
-          reviewChapter: async () => ({ summary: "OK", issues: [] }),
+          reviewChapter: async () => ({ summary: "OK", observations: [] }),
         }),
       }),
       workId,
@@ -146,7 +149,6 @@ describe("creative harness mini-flows", () => {
           return ActionResultSchema.parse({
             status: "success",
             summary: "committed",
-            nextActions: [],
             artifacts: [],
             observations: [],
           });
@@ -188,14 +190,21 @@ describe("creative harness mini-flows", () => {
     expect(episodes.recoverInterruptedEpisodes("2026-08-26T00:01:00.000Z")).toBe(1);
 
     const after = await loadWorkManifest(root, "script-work");
+    const artifact = after.artifacts[0]!;
+    const previousRevision = artifact.revisions.find((revision) => revision.id === currentRevisionId)!;
+    const currentRevision = artifact.revisions.find((revision) => revision.id === artifact.currentRevisionId)!;
     expect({
-      revisions: after.artifacts[0]?.revisions.length,
-      currentRevisionChanged: after.artifacts[0]?.currentRevisionId !== currentRevisionId,
+      revisions: artifact.revisions.length,
+      currentRevisionChanged: artifact.currentRevisionId !== currentRevisionId,
+      previousSnapshot: await readFile(join(root, "works", "script-work", previousRevision.snapshotPath!), "utf-8"),
+      currentSnapshot: await readFile(join(root, "works", "script-work", currentRevision.snapshotPath!), "utf-8"),
       authorityEpisode: episodes.requireEpisode("episode-authority").status,
       interruptedEpisode: episodes.requireEpisode("episode-interrupted").status,
     }).toEqual({
       revisions: 2,
       currentRevisionChanged: true,
+      previousSnapshot: "# Draft\n",
+      currentSnapshot: "# Revised\n",
       authorityEpisode: "completed",
       interruptedEpisode: "failed",
     });
@@ -221,6 +230,68 @@ describe("creative harness mini-flows", () => {
     await mkdir(join(root, "works", "play-session", "source", "runs", "main"), { recursive: true });
 
     expect((await listWorkManifests(root)).map((work) => work.id)).toEqual(["script-work"]);
+  });
+
+  it("retrieves only task-relevant Skill references for the main agent and production worker", async () => {
+    const root = await tempProject("skill-retrieval");
+    const baseDir = join(root, "skill");
+    await mkdir(join(baseDir, "references"), { recursive: true });
+    await writeFile(join(baseDir, "references", "dialogue.md"), "# Dialogue\n\nDistinct voice and conversational pressure.\n");
+    await writeFile(join(baseDir, "references", "cover.md"), "# Cover\n\nPortrait composition and title treatment.\n");
+    const skill = {
+      id: "story-craft",
+      name: "Story craft",
+      description: "Story craft methods",
+      body: "Use relevant craft references.",
+      source: "project" as const,
+      baseDir,
+    };
+    let activated: ActivatedSkillGuidance | undefined;
+    const tool = createUseSkillTool({
+      registry: createSkillRegistry({ skills: [skill] }),
+      onActivate: (value) => { activated = value; },
+    });
+    await tool.execute("skill-call", { skillId: skill.id, query: "dialogue voice" });
+    const hydrated = await hydrateActivatedSkillGuidance([{ skill, resources: [] }], "dialogue voice");
+
+    expect({
+      mainAgent: activated?.resources.map((resource) => resource.path),
+      worker: hydrated?.[0]?.resources.map((resource) => resource.path),
+    }).toEqual({
+      mainAgent: ["references/dialogue.md"],
+      worker: ["references/dialogue.md"],
+    });
+  });
+
+  it("preserves a draft Work when foundation generation cannot start", async () => {
+    const root = await tempProject("draft-recovery");
+    const pipeline = new PipelineRunner({
+      client: {} as never,
+      model: "unavailable",
+      projectRoot: root,
+    });
+    const now = new Date().toISOString();
+    await expect(pipeline.initBook({
+      id: "recoverable-book",
+      title: "Recoverable Book",
+      genre: "mystery",
+      platform: "other",
+      status: "outlining",
+      targetChapters: 12,
+      chapterWordCount: 800,
+      language: "en",
+      createdAt: now,
+      updatedAt: now,
+    })).rejects.toThrow();
+
+    const manifest = await loadWorkManifest(root, "recoverable-book");
+    expect({
+      status: manifest.status,
+      sourceConfig: JSON.parse(await readFile(join(root, "works", "recoverable-book", "source", "book.json"), "utf-8")).id,
+    }).toEqual({
+      status: "draft",
+      sourceConfig: "recoverable-book",
+    });
   });
 
   async function tempProject(name: string): Promise<string> {

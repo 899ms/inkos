@@ -2,10 +2,6 @@ import { Command } from "commander";
 import {
   FORECAST_DEFAULT_BRANCHES,
   FORECAST_DEFAULT_HORIZON,
-  FORECAST_MAX_BRANCHES,
-  FORECAST_MAX_HORIZON,
-  FORECAST_MIN_BRANCHES,
-  FORECAST_MIN_HORIZON,
   PipelineRunner,
   createNarrativeForecast,
   getNarrativeForecast,
@@ -22,11 +18,11 @@ export const forecastCommand = new Command("forecast")
 
 forecastCommand
   .command("create")
-  .description("Create a narrative forecast (2-5 isolated candidate branches) from the current canon")
+  .description("Create isolated candidate future branches from the current canon")
   .argument("[book-id]", "Book ID (auto-detected if only one book)")
   .requiredOption("--divergence <text>", "Divergence point to branch on, e.g. \"主角是否接受对手的合作提议\"")
-  .option("--branches <n>", `Number of isolated candidate branches (${FORECAST_MIN_BRANCHES}-${FORECAST_MAX_BRANCHES})`, String(FORECAST_DEFAULT_BRANCHES))
-  .option("--horizon <n>", `Future chapters each branch covers (${FORECAST_MIN_HORIZON}-${FORECAST_MAX_HORIZON})`, String(FORECAST_DEFAULT_HORIZON))
+  .option("--branches <n>", "Number of isolated candidate branches", String(FORECAST_DEFAULT_BRANCHES))
+  .option("--horizon <n>", "Future chapters each branch covers", String(FORECAST_DEFAULT_HORIZON))
   .option("--model <model>", "Override the forecast model")
   .option("--llm-base-url <url>", "Override LLM base URL")
   .option("--json", "Output JSON")
@@ -34,8 +30,8 @@ forecastCommand
     try {
       const root = findProjectRoot();
       const bookId = await resolveBookId(bookIdArg, root);
-      const branchCount = parseBoundedInteger(opts.branches, FORECAST_DEFAULT_BRANCHES, "branches", FORECAST_MIN_BRANCHES, FORECAST_MAX_BRANCHES);
-      const horizon = parseBoundedInteger(opts.horizon, FORECAST_DEFAULT_HORIZON, "horizon", FORECAST_MIN_HORIZON, FORECAST_MAX_HORIZON);
+      const branchCount = parsePositiveInteger(opts.branches, FORECAST_DEFAULT_BRANCHES, "branches");
+      const horizon = parsePositiveInteger(opts.horizon, FORECAST_DEFAULT_HORIZON, "horizon");
 
       const config = await loadConfig({ projectRoot: root });
       if (opts.llmBaseUrl) config.llm.baseUrl = opts.llmBaseUrl;
@@ -176,16 +172,14 @@ function formatBranchLines(forecast: NarrativeForecast): string[] {
     `- ${branch.branchId} "${branch.title}" — ${branch.risks.length} risk(s)`);
 }
 
-function parseBoundedInteger(
+function parsePositiveInteger(
   value: string | undefined,
   fallback: number,
   name: string,
-  min: number,
-  max: number,
 ): number {
   const parsed = value ? Number.parseInt(value, 10) : fallback;
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer.`);
   }
   return parsed;
 }

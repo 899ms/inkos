@@ -8,7 +8,7 @@ import {
   clearLine, hideCursor, showCursor, reset,
   badge, sleep, stripAnsi, box,
 } from "./ansi.js";
-import { getTuiCopy, normalizeStageLabel, resolveTuiLocale, type TuiLocale } from "./i18n.js";
+import { getTuiCopy, resolveTuiLocale, type TuiLocale } from "./i18n.js";
 
 /* ── Operation themes ── */
 

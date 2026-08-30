@@ -1,13 +1,9 @@
 import { BaseAgent } from "./base.js";
 import { StateValidationToolSchema } from "./state-validation-tool.js";
-
-export interface ValidationWarning {
-  readonly category: string;
-  readonly description: string;
-}
+import type { Observation } from "../models/observation.js";
 
 export interface ValidationResult {
-  readonly warnings: ReadonlyArray<ValidationWarning>;
+  readonly observations: ReadonlyArray<Observation>;
   readonly consistent: boolean;
   readonly reconciliationRequired: boolean;
 }
@@ -40,7 +36,7 @@ export class StateValidatorAgent extends BaseAgent {
     authorityContext?: StateValidationAuthorityContext,
   ): Promise<ValidationResult> {
     if (oldState === newState && oldHooks === newHooks) {
-      return { warnings: [], consistent: true, reconciliationRequired: false };
+      return { observations: [], consistent: true, reconciliationRequired: false };
     }
 
     const langInstruction = language === "en"
@@ -86,7 +82,7 @@ ${chapterContent}`;
         { temperature: 0.1 },
       );
       return {
-        warnings: result.warnings,
+        observations: result.observations,
         consistent: !result.reconciliationRequired,
         reconciliationRequired: result.reconciliationRequired,
       };

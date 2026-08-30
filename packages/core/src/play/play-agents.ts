@@ -52,7 +52,7 @@ export interface PlaySceneReconcileInput {
 
 const PlaySceneRenderSchema = z.object({
   sceneText: z.string().min(1),
-  suggestedActions: z.array(z.string().min(1)).max(4),
+  suggestedActions: z.array(z.string().min(1)),
 }).strict();
 export type PlaySceneRender = z.infer<typeof PlaySceneRenderSchema>;
 
@@ -273,7 +273,8 @@ export class PlaySceneRendererAgent extends BaseAgent {
 
   async render(input: PlaySceneRenderInput & { readonly mode?: "open" | "guided" }): Promise<PlaySceneRender> {
     const language = input.language ?? "zh";
-    const systemPrompt = buildSceneRendererSystemPrompt(input.mode ?? "open", language);
+    const mode = input.mode ?? "open";
+    const systemPrompt = buildSceneRendererSystemPrompt(mode, language);
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: buildSceneRendererUserPrompt(input, language) },
@@ -283,14 +284,14 @@ export class PlaySceneRendererAgent extends BaseAgent {
       {
         name: "submit_play_scene",
         label: "Submit play scene",
-        description: input.mode === "guided"
-          ? "Submit the rendered scene and up to three grounded player choices."
+        description: mode === "guided"
+          ? "Submit the rendered scene and grounded optional player choices."
           : "Submit the rendered open-world scene with an empty suggestedActions array.",
         parameters: Type.Object({
           sceneText: Type.String({ minLength: 1 }),
-          suggestedActions: Type.Array(Type.String({ minLength: 1 }), {
-            maxItems: input.mode === "guided" ? 3 : 0,
-          }),
+          suggestedActions: mode === "open"
+            ? Type.Array(Type.String({ minLength: 1 }), { maxItems: 0 })
+            : Type.Array(Type.String({ minLength: 1 })),
         }),
       },
       { temperature: 0.45, maxTokens: 4096 },
@@ -493,10 +494,10 @@ function buildWorldMutatorUserPrompt(input: PlayWorldMutatorInput, language: "zh
 export function buildSceneRendererSystemPrompt(mode: "open" | "guided" = "open", language: "zh" | "en" = "zh"): string {
   const actionsRule = language === "en"
     ? mode === "guided"
-      ? "suggestedActions contains 0-3 optional springboards only at a genuine decision point."
+      ? "suggestedActions contains sparse optional springboards only at a genuine decision point."
       : "suggestedActions must be empty; open worlds use free player input."
     : mode === "guided"
-      ? "suggestedActions 只在真实抉择点提供 0-3 个可选跳板。"
+      ? "suggestedActions 只在真实抉择点提供少量可选跳板。"
       : "suggestedActions 必须为空；开放世界只接收玩家自由输入。";
   const contract = language === "en"
     ? [

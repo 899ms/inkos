@@ -15,24 +15,10 @@ export const BookRulesDataToolSchema = Type.Object({
     primary: Type.String(),
     forbidden: Type.Array(Type.String()),
   })),
-  narrativePerson: Type.Optional(Type.Union([Type.Literal("first"), Type.Literal("third")])),
-  numericalSystemOverrides: Type.Optional(Type.Object({
-    hardCap: Type.Optional(Type.Union([Type.Number(), Type.String()])),
-    resourceTypes: Type.Array(Type.String()),
-  })),
-  eraConstraints: Type.Optional(Type.Object({
-    enabled: Type.Boolean(),
-    period: Type.Optional(Type.String()),
-    region: Type.Optional(Type.String()),
-  })),
+  narrativePerson: Type.Optional(Type.String({ description: "Narrative person in the user's own terms." })),
   prohibitions: Type.Array(Type.String()),
   enableFullCastTracking: Type.Boolean(),
-  fanficMode: Type.Optional(Type.Union([
-    Type.Literal("canon"),
-    Type.Literal("au"),
-    Type.Literal("ooc"),
-    Type.Literal("cp"),
-  ])),
+  fanficMode: Type.Optional(Type.String()),
   allowedDeviations: Type.Array(Type.String()),
 });
 

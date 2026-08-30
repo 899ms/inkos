@@ -46,14 +46,6 @@ export interface TuiCopy {
     readonly system: string;
   };
   readonly activity: Record<"thinking" | "checking" | "writing" | "reviewing" | "updating", string>;
-  readonly stageLabels: {
-    readonly completed: string;
-    readonly failed: string;
-    readonly blocked: string;
-    readonly waitingHuman: string;
-    readonly pausedByUser: string;
-    readonly readyToContinue: string;
-  };
   readonly depthLabels: Record<ChatDepth, string>;
 }
 
@@ -106,14 +98,6 @@ const ZH_CN: TuiCopy = {
     writing: "写作中",
     reviewing: "审阅中",
     updating: "更新中",
-  },
-  stageLabels: {
-    completed: "已完成",
-    failed: "失败",
-    blocked: "已阻塞",
-    waitingHuman: "等待你的决定",
-    pausedByUser: "已由用户暂停",
-    readyToContinue: "可继续执行",
   },
   depthLabels: {
     light: "轻量",
@@ -172,14 +156,6 @@ const EN: TuiCopy = {
     reviewing: "reviewing",
     updating: "updating",
   },
-  stageLabels: {
-    completed: "completed",
-    failed: "failed",
-    blocked: "blocked",
-    waitingHuman: "waiting for your decision",
-    pausedByUser: "paused by user",
-    readyToContinue: "ready to continue",
-  },
   depthLabels: {
     light: "light",
     normal: "normal",
@@ -207,41 +183,6 @@ export function resolveTuiLocale(
 
 export function getTuiCopy(locale: TuiLocale): TuiCopy {
   return locale === "en" ? EN : ZH_CN;
-}
-
-export function normalizeStageLabel(label: string, copy: TuiCopy): string {
-  const normalized = label.trim().toLowerCase();
-  if (!normalized) {
-    return label;
-  }
-
-  const replacements: Array<[RegExp, string]> = [
-    [/^thinking\b/i, copy.activity.thinking],
-    [/^checking\b/i, copy.activity.checking],
-    [/^writing\b/i, copy.activity.writing],
-    [/^reviewing\b/i, copy.activity.reviewing],
-    [/^updating\b/i, copy.activity.updating],
-    [/^completed\b/i, copy.stageLabels.completed],
-    [/^failed\b/i, copy.stageLabels.failed],
-    [/^blocked\b/i, copy.stageLabels.blocked],
-    [/^waiting_human\b/i, copy.stageLabels.waitingHuman],
-    [/^paused by user\b/i, copy.stageLabels.pausedByUser],
-    [/^ready to continue\b/i, copy.stageLabels.readyToContinue],
-  ];
-
-  for (const [pattern, value] of replacements) {
-    if (pattern.test(label)) {
-      // For English, keep the original label (already in English);
-      // for other locales, use the translated value
-      return copy.locale === "en" ? label : value;
-    }
-  }
-
-  if (normalized === "idle") {
-    return copy.labels.ready;
-  }
-
-  return label;
 }
 
 function normalizeLocale(value: string | undefined): TuiLocale | undefined {

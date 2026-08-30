@@ -867,7 +867,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
               <div key={`${msg.timestamp}-${i}`}>
                 {msg.role === "user" ? (
                   /* User message */
-                  <ChatMessage role="user" content={msg.content} timestamp={msg.timestamp} theme={theme} />
+                  <ChatMessage role="user" kind={msg.kind} content={msg.content} timestamp={msg.timestamp} theme={theme} />
                 ) : msg.parts && msg.parts.length > 0 ? (
                   /* Assistant message — parts-based rendering (chronological) */
                   /* Merge consecutive utility tool parts into one group */
@@ -925,6 +925,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                             <ChatMessage
                               key={`c-${item.pi}`}
                               role="assistant"
+                              kind={msg.kind}
                               content={item.part.content}
                               timestamp={msg.timestamp}
                               theme={theme}
@@ -939,6 +940,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                   /* Assistant message — fallback (no parts, e.g. error messages) */
                   <ChatMessage
                     role={msg.role}
+                    kind={msg.kind}
                     content={msg.content}
                     timestamp={msg.timestamp}
                     theme={theme}

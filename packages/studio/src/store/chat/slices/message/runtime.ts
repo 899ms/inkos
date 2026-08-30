@@ -238,6 +238,7 @@ export function deserializeMessages(
       if (message.content) parts.push({ type: "text", content: message.content });
       return {
         role: message.role as "user" | "assistant",
+        kind: message.kind,
         content: message.content,
         thinking: message.thinking,
         toolExecutions: toolExecutions?.map(normalizeToolExecution),

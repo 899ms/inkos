@@ -46,6 +46,7 @@ export type MessagePart =
 
 export interface Message {
   readonly role: "user" | "assistant";
+  readonly kind?: "message" | "error";
   readonly content: string;
   readonly thinking?: string;
   readonly thinkingStreaming?: boolean;
@@ -57,6 +58,7 @@ export interface Message {
 
 export interface SessionMessage {
   readonly role: "user" | "assistant" | "system";
+  readonly kind?: "message" | "error";
   readonly content: string;
   readonly thinking?: string;
   readonly toolExecutions?: ReadonlyArray<ToolExecution>;

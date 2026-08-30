@@ -3,7 +3,7 @@ import type {
   InteractionMessage,
   InteractionSession,
 } from "@actalk/inkos-core";
-import { normalizeStageLabel, type TuiCopy } from "./i18n.js";
+import type { TuiCopy } from "./i18n.js";
 
 export interface DashboardMessageRow {
   readonly key: string;
@@ -44,7 +44,8 @@ export interface BuildDashboardViewModelParams {
 
 export function buildDashboardViewModel(params: BuildDashboardViewModelParams): DashboardViewModel {
   const status = params.session.currentExecution?.status ?? "idle";
-  const executionLabel = normalizeStageLabel(params.session.currentExecution?.stageLabel ?? status, params.copy);
+  const executionLabel = params.session.currentExecution?.stageLabel
+    ?? (status === "idle" ? params.copy.labels.ready : status);
   const bookLabel = params.activeBookTitle ?? params.session.activeBookId ?? params.copy.labels.none;
   const sinceTimestamp = params.sinceTimestamp ?? 0;
   const terminalRows = params.terminalRows ?? process.stdout.rows ?? 24;

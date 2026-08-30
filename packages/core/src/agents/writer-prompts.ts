@@ -53,8 +53,8 @@ function lengthContract(spec: LengthSpec, language: "zh" | "en"): string {
 function narrativePersonContract(bookRules: BookRules | null, language: "zh" | "en"): string {
   const person = bookRules?.narrativePerson;
   if (!person) return "";
-  if (language === "en") return `## Narrative person\n${person === "first" ? "First person" : "Third person"}; this durable constraint overrides model defaults.`;
-  return `## 叙事人称\n${person === "first" ? "第一人称" : "第三人称"}；该持久约束优先于模型默认。`;
+  if (language === "en") return `## Narrative person\n${person}; this durable constraint overrides model defaults.`;
+  return `## 叙事人称\n${person}；该持久约束优先于模型默认。`;
 }
 
 function protagonistContract(bookRules: BookRules | null, language: "zh" | "en"): string {

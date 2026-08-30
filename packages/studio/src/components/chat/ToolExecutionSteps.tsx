@@ -315,7 +315,6 @@ function ChapterContextTracePreview({ exec }: { exec: ToolExecution }) {
 
 interface ChapterObservationDetails {
   readonly code: string;
-  readonly kind: "hard" | "soft";
   readonly summary: string;
   readonly evidence: ReadonlyArray<string>;
 }
@@ -323,7 +322,6 @@ interface ChapterObservationDetails {
 interface ChapterRevisionDetails {
   readonly chapterNumber?: number;
   readonly changed: boolean;
-  readonly fixedIssues: ReadonlyArray<string>;
   readonly observations: ReadonlyArray<ChapterObservationDetails>;
 }
 
@@ -340,11 +338,9 @@ function parseChapterObservations(value: unknown): ReadonlyArray<ChapterObservat
     const record = issue as Record<string, unknown>;
     const code = stringField(record, "code");
     const summary = stringField(record, "summary");
-    const kind = record.kind === "hard" || record.kind === "soft" ? record.kind : undefined;
-    if (!code || !summary || !kind) return [];
+    if (!code || !summary) return [];
     return [{
       code,
-      kind,
       summary,
       evidence: rawStringArrayField(record, "evidence"),
     }];
@@ -358,7 +354,6 @@ export function getChapterRevisionDetails(exec: ToolExecution): ChapterRevisionD
   return {
     chapterNumber: numberField(details, "chapterNumber"),
     changed: details.changed === true,
-    fixedIssues: rawStringArrayField(details, "fixedIssues"),
     observations: parseChapterObservations(details.observations),
   };
 }
@@ -375,19 +370,19 @@ export function getChapterStateResyncDetails(exec: ToolExecution): ChapterStateR
 }
 
 function ChapterObservations({
-  issues,
+  observations,
   title,
 }: {
-  readonly issues: ReadonlyArray<ChapterObservationDetails>;
+  readonly observations: ReadonlyArray<ChapterObservationDetails>;
   readonly title: string;
 }) {
-  if (issues.length === 0) return null;
+  if (observations.length === 0) return null;
   return (
     <div className="mt-2 space-y-1.5">
       <div className="text-[13px] font-medium text-foreground">{title}</div>
-      {issues.map((issue, index) => (
+      {observations.map((issue, index) => (
         <div key={`${issue.code}:${index}`} className="rounded-lg border border-border/40 bg-background/55 px-2.5 py-2 text-[12px] leading-5 text-muted-foreground">
-          <div className="font-medium text-foreground">[{issue.kind}] {issue.code}</div>
+          <div className="font-medium text-foreground">{issue.code}</div>
           <div>{issue.summary}</div>
           {issue.evidence.length > 0 && (
             <ul className="mt-1 list-disc space-y-0.5 pl-4">
@@ -417,13 +412,7 @@ function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
           {changed ? tr("已更新", "Updated") : tr("无变化", "No change")}
         </div>
       </div>
-      {details.fixedIssues.length > 0 && (
-        <div className="mt-2 text-[13px] leading-5 text-muted-foreground">
-          <span className="font-medium text-foreground">{tr("已处理", "Fixed")}{tr("：", ": ")}</span>
-          {details.fixedIssues.join("；")}
-        </div>
-      )}
-      <ChapterObservations issues={details.observations} title={tr("审查观察", "Review observations")} />
+      <ChapterObservations observations={details.observations} title={tr("审查观察", "Review observations")} />
     </div>
   );
 }
@@ -445,7 +434,7 @@ function ChapterStateResyncPreview({ exec }: { exec: ToolExecution }) {
         </div>
       </div>
       {details.summary && <div className="mt-2 text-[13px] leading-5 text-muted-foreground">{details.summary}</div>}
-      <ChapterObservations issues={details.observations} title={tr("审查观察", "Review observations")} />
+      <ChapterObservations observations={details.observations} title={tr("审查观察", "Review observations")} />
     </div>
   );
 }
@@ -1036,15 +1025,11 @@ function PipelineExecution({
           {/* Real-time execution logs */}
           {exec.logs && exec.logs.length > 0 && (
             <ul className="space-y-0.5">
-              {exec.logs.map((log, i) => {
-                const isError = log.startsWith("[error]") || /error/i.test(log);
-                const isWarn = log.startsWith("[warning]") || /warning|警告/i.test(log);
-                return (
-                  <li key={i} className={`text-xs font-mono break-words ${isError ? "text-destructive" : isWarn ? "text-yellow-600 dark:text-yellow-400" : "text-muted-foreground"}`}>
-                    {log}
-                  </li>
-                );
-              })}
+              {exec.logs.map((log, i) => (
+                <li key={i} className="text-xs font-mono break-words text-muted-foreground">
+                  {log}
+                </li>
+              ))}
             </ul>
           )}
           {exec.status === "error" && exec.error && (

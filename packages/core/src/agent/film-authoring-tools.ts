@@ -60,7 +60,7 @@ export function createSetWorldAnchorTool(projectRoot: string, projectId: string)
 
 const AddVariableParams = Type.Object({
   name: Type.String({ description: "variable name (unique key)" }),
-  type: Type.Union([Type.Literal("flag"), Type.Literal("counter"), Type.Literal("relationship"), Type.Literal("item")]),
+  type: Type.String({ description: "user-defined variable role, e.g. flag, relationship, clue-state, or another story-specific kind" }),
   default: Type.Union([Type.Number(), Type.String(), Type.Boolean()], { description: "default value" }),
   desc: Type.Optional(Type.String({ description: "what it tracks" })),
 });
@@ -90,7 +90,7 @@ const DefineEndingParams = Type.Object({
   id: Type.String({ description: "ending id" }),
   nodeId: Type.String({ description: "the ending node this describes (must exist)" }),
   title: Type.String(),
-  type: Type.Union([Type.Literal("good"), Type.Literal("bad"), Type.Literal("neutral"), Type.Literal("secret")]),
+  type: Type.String({ description: "ending meaning in the work's own terms" }),
   description: Type.Optional(Type.String()),
 });
 
@@ -119,7 +119,7 @@ const UpsertCharactersParams = Type.Object({
   characters: Type.Array(Type.Object({
     id: Type.String(),
     name: Type.String(),
-    role: Type.Optional(Type.Union([Type.Literal("protagonist"), Type.Literal("antagonist"), Type.Literal("support"), Type.Literal("other")])),
+    role: Type.Optional(Type.String({ description: "character role in the work's own terms" })),
     motivation: Type.Optional(Type.String()),
     voiceProfile: Type.Optional(Type.Object({
       speakingRhythm: Type.Optional(Type.String()),
@@ -319,8 +319,8 @@ const DraftStructureParams = Type.Object({
   instruction: Type.String({ description: "what skeleton to draft (acts, branch points, endings)" }),
 });
 
-const STRUCT_SYSTEM_ZH = `你是互动影游编剧。根据上下文与指令设计分支骨架。恰好 1 个 type=start，至少 2 个 branch，至少 2 个差异化 ending 节点；每条路径都能到某个 ending。完成后调用 submit_story_structure。`;
-const STRUCT_SYSTEM_EN = `You are an interactive film scriptwriter. Using the context and the instruction, design the branching skeleton. Include exactly 1 node with type=start, at least 2 branch nodes, and at least 2 clearly differentiated ending nodes; every path must reach an ending. Finish by calling submit_story_structure.`;
+const STRUCT_SYSTEM_ZH = `按已激活的互动影游 Skill 和用户指令设计完整分支骨架。保持一个开场节点、真实分支和可达结局；规模由用户要求与作品本身决定。完成后调用 submit_story_structure。`;
+const STRUCT_SYSTEM_EN = `Design the complete branching skeleton with the activated interactive-film Skill and user instruction. Keep one opening node, real branches, and reachable endings; let the requested work determine scale. Finish by calling submit_story_structure.`;
 
 export function createDraftStructureTool(
   projectRoot: string,

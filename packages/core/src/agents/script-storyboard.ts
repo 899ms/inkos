@@ -2,12 +2,7 @@ import { BaseAgent } from "./base.js";
 import { completeLongForm } from "../llm/long-form-completion.js";
 import { InteractiveFilmPackageToolSchema, StoryboardAssetsToolSchema } from "./production-document-tool.js";
 
-export type ScriptTargetFormat =
-  | "vertical_short_drama"
-  | "screenplay"
-  | "audio_drama"
-  | "interactive_script"
-  | "general_script";
+export type ScriptTargetFormat = string;
 
 export interface ScriptCreationInput {
   readonly title: string;
@@ -558,6 +553,10 @@ function buildInteractiveFilmCreationUserPrompt(input: InteractiveFilmCreationIn
 }
 
 function formatScriptTarget(value: ScriptTargetFormat | undefined, language: "zh" | "en" = "zh"): string {
+  const custom = value?.trim();
+  if (custom && !["vertical_short_drama", "screenplay", "audio_drama", "interactive_script", "general_script"].includes(custom)) {
+    return custom;
+  }
   if (language === "en") {
     switch (value) {
       case "vertical_short_drama":

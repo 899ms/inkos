@@ -6,6 +6,7 @@ import { createBuiltInWorkProfileRegistry } from "./builtin-profiles.js";
 import { createSingleToolCapabilityRegistry, type ConfirmedCapabilityBinding } from "./production-capabilities.js";
 import { CreativeHarnessRuntime } from "./runtime.js";
 import { loadWorkManifest } from "./work-store.js";
+import { opaqueConversationId, runWithAgentTrajectory } from "../llm/agent-trajectory.js";
 
 export async function executeExplicitCapabilityTool(input: {
   readonly projectRoot: string;
@@ -14,6 +15,7 @@ export async function executeExplicitCapabilityTool(input: {
   readonly parameters: unknown;
   readonly workId?: string | null;
   readonly episodeId?: string;
+  readonly conversationId?: string;
   readonly signal?: AbortSignal;
   readonly onUpdate?: (partialResult: unknown) => void;
 }): Promise<ActionResult> {
@@ -33,16 +35,20 @@ export async function executeExplicitCapabilityTool(input: {
     ...(input.episodeId ? { episodeId: input.episodeId } : {}),
   });
   try {
-    const result = await runtime.executeAction({
-      handle,
-      capabilityId: input.binding.capabilityId,
-      actionId: input.binding.actionId,
-      parameters: input.parameters,
-      source: "explicit",
-      confirmed: true,
-      signal: input.signal,
-      onUpdate: input.onUpdate,
-    });
+    const result = await runWithAgentTrajectory({
+      conversationId: opaqueConversationId(input.conversationId ?? handle.episode.id),
+      runId: handle.episode.id,
+      agentRole: "subagent",
+    }, () => runtime.executeAction({
+        handle,
+        capabilityId: input.binding.capabilityId,
+        actionId: input.binding.actionId,
+        parameters: input.parameters,
+        source: "explicit",
+        confirmed: true,
+        signal: input.signal,
+        onUpdate: input.onUpdate,
+      }));
     runtime.finishEpisode(handle, "completed");
     return result;
   } catch (error) {

@@ -1,9 +1,7 @@
 import { Type } from "@sinclair/typebox";
+import { ObservationToolSchema } from "./review-tool.js";
 
 export const StateValidationToolSchema = Type.Object({
   reconciliationRequired: Type.Boolean(),
-  warnings: Type.Array(Type.Object({
-    category: Type.String(),
-    description: Type.String(),
-  })),
+  observations: Type.Array(ObservationToolSchema),
 });

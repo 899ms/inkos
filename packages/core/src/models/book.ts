@@ -16,7 +16,7 @@ export const BookStatusSchema = z.enum([
 ]);
 export type BookStatus = z.infer<typeof BookStatusSchema>;
 
-export const FanficModeSchema = z.enum(["canon", "au", "ooc", "cp"]);
+export const FanficModeSchema = z.string().trim().min(1);
 export type FanficMode = z.infer<typeof FanficModeSchema>;
 
 export const BookConfigSchema = z.object({
@@ -26,7 +26,7 @@ export const BookConfigSchema = z.object({
   genre: GenreSchema,
   status: BookStatusSchema,
   targetChapters: z.number().int().min(1),
-  chapterWordCount: z.number().int().min(1000),
+  chapterWordCount: z.number().int().min(1),
   language: z.enum(["zh", "en"]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

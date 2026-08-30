@@ -14,7 +14,6 @@ export const DEFAULT_REVISE_MODE: ReviseMode = "rewrite";
 export interface ReviseOutput {
   readonly revisedContent: string;
   readonly wordCount: number;
-  readonly fixedIssues: ReadonlyArray<string>;
   readonly tokenUsage?: {
     readonly promptTokens: number;
     readonly completionTokens: number;
@@ -31,7 +30,7 @@ export class ReviserAgent extends BaseAgent {
     _bookDir: string,
     chapterContent: string,
     chapterNumber: number,
-    issues: ReadonlyArray<Observation>,
+    observations: ReadonlyArray<Observation>,
     mode: ReviseMode = DEFAULT_REVISE_MODE,
     _genre?: string,
     options?: {
@@ -42,9 +41,9 @@ export class ReviserAgent extends BaseAgent {
   ): Promise<ReviseOutput> {
     if (!options) throw new Error("Reviser requires governed context and language.");
     const isEnglish = options.language === "en";
-    const issueList = issues.length > 0
-      ? issues.map((issue) => [
-          `- [${issue.kind}] ${issue.code}: ${issue.summary}`,
+    const observationList = observations.length > 0
+      ? observations.map((issue) => [
+          `- ${issue.code}: ${issue.summary}`,
           ...(issue.evidence.length > 0
             ? [`  ${isEnglish ? "Evidence" : "证据"}: ${issue.evidence.join("; ")}`]
             : []),
@@ -58,8 +57,8 @@ export class ReviserAgent extends BaseAgent {
       : "";
     const systemPrompt = buildRevisionProtocol(mode, options.language);
     const userPrompt = isEnglish
-      ? `Revise chapter ${chapterNumber}.\n\n## Observations or instruction\n${issueList}\n\n## Governed context\n${context}${lengthBlock}\n\n## Current chapter\n${chapterContent}`
-      : `修订第${chapterNumber}章。\n\n## 观察或用户指令\n${issueList}\n\n## 权威上下文\n${context}${lengthBlock}\n\n## 当前章节\n${chapterContent}`;
+      ? `Revise chapter ${chapterNumber}.\n\n## Observations or instruction\n${observationList}\n\n## Governed context\n${context}${lengthBlock}\n\n## Current chapter\n${chapterContent}`
+      : `修订第${chapterNumber}章。\n\n## 观察或用户指令\n${observationList}\n\n## 权威上下文\n${context}${lengthBlock}\n\n## 当前章节\n${chapterContent}`;
     const messages = [
       { role: "system" as const, content: systemPrompt },
       { role: "user" as const, content: userPrompt },
@@ -87,7 +86,6 @@ export class ReviserAgent extends BaseAgent {
     return {
       revisedContent,
       wordCount: revisedContent.length,
-      fixedIssues: result.fixedIssues,
       tokenUsage: usage,
     };
   }
@@ -104,7 +102,6 @@ export class ReviserAgent extends BaseAgent {
     return {
       revisedContent: result.revisedContent,
       wordCount: result.revisedContent.length,
-      fixedIssues: result.fixedIssues,
       tokenUsage: usage,
     };
   }

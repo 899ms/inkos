@@ -115,7 +115,7 @@ export const ProjectConfigSchema = z.object({
       writeCron: z.string().default("*/15 * * * *"),
     }).strict(),
     maxConcurrentBooks: z.number().int().min(1).default(3),
-    chaptersPerCycle: z.number().int().min(1).max(20).default(1),
+    chaptersPerCycle: z.number().int().min(1).default(1),
     retryDelayMs: z.number().int().min(0).default(30_000),
     cooldownAfterChapterMs: z.number().int().min(0).default(10_000),
     maxChaptersPerDay: z.number().int().min(1).default(50),

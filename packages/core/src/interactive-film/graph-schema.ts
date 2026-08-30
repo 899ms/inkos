@@ -23,7 +23,7 @@ export const ChoiceSchema = z.object({
   targetNodeId: z.string().min(1),
   condition: ConditionSchema.optional(),
   effects: z.array(EffectSchema).default([]),
-  weight: z.enum(["light", "heavy", "critical"]).optional(),
+  weight: z.string().min(1).optional(),
 }).strict();
 export type Choice = z.infer<typeof ChoiceSchema>;
 
@@ -53,7 +53,7 @@ export type VoiceProfile = z.infer<typeof VoiceProfileSchema>;
 export const CharacterSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
-  role: z.enum(["protagonist", "antagonist", "support", "other"]).default("other"),
+  role: z.string().min(1).default("other"),
   motivation: z.string().default(""),
   voiceProfile: VoiceProfileSchema.optional(),
 }).strict();
@@ -83,7 +83,7 @@ export type StoryNode = z.infer<typeof StoryNodeSchema>;
 
 export const VariableSchema = z.object({
   name: z.string().min(1),
-  type: z.enum(["flag", "counter", "relationship", "item"]),
+  type: z.string().min(1),
   default: VarValueSchema,
   desc: z.string().default(""),
 }).strict();
@@ -93,7 +93,7 @@ export const EndingSchema = z.object({
   id: z.string().min(1),
   nodeId: z.string().min(1),
   title: z.string(),
-  type: z.enum(["good", "bad", "neutral", "secret"]),
+  type: z.string().min(1),
   description: z.string().default(""),
 }).strict();
 export type Ending = z.infer<typeof EndingSchema>;

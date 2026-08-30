@@ -349,8 +349,8 @@ function buildAttachmentUserBlock(attachments: ReadonlyArray<AgentSessionAttachm
       lines.push(isEn ? "- image: attached as multimodal input" : "- 图片：已作为多模态输入附加");
     } else {
       lines.push(isEn
-        ? "- content: stored only; no extractor is available for this MIME type yet"
-        : "- 内容：已保存；当前 MIME 类型暂未配置文本抽取器");
+        ? "- content: stored by the host; use workspace__read with stored_path when the task needs it"
+        : "- 内容：宿主已保存；任务需要时使用 workspace__read 读取 stored_path");
     }
   }
   return lines.join("\n");

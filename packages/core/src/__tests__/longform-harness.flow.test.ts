@@ -32,9 +32,8 @@ describe("long-form harness mini-flow", () => {
       chapterTitle: output.title,
       auditResult: {
         summary: "One continuity observation.",
-        issues: [{
+        observations: [{
           code: "canon-consistency",
-          kind: "hard",
           summary: "A supporting detail conflicts with the current canon.",
           evidence: ["The chapter and current canon disagree."],
         }],
@@ -98,12 +97,12 @@ describe("long-form harness mini-flow", () => {
 
     expect({
       content: result.persistenceOutput.content,
-      category: result.validation.warnings[0]?.category,
+      code: result.validation.observations[0]?.code,
       needsReconciliation: result.validation.reconciliationRequired,
       stateApplied: result.persistenceOutput.runtimeStateApplied,
     }).toEqual({
       content: output.content,
-      category: "state-validation-unavailable",
+      code: "state-validation-unavailable",
       needsReconciliation: true,
       stateApplied: false,
     });
@@ -125,7 +124,7 @@ describe("long-form harness mini-flow", () => {
     });
     expect({
       content: result.content,
-      observation: result.review.issues[0]?.code,
+      observation: result.review.observations[0]?.code,
       unavailable: result.review.unavailable,
     }).toEqual({
       content: output.content,

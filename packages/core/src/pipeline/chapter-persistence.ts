@@ -28,7 +28,7 @@ export async function persistChapterArtifacts(params: {
     wordCount: params.finalWordCount,
     createdAt: now,
     updatedAt: now,
-    observations: [...params.auditResult.issues],
+    observations: [...params.auditResult.observations],
     provenance: "generated",
     lengthTelemetry: params.lengthTelemetry,
     tokenUsage: params.tokenUsage,

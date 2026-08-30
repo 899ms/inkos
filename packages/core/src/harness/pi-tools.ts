@@ -8,6 +8,7 @@ import {
   CapabilityRegistry,
   type CapabilityAction,
 } from "./capability-registry.js";
+import { runWithAgentTrajectoryRole } from "../llm/agent-trajectory.js";
 
 export interface CreateCapabilityPiToolsOptions {
   readonly registry: CapabilityRegistry;
@@ -40,13 +41,13 @@ export function createCapabilityPiTools(
       parameters: action.parameters,
       async execute(toolCallId, params, signal, onUpdate): Promise<AgentToolResult<unknown>> {
         if (signal?.aborted) throw signal.reason;
-        const result = await options.executeAction(
+        const result = await runWithAgentTrajectoryRole("subagent", () => options.executeAction(
           capability.id,
           action.id,
           params,
           signal,
           onUpdate ? (partialResult) => onUpdate(partialResult as AgentToolResult<ActionResult>) : undefined,
-        );
+        ), toolCallId);
         await options.onResult?.(capability.id, action.id, result);
         return {
           content: [{ type: "text", text: renderActionResultForAgent(result) }],
@@ -79,11 +80,8 @@ function renderActionResultForAgent(result: ActionResult): string {
   }
   if (result.observations.length > 0) {
     lines.push("Observations:", ...result.observations.map((observation) => (
-      `- [${observation.kind}] ${observation.code}: ${observation.summary}`
+      `- ${observation.code}: ${observation.summary}`
     )));
-  }
-  if (result.nextActions.length > 0) {
-    lines.push(`Next actions: ${result.nextActions.join(", ")}`);
   }
   return lines.join("\n");
 }

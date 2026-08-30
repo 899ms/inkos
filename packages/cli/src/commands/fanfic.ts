@@ -13,7 +13,6 @@ import {
 import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills, runWithCliProfileSkills } from "../utils.js";
 import {
   formatFanficCanonMissingError,
-  formatFanficInvalidModeError,
   formatFanficSourceDirEmptyError,
   resolveCliLanguage,
 } from "../localization.js";
@@ -26,7 +25,7 @@ fanficCommand
   .description("Create a fanfic book from external source material")
   .requiredOption("--title <title>", "Book title")
   .requiredOption("--from <path>", "Source file or directory (novel text, wiki, character docs)")
-  .option("--mode <mode>", "Fanfic mode: canon|au|ooc|cp", "canon")
+  .option("--mode <mode>", "Fanfiction boundary or mode in natural language", "canon")
   .option("--genre <genre>", "Genre", "other")
   .option("--platform <platform>", "Target platform", "other")
   .option("--target-chapters <n>", "Target chapter count", "100")
@@ -39,9 +38,6 @@ fanficCommand
       const root = findProjectRoot();
 
       const mode = opts.mode as FanficMode;
-      if (!["canon", "au", "ooc", "cp"].includes(mode)) {
-        throw new Error(formatFanficInvalidModeError(mode));
-      }
 
       // Read source material
       const sourcePath = resolve(opts.from);

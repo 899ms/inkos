@@ -16,6 +16,8 @@ import {
   buildShortFictionWriterUserPrompt,
 } from "../prompts/short-fiction.js";
 import { ShortDraftBatchToolSchema, ShortOutlineToolSchema, ShortPackageToolSchema } from "./short-fiction-tool.js";
+import { ChapterReviewToolSchema } from "./review-tool.js";
+import type { Observation } from "../models/observation.js";
 
 export const SHORT_FICTION_DEFAULT_CHAPTERS = 12;
 export const SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER = 1000;
@@ -60,6 +62,11 @@ export interface ShortFictionSalesPackage {
   readonly sellingPoints: ReadonlyArray<string>;
   readonly coverPrompt: string;
   readonly rawContent: string;
+}
+
+export interface ShortFictionDraftReview {
+  readonly summary: string;
+  readonly observations: ReadonlyArray<Observation>;
 }
 
 export interface ShortFictionReference {
@@ -212,16 +219,21 @@ export class ShortFictionDraftReviewerAgent extends BaseAgent {
     return "short-fiction-draft-reviewer";
   }
 
-  async reviewDraft(input: ShortFictionDraftReviewInput): Promise<string> {
-    const response = await this.chat([
+  async reviewDraft(input: ShortFictionDraftReviewInput): Promise<ShortFictionDraftReview> {
+    const response = await this.submitStructured([
         { role: "system", content: buildShortFictionDraftReviewSystemPrompt(input.language) },
         { role: "user", content: buildShortFictionDraftReviewUserPrompt({
           ...input,
           draftMarkdown: renderShortFictionDraftMarkdown(input.draft, input.language),
         }, input.language) },
-      ], { temperature: 0.3, maxTokens: 8192 });
+      ], {
+        name: "submit_short_fiction_review",
+        label: "Submit short-fiction review",
+        description: "Submit evidence-backed observations for the persisted short-fiction draft.",
+        parameters: ChapterReviewToolSchema,
+      }, { temperature: 0.3, maxTokens: 8192 });
 
-    return response.content.trim();
+    return response.result;
   }
 }
 

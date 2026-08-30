@@ -1,3 +1,5 @@
+import { ObservationSchema, type Observation } from "../models/observation.js";
+
 export type TranslationSourceKind = "text" | "markdown" | "pdf" | "epub";
 export type TranslationExportFormat = "txt" | "md" | "epub";
 
@@ -25,7 +27,7 @@ export interface TranslationChapterManifest {
   readonly charCount: number;
   readonly translatedSegments: number;
   readonly reviewSummary?: string;
-  readonly reviewIssues?: ReadonlyArray<string>;
+  readonly observations?: ReadonlyArray<Observation>;
 }
 
 export interface TranslationProjectManifest {
@@ -82,7 +84,7 @@ export const TranslationChapterManifestSchema = z.object({
   charCount: z.number().int().nonnegative(),
   translatedSegments: z.number().int().nonnegative(),
   reviewSummary: z.string().optional(),
-  reviewIssues: z.array(z.string()).optional(),
+  observations: z.array(ObservationSchema).optional(),
 }).strict();
 
 export const TranslationProjectManifestSchema = z.object({
@@ -145,7 +147,7 @@ export interface TranslationModelPort {
     readonly glossary: ReadonlyArray<TranslationGlossaryTerm>;
   }) => Promise<{
     readonly summary: string;
-    readonly issues: ReadonlyArray<string>;
+    readonly observations: ReadonlyArray<Observation>;
   }>;
 }
 

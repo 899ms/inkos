@@ -21,10 +21,10 @@ export const ForecastResultToolSchema = Type.Object({
       hooks: StringArray,
     }),
     risks: Type.Array(Type.Object({
-      kind: Type.Union([Type.Literal("continuity"), Type.Literal("causality"), Type.Literal("character")]),
+      kind: Type.String(),
       description: Type.String(),
     })),
     uncertainties: StringArray,
     intentRationale: Type.String(),
-  }), { minItems: 2, maxItems: 5 }),
+  }), { minItems: 1 }),
 });

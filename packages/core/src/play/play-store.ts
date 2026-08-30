@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, normalize, sep } from "node:path";
 import { z } from "zod";
@@ -12,7 +12,8 @@ import {
 import type { PlayGraphSnapshot } from "./play-db.js";
 import type { PlayGraphDB } from "./play-db-factory.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
-import { createInitialWorkManifestWrite, syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { createWorkManifest } from "../harness/work-store.js";
 import { listWorkManifests, workDirectory } from "../harness/work-store.js";
 
 const PlayTranscriptTurnSchema = z.object({
@@ -93,24 +94,34 @@ export class PlayStore {
       relativePath: join("works", world.id, "source", "world.json"),
       content: `${JSON.stringify(world, null, 2)}\n`,
     };
-    const work = createInitialWorkManifestWrite({
-      workId: world.id,
+    const work = createWorkManifest({
+      id: world.id,
       title: world.title,
       profileId: "interactive-world",
       language: world.language,
-      writes: [worldWrite],
-      createdAt: world.createdAt,
+      status: "draft",
+      now: world.createdAt,
       metadata: { mode: world.mode },
     });
-    await commitAtomicFileSet({ rootDir: this.projectRoot, writes: [worldWrite, work.write] });
+    await commitAtomicFileSet({
+      rootDir: this.projectRoot,
+      writes: [
+        worldWrite,
+        {
+          relativePath: join("works", world.id, "work.json"),
+          content: `${JSON.stringify(work, null, 2)}\n`,
+        },
+      ],
+    });
+    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: world.id, updatedAt: world.updatedAt, accept: false });
     return world;
   }
 
-  async removeWorld(worldId: string): Promise<void> {
-    await rm(this.worldDir(worldId), { recursive: true, force: true });
-  }
-
-  async updateWorld(worldId: string, patch: Partial<Pick<PlayWorld, "premise" | "worldContract" | "visualContract" | "mode">>): Promise<PlayWorld> {
+  async updateWorld(
+    worldId: string,
+    patch: Partial<Pick<PlayWorld, "premise" | "worldContract" | "visualContract" | "mode">>,
+    options: { readonly accept?: boolean } = {},
+  ): Promise<PlayWorld> {
     const current = await this.loadWorld(worldId);
     if (!current) {
       throw new Error(`Play world not found: ${worldId}`);
@@ -131,7 +142,12 @@ export class PlayStore {
         content: `${JSON.stringify(world, null, 2)}\n`,
       }],
     });
-    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: world.id, updatedAt: world.updatedAt, accept: true });
+    await syncWorkSourceArtifacts({
+      projectRoot: this.projectRoot,
+      workId: world.id,
+      updatedAt: world.updatedAt,
+      accept: options.accept !== false,
+    });
     return world;
   }
 

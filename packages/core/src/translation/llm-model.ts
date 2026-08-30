@@ -4,6 +4,7 @@ import { Type } from "@sinclair/typebox";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import type { TranslationModelPort, TranslationSegment } from "./types.js";
+import { ObservationToolSchema } from "../agents/review-tool.js";
 
 const TranslationResultToolSchema = Type.Object({
   chapterTitle: Type.Optional(Type.String()),
@@ -21,7 +22,7 @@ const TranslationResultToolSchema = Type.Object({
 
 const TranslationReviewToolSchema = Type.Object({
   summary: Type.String(),
-  issues: Type.Array(Type.String()),
+  observations: Type.Array(ObservationToolSchema),
 });
 
 export function createLLMTranslationModel(input: {
@@ -78,7 +79,7 @@ export function createLLMTranslationModel(input: {
           role: "system",
           content: [
             "Review the translation with the activated translation Skill.",
-            "Submit the review summary and concrete issues through the review result tool. An empty issues array is valid.",
+            "Submit the review summary and evidence-backed observations through the review result tool. An empty observations array is valid.",
           ].join("\n"),
         },
         {
@@ -103,7 +104,7 @@ export function createLLMTranslationModel(input: {
       }, { temperature: 0.1, maxTokens: 4096, signal: input.signal });
       return {
         summary: parsed.summary,
-        issues: parsed.issues,
+        observations: parsed.observations,
       };
     },
   };

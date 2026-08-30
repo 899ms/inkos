@@ -57,9 +57,28 @@ export class SemanticContextCompilerAgent extends BaseAgent {
       if (!content) throw new Error(`Semantic context compiler returned empty output for chunk ${index + 1}/${chunks.length}.`);
       compiled.push(content);
     }
-    const content = compiled.join("\n\n");
+    let content = compiled.join("\n\n");
     if (estimateTextTokens(content) > input.maxTokens) {
-      throw new Error(`Compiled semantic context exceeds its budget: ${estimateTextTokens(content)}/${input.maxTokens} tokens.`);
+      const response = await this.chat([
+        {
+          role: "system",
+          content: input.language === "en"
+            ? "Recompile the supplied Markdown to fit the stated token budget. Preserve exact ids, names, constraints, unresolved state, causal facts, and source pointers. Remove only lower-value repetition and unrelated history. Return Markdown only."
+            : "把输入 Markdown 重新编译到指定 token 预算内。保留精确 id、名称、约束、未解状态、因果事实和来源指针；只删除低价值重复与无关历史。只返回 Markdown。",
+        },
+        {
+          role: "user",
+          content: `${input.language === "en" ? "Token budget" : "Token 预算"}: ${input.maxTokens}\n\n${content}`,
+        },
+      ], {
+        temperature: 0.1,
+        maxTokens: Math.min(this.ctx.client.defaults.maxTokens, Math.max(256, input.maxTokens)),
+      });
+      content = response.content.trim();
+      if (!content) throw new Error("Semantic context recompilation returned empty output.");
+    }
+    if (estimateTextTokens(content) > input.maxTokens) {
+      throw new Error(`Semantically recompiled context still exceeds its budget: ${estimateTextTokens(content)}/${input.maxTokens} tokens.`);
     }
     return { content, sourceIds };
   }

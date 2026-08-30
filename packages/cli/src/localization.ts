@@ -131,7 +131,7 @@ export function formatWriteNextResultLines(
       en: "  Issues:",
     }));
     for (const observation of result.observations) {
-      lines.push(`    [${observation.kind}] ${observation.code}: ${observation.summary}`);
+      lines.push(`    ${observation.code}: ${observation.summary}`);
     }
   }
 
@@ -242,7 +242,7 @@ export function formatNotifyReviseBody(
     readonly chapterNumber: number;
     readonly changed: boolean;
     readonly wordCount: number;
-    readonly fixedCount: number;
+    readonly observationCount: number;
   },
 ): string {
   if (!result.changed) {
@@ -253,8 +253,8 @@ export function formatNotifyReviseBody(
   }
   const lengthLabel = formatLengthCount(result.wordCount, resolveLengthCountingMode(language));
   return localize(language, {
-    zh: `第${result.chapterNumber}章已修订 | ${lengthLabel} | 修复 ${result.fixedCount} 个问题`,
-    en: `Chapter ${result.chapterNumber} revised | ${lengthLabel} | ${result.fixedCount} issue(s) fixed`,
+    zh: `第${result.chapterNumber}章已修订 | ${lengthLabel} | 复审观察 ${result.observationCount} 条`,
+    en: `Chapter ${result.chapterNumber} revised | ${lengthLabel} | ${result.observationCount} review observation(s)`,
   });
 }
 
@@ -403,10 +403,6 @@ export function formatDoctorHintInvalidApiKey(language: CliLanguage): string {
 
 // Fanfic errors are intentionally bilingual in a single string: they can surface
 // through `--json` output or be rethrown before any book language is known.
-export function formatFanficInvalidModeError(mode: string): string {
-  return `Invalid fanfic mode: "${mode}". Valid modes: canon, au, ooc, cp（无效的同人模式："${mode}"，可选 canon、au、ooc、cp）`;
-}
-
 export function formatFanficCanonMissingError(): string {
   return "No fanfic canon found for this book. Create one with `inkos fanfic init`（该书没有同人正典文件，用 inkos fanfic init 创建同人书）";
 }

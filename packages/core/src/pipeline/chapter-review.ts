@@ -65,9 +65,8 @@ export async function reviewChapterDraft(params: {
     const isEnglish = params.lengthSpec.countingMode === "en_words";
     modelReview = {
       unavailable: true,
-      issues: [{
+      observations: [{
         code: "review-unavailable",
-        kind: "soft",
         summary: isEnglish
           ? `Review observation was unavailable: ${String(error)}`
           : `审稿观察暂不可用：${String(error)}`,

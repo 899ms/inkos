@@ -37,6 +37,7 @@ export class ArchitectAgent extends BaseAgent {
     externalContext?: string,
     reviewFeedback?: string,
     options?: {
+      readonly onOutline?: (outline: { readonly storyFrame: string; readonly volumeMap: string }) => void | Promise<void>;
       reviseFrom?: {
         storyFrame: string;
         volumeMap: string;
@@ -72,6 +73,7 @@ export class ArchitectAgent extends BaseAgent {
       userMessage,
       language: resolvedLanguage,
       temperature: 0.8,
+      onOutline: options?.onOutline,
     });
   }
 
@@ -218,6 +220,9 @@ ${reviseFrom.userFeedback || "（无）"}
     fanficCanon: string,
     fanficMode: FanficMode,
     reviewFeedback?: string,
+    options?: {
+      readonly onOutline?: (outline: { readonly storyFrame: string; readonly volumeMap: string }) => void | Promise<void>;
+    },
   ): Promise<ArchitectOutput> {
     const resolvedLanguage = book.language;
     const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, resolvedLanguage);
@@ -237,6 +242,7 @@ ${reviseFrom.userFeedback || "（无）"}
       userMessage: `请为标题为"${book.title}"的${fanficMode}模式同人小说生成基础设定。目标${book.targetChapters}章，每章${book.chapterWordCount}字。`,
       language: resolvedLanguage,
       temperature: 0.7,
+      onOutline: options?.onOutline,
     });
   }
 
@@ -245,6 +251,7 @@ ${reviseFrom.userFeedback || "（无）"}
     readonly userMessage: string;
     readonly language: "zh" | "en";
     readonly temperature: number;
+    readonly onOutline?: (outline: { readonly storyFrame: string; readonly volumeMap: string }) => void | Promise<void>;
   }): Promise<ArchitectOutput> {
     const { result: outline } = await this.submitStructured(
       [
@@ -261,6 +268,10 @@ ${reviseFrom.userFeedback || "（无）"}
       },
       { temperature: input.temperature },
     );
+    await input.onOutline?.({
+      storyFrame: outline.storyFrame.trim(),
+      volumeMap: outline.volumeMap.trim(),
+    });
     const detailsPrompt = input.language === "en"
       ? `${input.userMessage}\n\n<story_frame>\n${outline.storyFrame}\n</story_frame>\n\n<volume_map>\n${outline.volumeMap}\n</volume_map>\n\nComplete the roles, readable book rules, structured rule data, and initial unresolved hooks.`
       : `${input.userMessage}\n\n<story_frame>\n${outline.storyFrame}\n</story_frame>\n\n<volume_map>\n${outline.volumeMap}\n</volume_map>\n\n继续完成角色卡、可读本书规则、结构化规则数据和初始未解伏笔。`;

@@ -11,7 +11,7 @@ import {
 import { sendCommandNotification } from "../notify-helper.js";
 
 export const reviseCommand = new Command("revise")
-  .description("Revise a chapter based on audit issues")
+  .description("Revise a chapter from user direction and review observations")
   .argument("[book-id]", "Book ID (auto-detected if only one book)")
   .argument("[chapter]", "Chapter number (defaults to latest)")
   .option("--mode <mode>", "Revise mode: spot-fix, polish, rewrite, rework, anti-detect", DEFAULT_REVISE_MODE)
@@ -63,10 +63,6 @@ export const reviseCommand = new Command("revise")
           : `  Chapter ${result.chapterNumber}: no actionable change`);
         log(`  Words: ${result.wordCount}`);
         log(`  Review observations: ${result.observations.length}`);
-        log("  Fixed:");
-        for (const fix of result.fixedIssues) {
-          log(`    - ${fix}`);
-        }
       }
 
       // Unlike write commands, the pipeline sends no notification for
@@ -78,7 +74,7 @@ export const reviseCommand = new Command("revise")
             chapterNumber: result.chapterNumber,
             changed: result.changed,
             wordCount: result.wordCount,
-            fixedCount: result.fixedIssues.length,
+            observationCount: result.observations.length,
           }),
         }, config);
       }

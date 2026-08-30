@@ -57,22 +57,23 @@ export async function validateChapterTruthPersistence(params: {
       validation: {
         consistent: false,
         reconciliationRequired: true,
-        warnings: [{
-          category: "state-validation-unavailable",
-          description: `State validation was unavailable: ${String(error)}`,
+        observations: [{
+          code: "state-validation-unavailable",
+          summary: `State validation was unavailable: ${String(error)}`,
+          evidence: [],
         }],
       },
       persistenceOutput: await preserveCanonicalRuntimeState(params, persistenceOutput),
     };
   }
 
-  if (validation.warnings.length > 0) {
+  if (validation.observations.length > 0) {
     params.logWarn({
-      zh: `状态校验：第${params.chapterNumber}章发现 ${validation.warnings.length} 条警告`,
-      en: `State validation: ${validation.warnings.length} warning(s) for chapter ${params.chapterNumber}`,
+      zh: `状态校验：第${params.chapterNumber}章发现 ${validation.observations.length} 条观察`,
+      en: `State validation: ${validation.observations.length} observation(s) for chapter ${params.chapterNumber}`,
     });
-    for (const warning of validation.warnings) {
-      params.logger?.warn(`  [${warning.category}] ${warning.description}`);
+    for (const observation of validation.observations) {
+      params.logger?.warn(`  [${observation.code}] ${observation.summary}`);
     }
   }
 

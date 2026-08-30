@@ -19,7 +19,8 @@ import {
 } from "../agents/script-storyboard.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath } from "../utils/posix-path.js";
-import { createInitialWorkManifestWrite, syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harness/work-store.js";
 
 export interface ScriptCreationRunOptions {
   readonly projectRoot: string;
@@ -160,6 +161,10 @@ export async function runScriptCreation(
 
   options.onProgress?.("Writing script creation spec...");
   const spec = renderScriptSpec(input);
+  await ensureDraftWork(options.projectRoot, projectId, options.title, "script", options.language ?? "zh");
+  await persistCandidateArtifacts(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "script-spec.md"), spec),
+  ]);
 
   options.onProgress?.("Writing script draft...");
   const agent = new ScriptCreationAgent(options.runtime);
@@ -168,17 +173,10 @@ export async function runScriptCreation(
     textArtifact(join(baseDir, "script-spec.md"), spec),
     textArtifact(join(baseDir, "script.md"), script),
   ];
-  const work = createInitialWorkManifestWrite({
-    workId: projectId,
-    title: options.title,
-    profileId: "script",
-    language: options.language ?? "zh",
-    writes: artifacts,
-  });
   assertNonEmptyArtifacts(artifacts);
   await commitAtomicFileSet({
     rootDir: options.projectRoot,
-    writes: [...artifacts, work.write],
+    writes: artifacts,
   });
   await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId, accept: true });
 
@@ -211,6 +209,10 @@ export async function runInteractiveFilmCreation(
 
   options.onProgress?.("Writing interactive-film creation spec...");
   const spec = renderInteractiveFilmSpec(input);
+  await ensureDraftWork(options.projectRoot, projectId, options.title, "interactive-film", options.language ?? "zh");
+  await persistCandidateArtifacts(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "interactive-spec.md"), spec),
+  ]);
 
   options.onProgress?.("Writing story tree, flags, script, storyboard, and image prompts...");
   const agent = new InteractiveFilmCreationAgent(options.runtime);
@@ -221,6 +223,13 @@ export async function runInteractiveFilmCreation(
   const imagePromptItems = compiled.imagePrompts;
   const imagePrompts = renderImagePrompts(imagePromptItems);
   const storyGraphPath = relPath(baseDir, "story-graph.json");
+  await persistCandidateArtifacts(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "story-tree.md"), storyTree),
+    textArtifact(join(baseDir, "flags.md"), flags),
+    textArtifact(join(baseDir, "script.md"), script),
+    textArtifact(join(baseDir, "storyboard.md"), storyboard),
+    textArtifact(join(baseDir, "image-prompts.md"), imagePrompts),
+  ]);
 
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "source"));
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "generated"));
@@ -256,17 +265,10 @@ export async function runInteractiveFilmCreation(
     textArtifact(join(baseDir, "assets.json"), JSON.stringify(assetsManifest, null, 2)),
     textArtifact(storyGraphPath, JSON.stringify(graph, null, 2)),
   ];
-  const work = createInitialWorkManifestWrite({
-    workId: projectId,
-    title: options.title,
-    profileId: "interactive-film",
-    language: options.language ?? "zh",
-    writes: artifacts,
-  });
   assertNonEmptyArtifacts(artifacts);
   await commitAtomicFileSet({
     rootDir: options.projectRoot,
-    writes: [...artifacts, work.write],
+    writes: artifacts,
   });
   await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId, accept: true });
 
@@ -305,11 +307,18 @@ export async function runStoryboardCreation(
 
   options.onProgress?.("Writing storyboard creation spec...");
   const spec = renderStoryboardSpec(input);
+  await ensureDraftWork(options.projectRoot, projectId, options.title, "storyboard", options.language ?? "zh");
+  await persistCandidateArtifacts(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "storyboard-spec.md"), spec),
+  ]);
 
   options.onProgress?.("Writing storyboard and image prompts...");
   const agent = new StoryboardCreationAgent(options.runtime);
   const storyboard = await agent.writeStoryboard(input);
   const compiler = new ProductionDocumentCompilerAgent(options.runtime);
+  await persistCandidateArtifacts(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "storyboard.md"), storyboard),
+  ]);
   const imagePromptItems = await compiler.compileStoryboardAssets(storyboard, options.language ?? "zh");
   const imagePrompts = renderImagePrompts(imagePromptItems);
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "source"));
@@ -330,17 +339,10 @@ export async function runStoryboardCreation(
     textArtifact(join(baseDir, "image-prompts.md"), imagePrompts),
     textArtifact(join(baseDir, "assets.json"), JSON.stringify(assetsManifest, null, 2)),
   ];
-  const work = createInitialWorkManifestWrite({
-    workId: projectId,
-    title: options.title,
-    profileId: "storyboard",
-    language: options.language ?? "zh",
-    writes: artifacts,
-  });
   assertNonEmptyArtifacts(artifacts);
   await commitAtomicFileSet({
     rootDir: options.projectRoot,
-    writes: [...artifacts, work.write],
+    writes: artifacts,
   });
   await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId, accept: true });
 
@@ -491,6 +493,44 @@ function assertNonEmptyArtifacts(
       throw new Error(`Production artifact is empty: ${artifact.relativePath}`);
     }
   }
+}
+
+async function ensureDraftWork(
+  projectRoot: string,
+  projectId: string,
+  title: string,
+  profileId: "script" | "storyboard" | "interactive-film",
+  language: "zh" | "en",
+): Promise<void> {
+  try {
+    const existing = await loadWorkManifest(projectRoot, projectId);
+    if (existing.profileId !== profileId) {
+      throw new Error(`Work "${projectId}" uses profile "${existing.profileId}", not "${profileId}".`);
+    }
+    if (existing.status !== "draft") {
+      throw new Error(`Work "${projectId}" already exists. Revise its artifacts instead of recreating it.`);
+    }
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await saveWorkManifest(projectRoot, createWorkManifest({
+    id: projectId,
+    title,
+    profileId,
+    language,
+    status: "draft",
+  }));
+}
+
+async function persistCandidateArtifacts(
+  projectRoot: string,
+  projectId: string,
+  artifacts: ReadonlyArray<{ readonly relativePath: string; readonly content: string }>,
+): Promise<void> {
+  assertNonEmptyArtifacts(artifacts);
+  await commitAtomicFileSet({ rootDir: projectRoot, writes: artifacts });
+  await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: false });
 }
 
 async function ensureProjectDir(projectRoot: string, relativePath: string): Promise<void> {

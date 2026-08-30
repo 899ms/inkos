@@ -494,8 +494,8 @@ export function BookDetail({
                       <button
                         onClick={async () => {
                           try {
-                            const review = await fetchJson<{ summary?: string; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                            alert(`${review.summary ?? t("book.review")}\n${review.issues?.length ?? 0} ${t("book.observations")}`);
+                            const review = await fetchJson<{ summary?: string; observations?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
+                            alert(`${review.summary ?? t("book.review")}\n${review.observations?.length ?? 0} ${t("book.observations")}`);
                             refetch();
                           } catch (e) {
                             alert(e instanceof Error ? e.message : "Review failed");

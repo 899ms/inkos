@@ -47,7 +47,7 @@ export function splitChapters(
 
     // Content starts after the title line
     const contentLines = lines.slice(chapter.startLine + 1, nextStart);
-    const content = stripTrailingLicense(contentLines.join("\n")).trim();
+    const content = contentLines.join("\n").trim();
 
     result.push({
       title: chapter.title || inferFallbackTitle(lines[chapter.startLine] ?? "", i + 1),
@@ -56,15 +56,6 @@ export function splitChapters(
   }
 
   return result;
-}
-
-function stripTrailingLicense(content: string): string {
-  const trailerMatch = content.match(/^\s*Project Gutenberg(?:™|\(TM\))?.*$/im);
-  if (!trailerMatch || trailerMatch.index === undefined) {
-    return content;
-  }
-
-  return content.slice(0, trailerMatch.index).trimEnd();
 }
 
 function inferFallbackTitle(headingLine: string, chapterNumber: number): string {

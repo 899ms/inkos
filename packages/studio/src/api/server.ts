@@ -166,6 +166,28 @@ function pick(lang: StudioLanguage, zh: string, en: string): string {
   return lang === "en" ? en : zh;
 }
 
+async function resolveStudioProfileSkills(
+  root: string,
+  profileId: string,
+  options: {
+    readonly includeRecommended?: boolean;
+    readonly extraSkillIds?: ReadonlyArray<string>;
+  } = {},
+) {
+  const available = await loadAvailableAgentSkills({ projectRoot: root });
+  const profiles = createBuiltInWorkProfileRegistry();
+  const profileSkills = resolveProfileSkillActivations(
+    available.skills,
+    profiles.require(profileId),
+    { includeRecommended: options.includeRecommended },
+  );
+  const extras = (options.extraSkillIds ?? []).flatMap((id) => {
+    const skill = available.skills.find((candidate) => candidate.id === id);
+    return skill ? [{ skill, resources: [] }] : [];
+  });
+  return mergeActivatedSkillGuidance(profileSkills, extras);
+}
+
 // -- Pipeline stage definitions per agent type --
 
 interface BilingualLabel {
@@ -574,7 +596,7 @@ type StudioAgentAttachmentPayload = {
 
 const MAX_AGENT_ATTACHMENTS = 8;
 const MAX_AGENT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
-const MAX_AGENT_ATTACHMENT_TEXT_CHARS = 120_000;
+const MAX_AGENT_INLINE_TEXT_CHARS = 120_000;
 const MAX_TRANSLATION_UPLOAD_BYTES = 80 * 1024 * 1024;
 const MAX_CANON_UPLOAD_BYTES = 18 * 1024 * 1024;
 const MAX_SKILL_IMPORT_FILES = 128;
@@ -664,16 +686,13 @@ async function normalizeAgentAttachments(
 
     if (isTextAttachment(filename, mimeType)) {
       const text = parsed.buffer.toString("utf-8");
-      if (text.length > MAX_AGENT_ATTACHMENT_TEXT_CHARS) {
-        throw new ApiError(413, "ATTACHMENT_TEXT_TOO_LARGE", `${filename} is too large to inject without semantic compaction`);
-      }
       out.push({
         id: payload.id || `${Date.now()}-${index}`,
         filename,
         mimeType,
         size: parsed.buffer.byteLength,
         storedPath: relPath,
-        text,
+        ...(text.length <= MAX_AGENT_INLINE_TEXT_CHARS ? { text } : {}),
       });
       continue;
     }
@@ -1126,6 +1145,10 @@ async function executeConfirmedProductionAction(args: {
     ),
     requestedSkillActivations,
   );
+  const namedSkills = (...skillIds: ReadonlyArray<string>) => skillIds.flatMap((id) => {
+    const skill = skillResolution.availableSkills.find((candidate) => candidate.id === id);
+    return skill ? [{ skill, resources: [] }] : [];
+  });
   let tool: ReturnType<typeof createBookFoundationTool>
     | ReturnType<typeof createWriteChaptersTool>
     | ReturnType<typeof createShortFictionRunTool>
@@ -1185,7 +1208,11 @@ async function executeConfirmedProductionAction(args: {
     const chapterCount = actionPayload?.writeNext?.chapterCount ?? 1;
     tool = createWriteChaptersTool(args.pipeline, args.bookId, {
       language: lang,
-      workerSkills: (worker) => worker === "writer" ? profileSkills("longform-novel") : [],
+      workerSkills: (worker) => (
+        worker === "auditor" || worker === "reviser"
+          ? profileSkills("longform-novel", true)
+          : profileSkills("longform-novel")
+      ),
     });
     params = {
       bookId: args.bookId,
@@ -1286,7 +1313,10 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "创建同人需要原作资料或上传文件。", "Fanfiction creation requires source material or an uploaded file."));
     }
     tool = createFanficBookTool(args.pipeline, args.root, {
-      defaultSkills: profileSkills("longform-novel"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-story-import", "inkos-fanfic-writing"),
+      ),
     });
     params = {
       title,
@@ -1308,7 +1338,10 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "导入续写需要选择已有书籍或填写新书名。", "Continuation import requires an existing book or a new title."));
     }
     tool = createContinuationImportTool(args.pipeline, args.bookId, args.root, {
-      defaultSkills: profileSkills("longform-novel"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-story-import", "inkos-continuation-writing"),
+      ),
     });
     params = {
       ...(targetBookId ? { bookId: targetBookId } : {}),
@@ -1327,7 +1360,10 @@ async function executeConfirmedProductionAction(args: {
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建番外缺少书名。", "The side-story confirmation is missing a title."));
     const parentBookId = requirePayloadText(payload?.parentBookId ?? args.bookId ?? undefined, pick(lang, "创建番外需要指定正传书籍。", "Side-story creation requires a parent book."));
     tool = createSpinoffBookTool(args.pipeline, args.root, {
-      defaultSkills: profileSkills("longform-novel"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-spinoff-writing"),
+      ),
     });
     params = {
       title,
@@ -1347,7 +1383,10 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "仿写需要参考文本或上传文件。", "Style imitation requires reference text or an uploaded file."));
     }
     tool = createImitationBookTool(args.pipeline, args.root, {
-      defaultSkills: profileSkills("longform-novel"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-imitation-writing"),
+      ),
     });
     params = {
       title,
@@ -1462,6 +1501,7 @@ async function executeConfirmedProductionAction(args: {
       parameters: params,
       workId: args.bookId,
       episodeId: `episode-${id}`,
+      conversationId: args.sessionId,
       signal: args.signal,
       onUpdate: (partialResult) => {
         const progress = toolResultText(partialResult, lang);
@@ -2785,6 +2825,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     bookCreateStatus.set(bookId, { status: "creating" });
 
     const pipeline = new PipelineRunner(await buildPipelineConfig());
+    const foundationSkills = await resolveStudioProfileSkills(root, "longform-novel");
     const actionPayload: ActionPayload = {
       createBook: {
         title: body.title,
@@ -2798,6 +2839,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const tool = createBookFoundationTool(pipeline, {
       actionPayload,
       language: body.language === "en" ? "en" : "zh",
+      workerSkills: () => foundationSkills,
     });
     const binding = confirmedCapabilityBinding("create_book")!;
     executeExplicitCapabilityTool({
@@ -3195,7 +3237,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("write:start", { bookId: id });
 
     const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
-    const tool = createWriteChaptersTool(pipeline, id);
+    const [writingSkills, reviewSkills] = await Promise.all([
+      resolveStudioProfileSkills(root, "longform-novel"),
+      resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true }),
+    ]);
+    const tool = createWriteChaptersTool(pipeline, id, {
+      workerSkills: (worker) => worker === "auditor" || worker === "reviser" ? reviewSkills : writingSkills,
+    });
     executeExplicitCapabilityTool({
       projectRoot: root,
       binding: confirmedCapabilityBinding("write_next")!,
@@ -3232,10 +3280,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel");
       await executeExplicitCapabilityTool({
         projectRoot: root,
         binding: { capabilityId: "longform", actionId: "revise_foundation", profileId: "longform-novel" },
-        tool: createFoundationRevisionTool(pipeline, id),
+        tool: createFoundationRevisionTool(pipeline, id, { workerSkills: () => skills }),
         parameters: { instruction: feedback.trim(), bookId: id },
         workId: id,
       });
@@ -5168,16 +5217,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("audit:start", { bookId: id, chapter: chapterNum });
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
         binding: { capabilityId: "longform", actionId: "review_chapter", profileId: "longform-novel" },
-        tool: createReviewChapterTool(pipeline, id),
+        tool: createReviewChapterTool(pipeline, id, { workerSkills: () => skills }),
         parameters: { bookId: id, chapterNumber: chapterNum },
         workId: id,
       });
-      const result = action.data as { summary?: string; issues?: unknown[]; observations?: unknown[] } | undefined;
+      const result = action.data as { summary?: string; observations?: unknown[] } | undefined;
       broadcast("review:complete", { bookId: id, chapter: chapterNum, observationCount: result?.observations?.length ?? 0 });
-      return c.json({ summary: result?.summary ?? action.summary, issues: result?.issues ?? [] });
+      return c.json({ summary: result?.summary ?? action.summary, observations: result?.observations ?? [] });
     } catch (e) {
       broadcast("audit:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5197,11 +5247,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         externalContext: body.brief,
         bookIdForSettings: id,
       }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
       const normalizedMode = body.mode ?? DEFAULT_REVISE_MODE;
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
         binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel" },
-        tool: createReviseChapterTool(pipeline, id),
+        tool: createReviseChapterTool(pipeline, id, { workerSkills: () => skills }),
         parameters: {
           instruction: body.brief?.trim() || "Revise the chapter using its current review observations.",
           bookId: id,
@@ -5459,10 +5510,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         externalContext: body.brief,
         bookIdForSettings: id,
       }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
         binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel" },
-        tool: createReviseChapterTool(pipeline, id),
+        tool: createReviseChapterTool(pipeline, id, { workerSkills: () => skills }),
         parameters: {
           instruction: body.brief?.trim() || "Rework this chapter while preserving current Work authority.",
           bookId: id,
@@ -5668,7 +5720,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       status: "outlining" as const,
       targetChapters: body.targetChapters ?? 100,
       chapterWordCount: body.chapterWordCount ?? 3000,
-      fanficMode: (body.mode ?? "canon") as "canon",
+      fanficMode: body.mode?.trim() || "canon",
       ...(body.language ? { language: body.language as "zh" | "en" } : {}),
       createdAt: now,
       updatedAt: now,
@@ -5677,10 +5729,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("fanfic:start", { bookId, title: body.title });
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import", "inkos-fanfic-writing"],
+      });
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
         binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default" },
-        tool: createFanficBookTool(pipeline, root),
+        tool: createFanficBookTool(pipeline, root, { defaultSkills: skills }),
         parameters: {
           title: bookConfig.title,
           sourceText: body.sourceText,
@@ -5754,10 +5809,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
+        const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+          extraSkillIds: ["inkos-spinoff-writing"],
+        });
         await executeExplicitCapabilityTool({
           projectRoot: root,
           binding: { capabilityId: "adaptation", actionId: "spinoff_create", profileId: "workspace-default" },
-          tool: createSpinoffBookTool(pipeline, root),
+          tool: createSpinoffBookTool(pipeline, root, { defaultSkills: skills }),
           parameters: {
             title: bookConfig.title,
             parentBookId: body.parentBookId,
@@ -5815,10 +5873,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
+        const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+          extraSkillIds: ["inkos-imitation-writing"],
+        });
         await executeExplicitCapabilityTool({
           projectRoot: root,
           binding: { capabilityId: "adaptation", actionId: "imitation_create", profileId: "workspace-default" },
-          tool: createImitationBookTool(pipeline, root),
+          tool: createImitationBookTool(pipeline, root, { defaultSkills: skills }),
           parameters: {
             title: bookConfig.title,
             referenceText: body.referenceText,
@@ -6014,7 +6075,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           title: chapter.title,
           translatedSegments: chapter.translatedSegments,
           reviewSummary: chapter.reviewSummary,
-          reviewIssues: chapter.reviewIssues,
+          observations: chapter.observations,
           segments: source.segments.map((segment) => ({
             index: segment.index,
             source: segment.source,

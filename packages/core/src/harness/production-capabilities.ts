@@ -517,7 +517,6 @@ async function normalizeToolResult(
     status: "success",
     summary,
     ...(content ? { content } : {}),
-    nextActions: [],
     artifacts,
     observations,
     ...(details === undefined ? {} : { data: details }),

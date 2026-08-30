@@ -11,6 +11,7 @@ import {
 import type {
   RunTranslationProjectResult,
   TranslationChapterFile,
+  TranslationChapterManifest,
   TranslationModelPort,
   TranslationProjectManifest,
   TranslationSegment,
@@ -91,7 +92,7 @@ export async function runTranslationProject(
 
     const completedChapter = await loadTranslationChapter(projectRoot, chapterInfo.translatedPath);
     let reviewSummary: string | undefined;
-    let reviewIssues: ReadonlyArray<string> | undefined;
+    let observations: Awaited<ReturnType<NonNullable<TranslationModelPort["reviewChapter"]>>>["observations"] | undefined;
     if (options.model.reviewChapter && completedChapter.segments.some((segment) => segment.target?.trim())) {
       const review = await options.model.reviewChapter({
         sourceLanguage: manifest.sourceLanguage,
@@ -102,10 +103,11 @@ export async function runTranslationProject(
       });
       reviewedChapters++;
       reviewSummary = review.summary;
-      reviewIssues = review.issues;
+      observations = review.observations;
       reportLines.push(`## ${completedChapter.title}`, "", `- summary: ${review.summary}`, "");
-      for (const issue of review.issues) {
-        reportLines.push(`- issue: ${issue}`);
+      for (const observation of review.observations) {
+        reportLines.push(`- ${observation.code}: ${observation.summary}`);
+        for (const evidence of observation.evidence) reportLines.push(`  - evidence: ${evidence}`);
       }
       reportLines.push("");
     }
@@ -115,7 +117,7 @@ export async function runTranslationProject(
       completedChapter.segments.filter((segment) => segment.target?.trim()).length,
       completedChapter.title,
       reviewSummary,
-      reviewIssues,
+      observations,
     );
     await saveTranslationManifest(projectRoot, manifest);
   }
@@ -158,14 +160,14 @@ function updateChapterProgress(
   translatedSegments: number,
   translatedTitle: string,
   reviewSummary?: string,
-  reviewIssues?: ReadonlyArray<string>,
+  observations?: TranslationChapterManifest["observations"],
 ): TranslationProjectManifest {
   return {
     ...manifest,
     updatedAt: new Date().toISOString(),
     chapters: manifest.chapters.map((chapter) =>
       chapter.number === chapterNumber
-        ? { ...chapter, title: translatedTitle, translatedSegments, reviewSummary, reviewIssues }
+        ? { ...chapter, title: translatedTitle, translatedSegments, reviewSummary, observations }
         : chapter,
     ),
   };

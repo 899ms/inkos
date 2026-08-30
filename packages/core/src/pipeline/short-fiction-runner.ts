@@ -16,6 +16,7 @@ import {
   renderShortFictionDraftMarkdown,
   validateShortFictionDraftForFinal,
   type ShortFictionBatchDraft,
+  type ShortFictionDraftReview,
   type ShortFictionLanguage,
   type ShortFictionReference,
   type ShortFictionSalesPackage,
@@ -207,6 +208,7 @@ async function produceShort(
   }
 
   let finalDraft: ShortFictionBatchDraft;
+  let draftReviewObservations: ReadonlyArray<Observation> = [];
   let draftReviewWarning: string | undefined;
   let packageWarning: string | undefined;
   let salesPackage: ShortFictionSalesPackage;
@@ -279,7 +281,12 @@ async function produceShort(
         charsPerChapter,
         language,
       });
-      await writeText(root, join(baseDir, "reviews", "draft-v001.md"), draftReview);
+      draftReviewObservations = draftReview.observations;
+      await writeText(
+        root,
+        join(baseDir, "reviews", "draft-v001.md"),
+        renderShortFictionReview(draftReview, language),
+      );
     } catch (error) {
       options.signal?.throwIfAborted();
       draftReviewWarning = error instanceof Error ? error.message : String(error);
@@ -337,21 +344,25 @@ async function produceShort(
         return { coverError: String(error) };
       });
 
-  const completionWarnings = [
-    draftReviewWarning ? `draft review unavailable: ${draftReviewWarning}` : "",
-    packageWarning ? `packaging requires retry: ${packageWarning}` : "",
-  ].filter(Boolean);
   const observations = [
-    ...completionWarnings.map((warning): Observation => ({
-      code: warning.startsWith("packaging") ? "package-generation" : "draft-review",
-      kind: "soft",
-      summary: warning,
-      evidence: [warning],
-    })),
+    ...draftReviewObservations,
+    ...(draftReviewWarning
+      ? [{
+          code: "draft-review",
+          summary: `draft review unavailable: ${draftReviewWarning}`,
+          evidence: [draftReviewWarning],
+        }]
+      : []),
+    ...(packageWarning
+      ? [{
+          code: "package-generation",
+          summary: `packaging requires retry: ${packageWarning}`,
+          evidence: [packageWarning],
+        }]
+      : []),
     ...(coverArtifacts.coverError && coverArtifacts.coverError !== "disabled"
       ? [{
           code: "cover-generation",
-          kind: "soft" as const,
           summary: coverArtifacts.coverError,
           evidence: [coverArtifacts.coverError],
         }]
@@ -360,6 +371,35 @@ async function produceShort(
   await syncWorkSourceArtifacts({ projectRoot: root, workId: storyId, accept: true });
 
   return buildShortRunResult(storyId, baseDir, observations, { ...coverArtifacts, packageError: packageWarning });
+}
+
+function renderShortFictionReview(
+  review: ShortFictionDraftReview,
+  language: ShortFictionLanguage,
+): string {
+  const observations = review.observations.length > 0
+    ? review.observations.flatMap((observation) => [
+        `### ${observation.code}`,
+        observation.summary,
+        ...(observation.evidence.length > 0
+          ? [
+              "",
+              language === "en" ? "Evidence:" : "证据：",
+              ...observation.evidence.map((item) => `- ${item}`),
+            ]
+          : []),
+        "",
+      ])
+    : [language === "en" ? "No evidence-backed observations." : "没有有证据的审稿观察。"];
+  return [
+    language === "en" ? "# Draft review" : "# 成稿审查",
+    "",
+    review.summary,
+    "",
+    language === "en" ? "## Observations" : "## 审稿观察",
+    "",
+    ...observations,
+  ].join("\n").trim();
 }
 
 function buildShortRunResult(

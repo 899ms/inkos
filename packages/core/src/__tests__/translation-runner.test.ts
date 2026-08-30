@@ -46,7 +46,7 @@ describe("translation runner", () => {
     const reviewChapter = vi.fn<NonNullable<TranslationModelPort["reviewChapter"]>>(async () => ({
       passed: true,
       summary: "ok",
-      issues: [],
+      observations: [],
     }));
 
     const first = await runTranslationProject(root, created.manifest.id, {

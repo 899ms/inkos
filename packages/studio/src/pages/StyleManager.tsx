@@ -21,35 +21,20 @@ export interface StyleStatusNotice {
   readonly message: string;
 }
 
-export function buildStyleStatusNotice(analyzeStatus: string, importStatus: string): StyleStatusNotice | null {
-  const message = analyzeStatus.trim() || importStatus.trim();
-  if (!message) return null;
-  if (message.startsWith("Error:")) {
-    return { tone: "error", message };
-  }
-  if (message.endsWith("...")) {
-    return { tone: "info", message };
-  }
-  return { tone: "success", message };
-}
-
 export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const [text, setText] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [profile, setProfile] = useState<StyleProfile | null>(null);
   const [loading, setLoading] = useState(false);
-  const [analyzeStatus, setAnalyzeStatus] = useState("");
   const [importBookId, setImportBookId] = useState("");
-  const [importStatus, setImportStatus] = useState("");
+  const [statusNotice, setStatusNotice] = useState<StyleStatusNotice | null>(null);
   const { data: booksData } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
-  const statusNotice = buildStyleStatusNotice(analyzeStatus, importStatus);
-
   const handleAnalyze = async () => {
     if (!text.trim()) return;
     setLoading(true);
     setProfile(null);
-    setAnalyzeStatus("");
+    setStatusNotice(null);
     try {
       const data = await fetchJson<StyleProfile>("/style/analyze", {
         method: "POST",
@@ -58,19 +43,19 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       });
       setProfile(data);
     } catch (e) {
-      setAnalyzeStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatusNotice({ tone: "error", message: e instanceof Error ? e.message : String(e) });
     }
     setLoading(false);
   };
 
   const handleImport = async () => {
     if (!importBookId || !text.trim()) return;
-    setImportStatus("Importing...");
+    setStatusNotice({ tone: "info", message: "Importing..." });
     try {
       await postApi(`/books/${importBookId}/style/import`, { text, sourceName: sourceName || "sample" });
-      setImportStatus("Style guide imported successfully!");
+      setStatusNotice({ tone: "success", message: "Style guide imported successfully!" });
     } catch (e) {
-      setImportStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatusNotice({ tone: "error", message: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -153,7 +138,6 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
                 >
                   {t("style.importGuide")}
                 </button>
-                {importStatus && <div className="text-xs text-muted-foreground">{importStatus}</div>}
               </div>
             </div>
           )}

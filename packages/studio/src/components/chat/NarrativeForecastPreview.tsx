@@ -92,7 +92,7 @@ export function buildNarrativeForecastRecheckInstruction(
     : `Call get_narrative_forecast for forecast ${forecastId} and report whether it is stale.`;
 }
 
-const RISK_LABELS: Record<ForecastRisk["kind"], readonly [string, string]> = {
+const RISK_LABELS: Readonly<Record<string, readonly [string, string]>> = {
   continuity: ["连续性", "Continuity"],
   causality: ["因果", "Causality"],
   character: ["人物", "Character"],
@@ -119,7 +119,7 @@ function RiskPills({ risks, zh }: { risks: readonly ForecastRisk[]; zh: boolean 
           title={risk.description}
           className="inline-flex items-center rounded-full border border-amber-500/25 bg-amber-500/8 px-2 py-0.5 text-[11px] text-amber-800 dark:text-amber-200"
         >
-          {label(zh, RISK_LABELS[risk.kind])}
+          {RISK_LABELS[risk.kind] ? label(zh, RISK_LABELS[risk.kind]!) : risk.kind}
         </span>
       ))}
     </div>
