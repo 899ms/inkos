@@ -2,9 +2,10 @@ import { BaseAgent } from "./base.js";
 import type { ContextPackage } from "../models/input-governance.js";
 import { ChapterReviewToolSchema } from "./review-tool.js";
 import { renderNarrativeSelectedContext } from "../utils/narrative-control.js";
+import type { Observation } from "../models/observation.js";
 
 export interface AuditResult {
-  readonly issues: ReadonlyArray<AuditIssue>;
+  readonly issues: ReadonlyArray<Observation>;
   readonly summary: string;
   readonly unavailable?: boolean;
   readonly tokenUsage?: {
@@ -12,14 +13,6 @@ export interface AuditResult {
     readonly completionTokens: number;
     readonly totalTokens: number;
   };
-}
-
-export interface AuditIssue {
-  readonly severity: "critical" | "warning" | "info";
-  readonly category: string;
-  readonly description: string;
-  readonly suggestion: string;
-  readonly repairScope?: "local" | "structural" | "unknown";
 }
 
 export class ContinuityAuditor extends BaseAgent {
@@ -66,13 +59,7 @@ export class ContinuityAuditor extends BaseAgent {
       { temperature: options.temperature ?? 0.3 },
     );
     return {
-      issues: result.issues.map((issue) => ({
-        severity: issue.severity,
-        category: issue.category,
-        description: issue.description,
-        suggestion: issue.suggestion,
-        repairScope: issue.repairScope,
-      })),
+      issues: result.issues,
       summary: result.summary,
       tokenUsage: usage,
     };

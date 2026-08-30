@@ -203,7 +203,7 @@ export function createWriteChaptersTool(
             chapterNumber: result.chapterNumber,
             title: result.title,
             wordCount: result.wordCount,
-            observations: toObservations(result.review.issues),
+            observations: result.review.issues,
             ...(result.contextTrace ? { contextTrace: result.contextTrace } : {}),
           })),
         });
@@ -234,7 +234,7 @@ export function createReviewChapterTool(
           chapterNumber: review.chapterNumber,
           summary: review.summary,
           issues: review.issues,
-          observations: toObservations(review.issues),
+          observations: review.issues,
           skillIds: skills.map((skill) => skill.skill.id),
         });
       }, toolCallId);
@@ -274,24 +274,11 @@ export function createReviseChapterTool(
             wordCount: result.wordCount,
             changed: result.changed,
             fixedIssues: result.fixedIssues,
-            observations: toObservations(result.observations),
+            observations: result.observations,
             skillIds: skills.map((skill) => skill.skill.id),
           },
         );
       }, toolCallId);
     },
   };
-}
-
-function toObservations(issues: ReadonlyArray<{
-  readonly category?: string;
-  readonly description: string;
-  readonly suggestion?: string;
-}>) {
-  return issues.map((issue, index) => ({
-    code: `${issue.category || "review"}-${index + 1}`,
-    kind: "soft" as const,
-    summary: issue.description,
-    evidence: issue.suggestion ? [issue.suggestion] : [],
-  }));
 }

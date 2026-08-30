@@ -21,6 +21,7 @@ export const SessionCreatedEventSchema = BaseEventSchema.extend({
   workId: z.string().min(1).nullable().optional(),
   proposalAction: z.string().min(1).optional(),
   playMode: PlayModeSchema.optional(),
+  modelOverride: z.string().min(1).optional(),
   title: z.string().nullable().default(null),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
@@ -34,6 +35,7 @@ export const SessionMetadataUpdatedEventSchema = BaseEventSchema.extend({
   workId: z.string().min(1).nullable().optional(),
   proposalAction: z.string().min(1).optional(),
   playMode: PlayModeSchema.optional(),
+  modelOverride: z.string().min(1).optional(),
   title: z.string().nullable().optional(),
   updatedAt: z.number().int().nonnegative(),
 });

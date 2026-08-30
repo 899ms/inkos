@@ -57,19 +57,6 @@ function textResult<T = undefined>(text: string, details?: T): AgentToolResult<T
   return { content: [{ type: "text", text }], details: details as T };
 }
 
-function reviewIssuesAsObservations(issues: ReadonlyArray<{
-  readonly category?: string;
-  readonly description: string;
-  readonly suggestion?: string;
-}>) {
-  return issues.map((issue, index) => ({
-    code: `${issue.category || "review"}-${index + 1}`,
-    kind: "soft" as const,
-    summary: issue.description,
-    evidence: issue.suggestion ? [issue.suggestion] : [],
-  }));
-}
-
 /**
  * Resolve a user-supplied relative path against the books root and guard
  * against path-traversal (../ etc.).
@@ -2757,14 +2744,14 @@ export function createResyncChapterStateTool(
         zh
           ? `第 ${result.chapter.chapterNumber} 章正文未改动；状态、摘要与伏笔已重建，记录 ${issues.length} 条审查观察。`
           : `Chapter ${result.chapter.chapterNumber} prose was unchanged; state, summaries, and hooks were rebuilt with ${issues.length} review observation(s).`,
-        ...issues.map((issue) => `- [${issue.severity}] ${issue.description}${issue.suggestion ? ` (${issue.suggestion})` : ""}`),
+        ...issues.map((issue) => `- [${issue.kind}] ${issue.summary}`),
       ].join("\n");
       return textResult(summary, {
         kind: "chapter_state_resynced",
         workId: bookId,
         bookId,
         chapterNumber: result.chapter.chapterNumber,
-        observations: reviewIssuesAsObservations(issues),
+        observations: issues,
         summary: result.audit.summary,
         skillIds: activatedSkillIds(activatedSkills),
       });

@@ -1033,8 +1033,13 @@ function suppressManualTextForTool(exec: CollectedToolExec): boolean {
 function hasSuccessfulToolOwnedResponse(execs: ReadonlyArray<CollectedToolExec>): boolean {
   return execs.some((exec) =>
     exec.status === "completed"
-    && suppressManualTextForTool(exec)
+    && (suppressManualTextForTool(exec) || hasDomainOwnedResult(exec.details))
   );
+}
+
+function hasDomainOwnedResult(details: unknown): boolean {
+  if (!details || typeof details !== "object") return false;
+  return typeof (details as Record<string, unknown>).kind === "string";
 }
 
 function manualToolAssistantMessage(
@@ -4261,7 +4266,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.post("/api/v1/sessions", async (c) => {
-    const body = await c.req.json<{
+    type CreateSessionBody = {
       bookId?: string | null;
       workId?: string | null;
       profileId?: string;
@@ -4269,7 +4274,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId?: string;
       sessionKind?: string;
       playMode?: string;
-    }>().catch(() => ({}));
+      modelOverride?: string;
+    };
+    const body = await c.req.json<CreateSessionBody>().catch(() => ({} as CreateSessionBody));
     const bookId = normalizeApiBookId((body as { bookId?: unknown }).bookId, "bookId");
     const sessionKind = normalizeStudioSessionKind(
       (body as { sessionKind?: unknown }).sessionKind,
@@ -4277,6 +4284,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     );
     const playMode = normalizeStudioPlayMode((body as { playMode?: unknown }).playMode);
     const proposalAction = normalizeStudioProposalAction((body as { proposalAction?: unknown }).proposalAction);
+    const modelOverride = typeof body.modelOverride === "string" && body.modelOverride.trim()
+      ? body.modelOverride.trim()
+      : undefined;
     const sessionId = (body as { sessionId?: string }).sessionId;
     // sessionId 只允许 timestamp-random 格式；防止注入任意文件名
     const safeSessionId = sessionId && /^[0-9]+-[a-z0-9]+$/.test(sessionId) ? sessionId : undefined;
@@ -4301,7 +4311,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       bookId,
       resolvedSessionId,
       sessionKind,
-      { ...(playMode ? { playMode } : {}), profileId, workId, ...(proposalAction ? { proposalAction } : {}) },
+      { ...(playMode ? { playMode } : {}), profileId, workId, ...(proposalAction ? { proposalAction } : {}), ...(modelOverride ? { modelOverride } : {}) },
     );
     // 客户端可以用同一个 sessionId 重新创建会话：移除删除标记，
     // 让新会话的生产任务可以正常持久化快照。
@@ -4484,19 +4494,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
       const profileId = boundWork?.profileId ?? requestedProfileId ?? bookSession.profileId ?? surfaceBinding.profileId;
       const workId = boundWork?.id ?? candidateWorkId;
+      const modelOverride = typeof reqModel === "string" && reqModel.trim()
+        ? reqModel.trim()
+        : bookSession.modelOverride;
       createBuiltInWorkProfileRegistry().require(profileId);
       if (
         bookSession.sessionKind !== sessionKind
         || (playMode && bookSession.playMode !== playMode)
         || bookSession.profileId !== profileId
         || bookSession.workId !== workId
+        || bookSession.modelOverride !== modelOverride
       ) {
         const updatedSession = await createAndPersistBookSession(
           root,
           bookSession.bookId,
           bookSession.sessionId,
           sessionKind,
-          { ...(playMode ? { playMode } : {}), profileId, workId },
+          { ...(playMode ? { playMode } : {}), profileId, workId, ...(modelOverride ? { modelOverride } : {}) },
         );
         bookSession = updatedSession;
       }

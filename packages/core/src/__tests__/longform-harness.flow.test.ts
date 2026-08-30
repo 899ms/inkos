@@ -33,10 +33,10 @@ describe("long-form harness mini-flow", () => {
       auditResult: {
         summary: "One continuity observation.",
         issues: [{
-          severity: "critical",
-          category: "canon-consistency",
-          description: "A supporting detail conflicts with the current canon.",
-          suggestion: "Review the detail before the next revision.",
+          code: "canon-consistency",
+          kind: "hard",
+          summary: "A supporting detail conflicts with the current canon.",
+          evidence: ["The chapter and current canon disagree."],
         }],
       },
       finalWordCount: output.wordCount,
@@ -53,7 +53,7 @@ describe("long-form harness mini-flow", () => {
       hasLegacyStatus: "status" in (persisted[0] ?? {}),
       chapterFiles: (await readdir(join(bookDir, "chapters"))).filter((file) => file.endsWith(".md")).length,
     }).toEqual({
-      observation: "canon-consistency-1",
+      observation: "canon-consistency",
       provenance: "generated",
       hasLegacyStatus: false,
       chapterFiles: 1,
@@ -125,7 +125,7 @@ describe("long-form harness mini-flow", () => {
     });
     expect({
       content: result.content,
-      observation: result.review.issues[0]?.category,
+      observation: result.review.issues[0]?.code,
       unavailable: result.review.unavailable,
     }).toEqual({
       content: output.content,

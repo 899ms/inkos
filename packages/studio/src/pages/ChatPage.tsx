@@ -449,9 +449,20 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
     return group ? `${group.label} · ${modelLabel}` : modelLabel;
   }, [groupedModels, selectedModel, selectedService, isZh]);
 
-  // Auto-select from saved service config first, then fall back to the first available model.
+  // A session model is canonical once the session has run; project config only
+  // seeds sessions that have not selected a model yet.
   useEffect(() => {
     if (!serviceConfigLoaded) return;
+    if (activeSession?.modelOverride) {
+      const sessionGroup = groupedModels.find((group) =>
+        group.models.some((model) => model.id === activeSession.modelOverride)
+      );
+      if (sessionGroup
+        && (selectedModel !== activeSession.modelOverride || selectedService !== sessionGroup.service)) {
+        setSelectedModel(activeSession.modelOverride, sessionGroup.service);
+      }
+      return;
+    }
     const nextSelection = pickModelSelection(
       groupedModels,
       selectedModel,
@@ -461,7 +472,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
     if (nextSelection) {
       setSelectedModel(nextSelection.model, nextSelection.service);
     }
-  }, [configuredModelSelection, groupedModels, selectedModel, selectedService, serviceConfigLoaded, setSelectedModel]);
+  }, [activeSession?.modelOverride, configuredModelSelection, groupedModels, selectedModel, selectedService, serviceConfigLoaded, setSelectedModel]);
 
   // Auto-resize textarea
   useEffect(() => {

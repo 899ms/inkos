@@ -60,6 +60,22 @@ describe("book session transcript flow", () => {
       .rejects.toBeInstanceOf(SessionAlreadyBoundError);
   });
 
+  it("persists the selected model with the canonical session", async () => {
+    await createAndPersistBookSession(root, null, "model-flow", "chat", {
+      modelOverride: "gpt-5.6-terra",
+    });
+    await createAndPersistBookSession(root, null, "model-flow", "chat", {
+      modelOverride: "claude-opus-4-8",
+    });
+
+    expect(await loadBookSession(root, "model-flow")).toMatchObject({
+      modelOverride: "claude-opus-4-8",
+    });
+    expect(await listBookSessions(root, null)).toEqual([
+      expect.objectContaining({ modelOverride: "claude-opus-4-8" }),
+    ]);
+  });
+
   it("keeps the complete first user message as title data", () => {
     const title = "这是一条超过二十个字符但不应由宿主截断的完整创作要求";
     expect(extractFirstUserMessageTitle([{ role: "user", content: title }])).toBe(title);

@@ -1,18 +1,12 @@
-import { formatLengthCount, resolveLengthCountingMode } from "@actalk/inkos-core";
+import { formatLengthCount, resolveLengthCountingMode, type Observation } from "@actalk/inkos-core";
 
 export type CliLanguage = "zh" | "en";
-
-type WriteIssue = {
-  readonly severity: string;
-  readonly category: string;
-  readonly description: string;
-};
 
 type WriteResultShape = {
   readonly chapterNumber: number;
   readonly title: string;
   readonly wordCount: number;
-  readonly observations: ReadonlyArray<WriteIssue>;
+  readonly observations: ReadonlyArray<Observation>;
 };
 
 type ImportResultShape = {
@@ -136,8 +130,8 @@ export function formatWriteNextResultLines(
       zh: "  问题：",
       en: "  Issues:",
     }));
-    for (const issue of result.observations) {
-      lines.push(`    [${issue.severity}] ${issue.category}: ${issue.description}`);
+    for (const observation of result.observations) {
+      lines.push(`    [${observation.kind}] ${observation.code}: ${observation.summary}`);
     }
   }
 

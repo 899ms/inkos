@@ -28,12 +28,7 @@ export async function persistChapterArtifacts(params: {
     wordCount: params.finalWordCount,
     createdAt: now,
     updatedAt: now,
-    observations: params.auditResult.issues.map((issue, index) => ({
-      code: `${issue.category || "review"}-${index + 1}`,
-      kind: "soft" as const,
-      summary: issue.description,
-      evidence: issue.suggestion ? [issue.suggestion] : [],
-    })),
+    observations: [...params.auditResult.issues],
     provenance: "generated",
     lengthTelemetry: params.lengthTelemetry,
     tokenUsage: params.tokenUsage,

@@ -1,6 +1,6 @@
 import { BaseAgent } from "./base.js";
 import type { LengthSpec } from "../models/length-governance.js";
-import type { AuditIssue } from "./continuity.js";
+import type { Observation } from "../models/observation.js";
 import type { ContextPackage } from "../models/input-governance.js";
 import { countChapterLength } from "../utils/length-metrics.js";
 import { applySpotFixPatches } from "../utils/spot-fix-patches.js";
@@ -31,7 +31,7 @@ export class ReviserAgent extends BaseAgent {
     _bookDir: string,
     chapterContent: string,
     chapterNumber: number,
-    issues: ReadonlyArray<AuditIssue>,
+    issues: ReadonlyArray<Observation>,
     mode: ReviseMode = DEFAULT_REVISE_MODE,
     _genre?: string,
     options?: {
@@ -44,8 +44,10 @@ export class ReviserAgent extends BaseAgent {
     const isEnglish = options.language === "en";
     const issueList = issues.length > 0
       ? issues.map((issue) => [
-          `- [${issue.severity}] ${issue.category}: ${issue.description}`,
-          `  ${isEnglish ? "Suggestion" : "建议"}: ${issue.suggestion}`,
+          `- [${issue.kind}] ${issue.code}: ${issue.summary}`,
+          ...(issue.evidence.length > 0
+            ? [`  ${isEnglish ? "Evidence" : "证据"}: ${issue.evidence.join("; ")}`]
+            : []),
         ].join("\n")).join("\n")
       : (isEnglish ? "- Follow the user's explicit revision instruction in the governed context." : "- 按 governed context 中的用户明确修订要求执行。");
     const context = renderNarrativeSelectedContext(options.contextPackage.selectedContext, options.language);

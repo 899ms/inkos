@@ -19,7 +19,8 @@ import { archiveChapterVersion, readChapterUserBrief } from "../state/chapter-wo
 import { dispatchNotification, dispatchWebhookEvent } from "../notify/dispatcher.js";
 import type { WebhookEvent } from "../notify/webhook.js";
 import type { AgentContext } from "../agents/base.js";
-import type { AuditResult, AuditIssue } from "../agents/continuity.js";
+import type { AuditResult } from "../agents/continuity.js";
+import type { Observation } from "../models/observation.js";
 import type { RadarResult } from "../agents/radar.js";
 import type { LengthSpec, LengthTelemetry } from "../models/length-governance.js";
 import type { ChapterMemo, ChapterTrace, ContextPackage } from "../models/input-governance.js";
@@ -55,15 +56,6 @@ import { loadAvailableAgentSkills, mergeActivatedSkillGuidance } from "../skills
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { compileStyleGuide } from "../agents/style-guide.js";
 import { compileImportSource, renderCompleteImportSource } from "../agents/import-context.js";
-
-function reviewObservations(issues: ReadonlyArray<AuditIssue>) {
-  return issues.map((issue, index) => ({
-    code: `${issue.category || "review"}-${index + 1}`,
-    kind: "soft" as const,
-    summary: issue.description,
-    evidence: issue.suggestion ? [issue.suggestion] : [],
-  }));
-}
 
 function mergeChapterRevisionInstructions(
   persistedBrief: string,
@@ -166,12 +158,7 @@ export interface ReviseResult {
   readonly wordCount: number;
   readonly changed: boolean;
   readonly fixedIssues: ReadonlyArray<string>;
-  readonly observations: ReadonlyArray<{
-    readonly severity: AuditIssue["severity"];
-    readonly category: string;
-    readonly description: string;
-    readonly suggestion?: string;
-  }>;
+  readonly observations: ReadonlyArray<Observation>;
   readonly lengthTelemetry?: LengthTelemetry;
 }
 
@@ -733,7 +720,7 @@ export class PipelineRunner {
         ? {
             ...ch,
             updatedAt: new Date().toISOString(),
-            observations: reviewObservations(result.issues),
+            observations: [...result.issues],
           }
         : ch,
     );
@@ -807,7 +794,7 @@ export class PipelineRunner {
               contextPackage: reviseControlInput.composed.contextPackage,
             },
           });
-      if (!explicitRevisionRequested && !preRevision.issues.some((issue) => issue.severity !== "info")) {
+      if (!explicitRevisionRequested && preRevision.issues.length === 0) {
         return {
           chapterNumber: targetChapter,
           wordCount: countChapterLength(content, countingMode),
@@ -931,14 +918,7 @@ export class PipelineRunner {
         repairApplied: revisedContent !== content,
       });
 
-      const remainingIssues = postRevisionIssues
-        .filter((issue) => issue.severity === "warning" || issue.severity === "critical")
-        .map((issue) => ({
-          severity: issue.severity,
-          category: issue.category,
-          description: issue.description,
-          ...(issue.suggestion ? { suggestion: issue.suggestion } : {}),
-        }));
+      const remainingIssues = postRevisionIssues;
 
       // Save revised chapter file
       this.logStage(stageLanguage, {
@@ -967,7 +947,7 @@ export class PipelineRunner {
             ...ch,
             wordCount: revisedCount,
             updatedAt: new Date().toISOString(),
-            observations: reviewObservations(postRevisionIssues),
+            observations: [...postRevisionIssues],
             provenance: "edited" as const,
             lengthTelemetry,
           };
@@ -1299,9 +1279,7 @@ export class PipelineRunner {
         body: [
           `**${persistenceOutput.title}** | ${chapterLength}`,
           auditResult.summary,
-          ...auditResult.issues
-            .filter((i) => i.severity !== "info")
-            .map((i) => `- [${i.severity}] ${i.description}`),
+          ...auditResult.issues.map((observation) => `- [${observation.kind}] ${observation.summary}`),
         ]
           .filter(Boolean)
           .join("\n"),
@@ -1422,7 +1400,7 @@ export class PipelineRunner {
       });
       if (recovery.kind !== "reconciled") {
         throw new Error(
-          recovery.issues[0]?.description
+          recovery.issues[0]?.summary
             ?? `Chapter sync still failed for chapter ${targetChapter}.`,
         );
       }

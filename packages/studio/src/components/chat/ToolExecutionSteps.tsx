@@ -313,38 +313,40 @@ function ChapterContextTracePreview({ exec }: { exec: ToolExecution }) {
   );
 }
 
-interface ChapterRevisionIssueDetails {
-  readonly severity: string;
-  readonly category: string;
-  readonly description: string;
-  readonly suggestion?: string;
+interface ChapterObservationDetails {
+  readonly code: string;
+  readonly kind: "hard" | "soft";
+  readonly summary: string;
+  readonly evidence: ReadonlyArray<string>;
 }
 
 interface ChapterRevisionDetails {
   readonly chapterNumber?: number;
   readonly changed: boolean;
   readonly fixedIssues: ReadonlyArray<string>;
-  readonly observations: ReadonlyArray<ChapterRevisionIssueDetails>;
+  readonly observations: ReadonlyArray<ChapterObservationDetails>;
 }
 
 interface ChapterStateResyncDetails {
   readonly chapterNumber?: number;
-  readonly observations: ReadonlyArray<ChapterRevisionIssueDetails>;
+  readonly observations: ReadonlyArray<ChapterObservationDetails>;
   readonly summary?: string;
 }
 
-function parseChapterAuditIssues(value: unknown): ReadonlyArray<ChapterRevisionIssueDetails> {
+function parseChapterObservations(value: unknown): ReadonlyArray<ChapterObservationDetails> {
   if (!Array.isArray(value)) return [];
   return value.flatMap((issue) => {
     if (!issue || typeof issue !== "object" || Array.isArray(issue)) return [];
     const record = issue as Record<string, unknown>;
-    const description = stringField(record, "description");
-    if (!description) return [];
+    const code = stringField(record, "code");
+    const summary = stringField(record, "summary");
+    const kind = record.kind === "hard" || record.kind === "soft" ? record.kind : undefined;
+    if (!code || !summary || !kind) return [];
     return [{
-      severity: stringField(record, "severity") ?? "warning",
-      category: stringField(record, "category") ?? "review",
-      description,
-      suggestion: stringField(record, "suggestion"),
+      code,
+      kind,
+      summary,
+      evidence: rawStringArrayField(record, "evidence"),
     }];
   });
 }
@@ -357,7 +359,7 @@ export function getChapterRevisionDetails(exec: ToolExecution): ChapterRevisionD
     chapterNumber: numberField(details, "chapterNumber"),
     changed: details.changed === true,
     fixedIssues: rawStringArrayField(details, "fixedIssues"),
-    observations: parseChapterAuditIssues(details.observations),
+    observations: parseChapterObservations(details.observations),
   };
 }
 
@@ -367,16 +369,16 @@ export function getChapterStateResyncDetails(exec: ToolExecution): ChapterStateR
   if (details.kind !== "chapter_state_resynced") return null;
   return {
     chapterNumber: numberField(details, "chapterNumber"),
-    observations: parseChapterAuditIssues(details.observations),
+    observations: parseChapterObservations(details.observations),
     summary: stringField(details, "summary"),
   };
 }
 
-function ChapterAuditIssues({
+function ChapterObservations({
   issues,
   title,
 }: {
-  readonly issues: ReadonlyArray<ChapterRevisionIssueDetails>;
+  readonly issues: ReadonlyArray<ChapterObservationDetails>;
   readonly title: string;
 }) {
   if (issues.length === 0) return null;
@@ -384,10 +386,14 @@ function ChapterAuditIssues({
     <div className="mt-2 space-y-1.5">
       <div className="text-[13px] font-medium text-foreground">{title}</div>
       {issues.map((issue, index) => (
-        <div key={`${issue.category}:${index}`} className="rounded-lg border border-border/40 bg-background/55 px-2.5 py-2 text-[12px] leading-5 text-muted-foreground">
-          <div className="font-medium text-foreground">[{issue.severity}] {issue.category}</div>
-          <div>{issue.description}</div>
-          {issue.suggestion && <div className="mt-0.5">{tr("建议", "Suggestion")}{tr("：", ": ")}{issue.suggestion}</div>}
+        <div key={`${issue.code}:${index}`} className="rounded-lg border border-border/40 bg-background/55 px-2.5 py-2 text-[12px] leading-5 text-muted-foreground">
+          <div className="font-medium text-foreground">[{issue.kind}] {issue.code}</div>
+          <div>{issue.summary}</div>
+          {issue.evidence.length > 0 && (
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {issue.evidence.map((item, evidenceIndex) => <li key={`${issue.code}:evidence:${evidenceIndex}`}>{item}</li>)}
+            </ul>
+          )}
         </div>
       ))}
     </div>
@@ -417,7 +423,7 @@ function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
           {details.fixedIssues.join("；")}
         </div>
       )}
-      <ChapterAuditIssues issues={details.observations} title={tr("审查观察", "Review observations")} />
+      <ChapterObservations issues={details.observations} title={tr("审查观察", "Review observations")} />
     </div>
   );
 }
@@ -439,7 +445,7 @@ function ChapterStateResyncPreview({ exec }: { exec: ToolExecution }) {
         </div>
       </div>
       {details.summary && <div className="mt-2 text-[13px] leading-5 text-muted-foreground">{details.summary}</div>}
-      <ChapterAuditIssues issues={details.observations} title={tr("审查观察", "Review observations")} />
+      <ChapterObservations issues={details.observations} title={tr("审查观察", "Review observations")} />
     </div>
   );
 }

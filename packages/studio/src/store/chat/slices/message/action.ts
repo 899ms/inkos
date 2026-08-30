@@ -208,7 +208,13 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       };
     }),
 
-  setSelectedModel: (model, service) => set({ selectedModel: model, selectedService: service }),
+  setSelectedModel: (model, service) => set((state) => ({
+    selectedModel: model,
+    selectedService: service,
+    ...(state.activeSessionId
+      ? { sessions: updateSession(state.sessions, state.activeSessionId, () => ({ modelOverride: model })) }
+      : {}),
+  })),
 
   loadSessionList: async (bookId) => {
     const query = bookId === null ? "null" : encodeURIComponent(bookId);
@@ -238,7 +244,13 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     const data = await fetchJson<SessionResponse>("/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bookId, sessionKind, playMode, ...binding }),
+      body: JSON.stringify({
+        bookId,
+        sessionKind,
+        playMode,
+        ...(get().selectedModel ? { modelOverride: get().selectedModel } : {}),
+        ...binding,
+      }),
     });
     const sessionId = data.session?.sessionId;
     if (!sessionId) {
@@ -254,6 +266,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         workId: data.session?.workId ?? binding?.workId,
         proposalAction: data.session?.proposalAction ?? binding?.proposalAction,
         playMode: data.session?.playMode,
+        modelOverride: data.session?.modelOverride ?? get().selectedModel ?? undefined,
         title: data.session?.title ?? null,
       });
       return {
@@ -426,6 +439,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
                 workId: detail.workId,
                 proposalAction: detail.proposalAction,
                 playMode: detail.playMode,
+                modelOverride: detail.modelOverride,
                 title: detail.title ?? null,
               })),
               bookId: nextBookId,
@@ -434,6 +448,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
               workId: detail.workId ?? runtime?.workId,
               proposalAction: detail.proposalAction ?? runtime?.proposalAction,
               playMode: detail.playMode ?? runtime?.playMode,
+              modelOverride: detail.modelOverride ?? runtime?.modelOverride,
               title: detail.title ?? runtime?.title ?? null,
               messages: nextMessages,
               isStreaming: taskRunning,
@@ -519,7 +534,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         await fetchJson<SessionResponse>("/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, bookId: session.bookId, sessionKind, playMode, profileId, workId, proposalAction }),
+          body: JSON.stringify({ sessionId, bookId: session.bookId, sessionKind, playMode, profileId, workId, proposalAction, modelOverride: get().selectedModel }),
         });
         // 落盘成功：把 isDraft 翻成 false，同时把 sessionId 追加进 sessionIdsByBook
         // 让侧边栏现在才看到这条会话。

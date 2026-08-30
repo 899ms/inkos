@@ -26,6 +26,12 @@ export type PendingProposedAction = z.infer<typeof PendingProposedActionSchema>;
 export const PipelineStageSchema = z.object({
   label: z.string(),
   status: z.enum(["pending", "active", "completed"]),
+  progress: z.object({
+    status: z.string().optional(),
+    elapsedMs: z.number().nonnegative(),
+    totalChars: z.number().int().nonnegative(),
+    chineseChars: z.number().int().nonnegative(),
+  }).strict().optional(),
 }).strict();
 
 export type PipelineStage = z.infer<typeof PipelineStageSchema>;
@@ -41,6 +47,8 @@ export const ToolExecutionSchema = z.object({
   details: z.unknown().optional(),
   error: z.string().optional(),
   stages: z.array(PipelineStageSchema).optional(),
+  logs: z.array(z.string()).optional(),
+  background: z.boolean().optional(),
   startedAt: z.number(),
   completedAt: z.number().optional(),
 }).strict();
@@ -86,6 +94,7 @@ export const BookSessionSchema = z.object({
   workId: z.string().min(1).nullable().optional(),
   proposalAction: z.string().min(1).optional(),
   playMode: PlayModeSchema.optional(),
+  modelOverride: z.string().min(1).optional(),
   title: z.string().nullable().default(null),
   messages: z.array(InteractionMessageSchema).default([]),
   currentExecution: ExecutionStateSchema.optional(),
@@ -104,6 +113,7 @@ export function createBookSession(
     readonly profileId?: string;
     readonly workId?: string | null;
     readonly proposalAction?: string;
+    readonly modelOverride?: string;
   },
 ): BookSession {
   const now = Date.now();
@@ -116,6 +126,7 @@ export function createBookSession(
     ...("workId" in (options ?? {}) ? { workId: options?.workId ?? null } : safeBookId ? { workId: safeBookId } : {}),
     ...(options?.proposalAction ? { proposalAction: options.proposalAction } : {}),
     ...(options?.playMode ? { playMode: options.playMode } : {}),
+    ...(options?.modelOverride ? { modelOverride: options.modelOverride } : {}),
     title: null,
     messages: [],
     createdAt: now,

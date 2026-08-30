@@ -66,14 +66,12 @@ export async function reviewChapterDraft(params: {
     modelReview = {
       unavailable: true,
       issues: [{
-        severity: "warning",
-        category: "review-unavailable",
-        description: isEnglish
+        code: "review-unavailable",
+        kind: "soft",
+        summary: isEnglish
           ? `Review observation was unavailable: ${String(error)}`
           : `审稿观察暂不可用：${String(error)}`,
-        suggestion: isEnglish
-          ? "The chapter remains persisted; request review again when needed."
-          : "正文照常落盘；需要时可再次发起审稿。",
+        evidence: [],
       }],
       summary: isEnglish ? "Review unavailable" : "审稿暂不可用",
     };

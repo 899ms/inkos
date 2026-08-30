@@ -1,4 +1,4 @@
-import type { AuditIssue } from "../agents/continuity.js";
+import type { Observation } from "../models/observation.js";
 import type {
   ValidationResult,
   ValidationWarning,
@@ -43,7 +43,7 @@ export type SettlementRetryResult =
     readonly kind: "unresolved";
     readonly output: WriteChapterOutput;
     readonly validation: ValidationResult;
-    readonly issues: ReadonlyArray<AuditIssue>;
+    readonly issues: ReadonlyArray<Observation>;
   };
 
 export async function reconcileChapterStateAfterReview(
@@ -151,26 +151,22 @@ export function buildStateReconciliationFeedback(
 export function buildStateReconciliationIssues(
   warnings: ReadonlyArray<ValidationWarning>,
   language: LengthLanguage,
-): ReadonlyArray<AuditIssue> {
+): ReadonlyArray<Observation> {
   if (warnings.length > 0) {
     return warnings.map((warning) => ({
-      severity: "warning" as const,
-      category: "state-validation",
-      description: warning.description,
-      suggestion: language === "en"
-        ? "Review or explicitly reconcile state before relying on this projection."
-        : "依赖这份状态投影前，请复核或显式执行状态对账。",
+      code: warning.category || "state-validation",
+      kind: "hard" as const,
+      summary: warning.description,
+      evidence: [],
     }));
   }
 
   return [{
-    severity: "warning",
-    category: "state-validation",
-    description: language === "en"
+    code: "state-validation",
+    kind: "hard",
+    summary: language === "en"
       ? "State reconciliation remains unresolved after recalculation."
       : "状态结算重算后仍有未解决差异。",
-    suggestion: language === "en"
-      ? "Review or explicitly reconcile state before relying on this projection."
-      : "依赖这份状态投影前，请复核或显式执行状态对账。",
+    evidence: [],
   }];
 }

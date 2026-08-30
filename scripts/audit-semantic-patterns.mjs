@@ -37,6 +37,10 @@ const FORBIDDEN_ARCHITECTURE_TOKENS = [
   ["createWriteFileTool", "unregistered generic write surface"],
   ["plainToAgentMessages", "second conversation-history source"],
   ["InteractionEventSchema", "parallel interaction event ledger"],
+  ["AuditIssue", "legacy review issue protocol"],
+  ["repairScope", "legacy review issue protocol"],
+  ["reviewIssuesAsObservations", "legacy review conversion layer"],
+  ["reviewObservations", "legacy review conversion layer"],
 ];
 
 const ACTION_SURFACE_PATHS = [

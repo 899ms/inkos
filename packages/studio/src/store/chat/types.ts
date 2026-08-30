@@ -71,6 +71,7 @@ export interface SessionSummary {
   readonly workId?: string | null;
   readonly proposalAction?: ChatRequestedIntent;
   readonly playMode?: PlayMode;
+  readonly modelOverride?: string;
   readonly title: string | null;
   readonly messageCount: number;
   readonly createdAt: number;
@@ -93,6 +94,7 @@ export interface AgentResponse {
     readonly workId?: string | null;
     readonly proposalAction?: ChatRequestedIntent;
     readonly playMode?: PlayMode;
+    readonly modelOverride?: string;
     readonly title?: string | null;
     readonly activeBookId?: string;
     readonly messages?: ReadonlyArray<SessionMessage>;
@@ -109,6 +111,7 @@ export interface SessionResponse {
     readonly workId?: string | null;
     readonly proposalAction?: ChatRequestedIntent;
     readonly playMode?: PlayMode;
+    readonly modelOverride?: string;
     readonly title?: string | null;
     readonly activeBookId?: string;
     readonly messages?: ReadonlyArray<SessionMessage>;
@@ -176,6 +179,7 @@ export interface SessionRuntime {
   readonly workId?: string | null;
   readonly proposalAction?: ChatRequestedIntent;
   readonly playMode?: PlayMode;
+  readonly modelOverride?: string;
   readonly title: string | null;
   readonly messages: ReadonlyArray<Message>;
   readonly stream: EventSource | null;

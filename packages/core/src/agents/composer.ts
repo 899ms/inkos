@@ -33,10 +33,6 @@ import type {
 import { Type } from "@sinclair/typebox";
 import { loadRuntimeStateSnapshot } from "../state/runtime-state-store.js";
 
-const SelectedSourcesToolSchema = Type.Object({
-  selectedSources: Type.Array(Type.String()),
-});
-
 export interface ComposeChapterInput {
   readonly book: BookConfig;
   readonly bookDir: string;
@@ -357,8 +353,8 @@ export class ComposerAgent extends BaseAgent {
     const groups = groupMemoryCandidates(request.candidates, budget);
     const selected = new Set<string>();
     for (const group of groups) {
-      const candidates = group.map((candidate, index) => [
-        `#${index + 1} ${candidate.id}`,
+      const candidates = group.map((candidate) => [
+        `id: ${candidate.id}`,
         `kind: ${candidate.kind}`,
         `source: ${candidate.source}`,
         `title: ${candidate.title}`,
@@ -381,8 +377,8 @@ export class ComposerAgent extends BaseAgent {
 
   async selectOutlineSections(request: OutlineSectionSelectionRequest): Promise<ReadonlyArray<string>> {
     if (request.candidates.length <= 1) return request.candidates.map((candidate) => candidate.source);
-    const candidates = request.candidates.map((candidate, index) => [
-      `#${index + 1} ${candidate.source}`,
+    const candidates = request.candidates.map((candidate) => [
+      `source_id: ${candidate.source}`,
       `heading: ${candidate.heading}`,
       candidate.excerpt,
     ].join("\n")).join("\n\n");
@@ -407,8 +403,8 @@ export class ComposerAgent extends BaseAgent {
   }
 
   async selectReferenceSections(request: ReferenceSectionSelectionRequest): Promise<ReadonlyArray<string>> {
-    const candidates = request.candidates.map((candidate, index) => [
-      `#${index + 1} ${candidate.source}`,
+    const candidates = request.candidates.map((candidate) => [
+      `source_id: ${candidate.source}`,
       `title: ${candidate.title}`,
       `heading: ${candidate.heading}`,
       `user-defined uses: ${candidate.uses.join("; ")}`,
@@ -433,13 +429,22 @@ export class ComposerAgent extends BaseAgent {
     allowed: ReadonlySet<string>,
     maxTokens: number,
   ): Promise<ReadonlyArray<string>> {
+    const allowedIds = [...allowed];
+    if (allowedIds.length === 0) return [];
+    const literalSchemas = allowedIds.map((id) => Type.Literal(id));
+    const sourceIdSchema = literalSchemas.length === 1
+      ? literalSchemas[0]!
+      : Type.Union(literalSchemas as [typeof literalSchemas[number], ...typeof literalSchemas[number][]]);
+    const selectedSourcesToolSchema = Type.Object({
+      selectedSources: Type.Array(sourceIdSchema, { uniqueItems: true }),
+    });
     const { result } = await this.submitStructured(
       messages,
       {
         name: "submit_selected_sources",
         label: "Submit selected sources",
         description: "Submit only exact ids from the supplied candidate set.",
-        parameters: SelectedSourcesToolSchema,
+        parameters: selectedSourcesToolSchema,
       },
       { temperature: 0.1, maxTokens },
     );

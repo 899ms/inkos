@@ -203,5 +203,43 @@ describe("interaction models", () => {
     }]);
   });
 
+  it("round-trips task execution metadata through the shared chat schema", () => {
+    const session = InteractionSessionSchema.parse({
+      sessionId: "session-task",
+      projectRoot: "/tmp/project",
+      messages: [{
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        toolExecutions: [{
+          id: "task-1",
+          tool: "longform__create_book",
+          label: "Create long-form Work",
+          status: "completed",
+          logs: ["Creating foundation"],
+          background: true,
+          stages: [{
+            label: "Foundation",
+            status: "completed",
+            progress: {
+              status: "streaming",
+              elapsedMs: 1200,
+              totalChars: 1800,
+              chineseChars: 1200,
+            },
+          }],
+          startedAt: 1,
+          completedAt: 2,
+        }],
+      }],
+    });
+
+    expect(session.messages[0]?.toolExecutions?.[0]).toMatchObject({
+      logs: ["Creating foundation"],
+      background: true,
+      stages: [{ progress: { totalChars: 1800 } }],
+    });
+  });
+
 
 });
