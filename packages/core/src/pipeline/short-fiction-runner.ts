@@ -471,12 +471,13 @@ async function writeDraftArtifacts(
   language: ShortFictionLanguage = "zh",
 ): Promise<void> {
   const draftDir = join(baseDir, "drafts", version);
+  const completedChapters = draft.chapters.filter((chapter) => chapter.title.trim() && chapter.content.trim());
   await commitAtomicFileSet({
     rootDir: root,
     writes: [
       textWrite(join(draftDir, "full.md"), renderShortFictionDraftMarkdown(draft, language)),
       textWrite(join(draftDir, "draft.json"), JSON.stringify(draft, null, 2)),
-      ...draft.chapters.map((chapter) => textWrite(
+      ...completedChapters.map((chapter) => textWrite(
         join(draftDir, "chapters", `${String(chapter.number).padStart(4, "0")}.md`),
         [
       `# ${formatShortFictionChapterHeading(chapter.number, chapter.title, language)}`,

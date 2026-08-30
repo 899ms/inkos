@@ -1,14 +1,15 @@
 ---
 name: inkos-short-writing
-description: 12–18章商业短篇的构思、一次写完、整篇审改与包装。Use for confirmed standalone short-fiction production.
+description: 商业短篇的构思、一次写完、整篇审改与包装。Use for confirmed standalone short-fiction production.
 ---
 # Short-fiction writing
 
 Use this skill when the user wants a complete standalone commercial short story, not a long serial or a discussion-only answer.
 
 - Preserve the user's premise, emotional target, taboo, viewpoint, and ending preference. Ask only for a missing choice that would materially change the story.
+- User-specified chapter count and length are authoritative. When the user leaves them open, 12–18 focused chapters is a useful commercial default, not a production requirement or refusal boundary.
 - In chat or short mode, use the normal proposal and confirmation flow before `short_fiction_run` or cover generation.
-- Build one main line and at most one supporting reversal line. Prefer 12–18 focused chapters and complete scenes over a synopsis montage.
+- Build one main line and at most one supporting reversal line. Prefer complete scenes over a synopsis montage at any requested scale.
 - Express personality and values through action. Every scene must move conflict, causality, evidence, emotion, payoff, or relationship.
 - Set up reversals and rewards through visible evidence; do not use sudden stupidity or unexplained luck.
 - Treat title, chapter titles, opening, full manuscript, synopsis, selling points, and cover direction as one coherent product.

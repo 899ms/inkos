@@ -1460,7 +1460,7 @@ async function executeConfirmedProductionAction(args: {
       binding,
       tool,
       parameters: params,
-      workId: args.bookId ?? (args.requestedIntent === "play_start" ? args.sessionId : null),
+      workId: args.bookId,
       episodeId: `episode-${id}`,
       signal: args.signal,
       onUpdate: (partialResult) => {

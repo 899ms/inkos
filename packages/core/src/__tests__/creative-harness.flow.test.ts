@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
@@ -18,6 +18,7 @@ import {
   defineCapabilityAction,
   executeExplicitCapabilityTool,
   loadWorkManifest,
+  listWorkManifests,
 } from "../harness/index.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { loadTranslationManifest } from "../translation/run-store.js";
@@ -199,6 +200,27 @@ describe("creative harness mini-flows", () => {
       interruptedEpisode: "failed",
     });
     episodes.close();
+  });
+
+  it("lists canonical Works without treating runtime-only directories as Works", async () => {
+    const root = await tempProject("work-list");
+    const initial = createInitialWorkManifestWrite({
+      workId: "script-work",
+      title: "Script Work",
+      profileId: "script",
+      language: "en",
+      writes: [{ relativePath: "works/script-work/source/script.md", content: "# Draft\n" }],
+    });
+    await commitAtomicFileSet({
+      rootDir: root,
+      writes: [
+        { relativePath: "works/script-work/source/script.md", content: "# Draft\n" },
+        initial.write,
+      ],
+    });
+    await mkdir(join(root, "works", "play-session", "source", "runs", "main"), { recursive: true });
+
+    expect((await listWorkManifests(root)).map((work) => work.id)).toEqual(["script-work"]);
   });
 
   async function tempProject(name: string): Promise<string> {

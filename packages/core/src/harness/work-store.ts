@@ -75,7 +75,13 @@ export async function listWorkManifests(
   const works: WorkManifest[] = [];
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     if (!entry.isDirectory()) continue;
-    const manifest = await loadWorkManifest(projectRoot, entry.name);
+    let manifest: WorkManifest;
+    try {
+      manifest = await loadWorkManifest(projectRoot, entry.name);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
     if (!profileId || manifest.profileId === profileId) works.push(manifest);
   }
   return works.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));

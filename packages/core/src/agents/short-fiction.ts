@@ -354,10 +354,11 @@ export function renderShortFictionDraftMarkdown(
   language: ShortFictionLanguage = "zh",
 ): string {
   const hookHeading = language === "en" ? "## Opening Hook" : "## 开篇钩子";
+  const completedChapters = draft.chapters.filter((chapter) => chapter.title.trim() && chapter.content.trim());
   return [
     `# ${draft.storyTitle}`,
     draft.openingHook ? `${hookHeading}\n\n${draft.openingHook}` : "",
-    ...draft.chapters.map((chapter) => [
+    ...completedChapters.map((chapter) => [
       `## ${formatShortFictionChapterHeading(chapter.number, chapter.title, language)}`,
       "",
       chapter.content,

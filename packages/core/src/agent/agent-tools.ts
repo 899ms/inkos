@@ -255,12 +255,12 @@ const ProposeActionParams = Type.Object({
       Type.Literal("en"),
     ], { description: "Output language of the short fiction. Fill the language the user asked the story to be written in; it may differ from the conversation language (e.g. a Chinese chat asking for an English short => en). When the user does not name one, it defaults to the conversation language." })),
     chapters: Type.Optional(Type.Number({
-      description: "Confirmed complete short chapter count, 12-18.",
+      minimum: 1,
+      description: "Confirmed complete short chapter count. Preserve the user's explicit scale.",
     })),
     charsPerChapter: Type.Optional(Type.Number({
-      minimum: 600,
-      maximum: 1200,
-      description: "Confirmed per-chapter length in the story language's native unit. zh shorts only accept 900-1200 Chinese characters; en shorts only accept 600-800 English words. Values outside the selected language's range are rejected before the task starts. Do not put total story length here.",
+      minimum: 1,
+      description: "Confirmed per-chapter length in the story language's native unit. Preserve the user's explicit target; do not put total story length here.",
     })),
     cover: Type.Optional(Type.Boolean({
       description: "Whether to attempt cover generation.",
@@ -2414,10 +2414,10 @@ export function createPlayStepTool(
       const target = { worldId, runId, world };
       const activatedSkills = resolveProductionToolSkills(options);
       onUpdate?.(textResult(`Advancing "${target.worldId}" / "${target.runId}"...`));
+      const db = createPlayDB(store.runDir(target.worldId, target.runId));
       let runner: ({ step(input: string): Promise<PlayStepResult> } & { close?: () => void }) | undefined;
-      let step: PlayStepResult;
       try {
-        step = await runPipelineWithAgentContext(pipeline, _signal, activatedSkills, () => {
+        const step = await runPipelineWithAgentContext(pipeline, _signal, activatedSkills, () => {
           const ctx = pipeline.createAgentContext("play");
           const activeRunner = options.runnerFactory?.({
             projectRoot,
@@ -2429,48 +2429,43 @@ export function createPlayStepTool(
             worldId: target.worldId,
             runId: target.runId,
             ctx,
+            db,
           });
           runner = activeRunner;
           return activeRunner.step(input);
         });
+        const graph = db.snapshot();
+        const currentState = await store.loadCurrentState(target.worldId, target.runId);
+
+        return textResult(
+          step.sceneText,
+          {
+            kind: "play_turn_advanced",
+            workId: target.worldId,
+            worldId: target.worldId,
+            runId: target.runId,
+            title: target.world?.title,
+            sceneText: step.sceneText,
+            suggestedActions: step.suggestedActions,
+            action: step.action,
+            mutation: step.mutation,
+            observations: step.mutation.blocked
+              ? [{
+                  code: "play-action-blocked",
+                  kind: "soft",
+                  summary: step.mutation.blockedReason || step.mutation.summary,
+                  evidence: [],
+                }]
+              : [],
+            currentState,
+            graph,
+            skillIds: activatedSkillIds(activatedSkills),
+          },
+        );
       } finally {
         closePlayRunner(runner);
-      }
-
-      const db = createPlayDB(store.runDir(target.worldId, target.runId));
-      let graph;
-      try {
-        graph = db.snapshot();
-      } finally {
         closePlayDB(db);
       }
-      const currentState = await store.loadCurrentState(target.worldId, target.runId);
-
-      return textResult(
-        step.sceneText,
-        {
-          kind: "play_turn_advanced",
-          workId: target.worldId,
-          worldId: target.worldId,
-          runId: target.runId,
-          title: target.world?.title,
-          sceneText: step.sceneText,
-          suggestedActions: step.suggestedActions,
-          action: step.action,
-          mutation: step.mutation,
-          observations: step.mutation.blocked
-            ? [{
-                code: "play-action-blocked",
-                kind: "soft",
-                summary: step.mutation.blockedReason || step.mutation.summary,
-                evidence: [],
-              }]
-            : [],
-          currentState,
-          graph,
-          skillIds: activatedSkillIds(activatedSkills),
-        },
-      );
     },
   };
 }
@@ -2505,6 +2500,7 @@ export function createPlayReviseTool(
       }
       const isZh = (world.language ?? "zh") !== "en";
       const activatedSkills = resolveProductionToolSkills(options);
+      const db = createPlayDB(store.runDir(worldId, runId));
       let runner: ({
         regenerateLastTurn(input?: string): Promise<PlayReplayResult>;
         restoreVariant(input: { readonly turn: number; readonly variantId: string }): Promise<PlayVariantRestoreResult>;
@@ -2518,6 +2514,7 @@ export function createPlayReviseTool(
           worldId,
           runId,
           ctx,
+          db,
         });
         runner = activeRunner;
         return task(activeRunner);
@@ -2563,39 +2560,33 @@ export function createPlayReviseTool(
         }
         onUpdate?.(textResult(params.action === "edit_last_input" ? "Replaying edited play turn..." : "Regenerating last play turn..."));
         replay = await runWithPlayRunner((activeRunner) => activeRunner.regenerateLastTurn(replacement));
+        const graph = db.snapshot();
+        const currentState = await store.loadCurrentState(worldId, runId);
+
+        return textResult(
+          replay.sceneText,
+          {
+            kind: "play_turn_revised",
+            workId: worldId,
+            worldId,
+            runId,
+            title: world.title,
+            sceneText: replay.sceneText,
+            suggestedActions: replay.suggestedActions,
+            action: replay.action,
+            mutation: replay.mutation,
+            replayedInput: replay.replayedInput,
+            previousVariantId: replay.previousVariantId,
+            variantId: replay.variantId,
+            currentState,
+            graph,
+            skillIds: activatedSkillIds(activatedSkills),
+          },
+        );
       } finally {
         closePlayRunner(runner);
-      }
-
-      const db = createPlayDB(store.runDir(worldId, runId));
-      let graph;
-      try {
-        graph = db.snapshot();
-      } finally {
         closePlayDB(db);
       }
-      const currentState = await store.loadCurrentState(worldId, runId);
-
-      return textResult(
-        replay.sceneText,
-        {
-          kind: "play_turn_revised",
-          workId: worldId,
-          worldId,
-          runId,
-          title: world.title,
-          sceneText: replay.sceneText,
-          suggestedActions: replay.suggestedActions,
-          action: replay.action,
-          mutation: replay.mutation,
-          replayedInput: replay.replayedInput,
-          previousVariantId: replay.previousVariantId,
-          variantId: replay.variantId,
-          currentState,
-          graph,
-          skillIds: activatedSkillIds(activatedSkills),
-        },
-      );
     },
   };
 }
