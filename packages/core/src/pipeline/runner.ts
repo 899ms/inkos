@@ -1653,8 +1653,10 @@ export class PipelineRunner {
 
       const log = this.config.logger?.child("import");
 
-      // Step 1: Generate foundation on first run (not on resume)
-      if (startFrom === 1) {
+      // Step 1: Generate foundation once. A failed replay preserves the draft
+      // foundation, so retry can resume without paying for Architect again.
+      const foundationReady = await this.state.isCompleteBookDirectory(bookDir);
+      if (startFrom === 1 && !foundationReady) {
         log?.info(this.localize(resolvedLanguage, {
           zh: `步骤 1：从 ${input.chapters.length} 章生成基础设定...`,
           en: `Step 1: Generating foundation from ${input.chapters.length} chapters...`,
@@ -1701,6 +1703,11 @@ export class PipelineRunner {
         log?.info(this.localize(resolvedLanguage, {
           zh: "基础设定已生成。",
           en: "Foundation generated.",
+        }));
+      } else if (startFrom === 1) {
+        log?.info(this.localize(resolvedLanguage, {
+          zh: "复用已保存的基础设定候选。",
+          en: "Reusing the preserved foundation candidate.",
         }));
       }
 

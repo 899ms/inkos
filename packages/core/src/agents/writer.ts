@@ -169,6 +169,7 @@ export class WriterAgent extends BaseAgent {
     });
     const settleResult = await this.settle({
       book,
+      bookDir,
       bookRules,
       language: resolvedLanguage,
       chapterNumber,
@@ -228,6 +229,7 @@ export class WriterAgent extends BaseAgent {
 
     const settleResult = await this.settle({
       book: input.book,
+      bookDir: input.bookDir,
       bookRules,
       language: resolvedLanguage,
       chapterNumber: input.chapterNumber,
@@ -270,6 +272,7 @@ export class WriterAgent extends BaseAgent {
 
   private async settle(params: {
     readonly book: BookConfig;
+    readonly bookDir: string;
     readonly bookRules: BookRules | null;
     readonly language: "zh" | "en";
     readonly chapterNumber: number;
@@ -308,6 +311,9 @@ export class WriterAgent extends BaseAgent {
       validationFeedback: params.validationFeedback,
       language: resolvedLang,
     });
+    const knownHookIds = new Set(
+      (await loadRuntimeStateSnapshot(params.bookDir)).hooks.hooks.map((hook) => hook.hookId),
+    );
     const { result, usage } = await this.submitStructured(
       [
         { role: "system", content: systemPrompt },
@@ -320,6 +326,7 @@ export class WriterAgent extends BaseAgent {
           ? "Submit only chapter-grounded incremental state changes. The host owns the chapter number."
           : "只提交正文有证据的增量状态变更；章节号由宿主持有。",
         parameters: SettlementToolSchema,
+        validate: (value) => validateSettlementHookIds(value, knownHookIds),
       },
       { temperature: 0.3 },
     );
@@ -722,4 +729,27 @@ ${selectedContext || "- none"}\n`;
       .replace(/\s+/g, "_")
       .slice(0, 50);
   }
+}
+
+function validateSettlementHookIds<T extends {
+  readonly hookOps: {
+    readonly upsert: ReadonlyArray<{ readonly hookId: string }>;
+    readonly mention: ReadonlyArray<string>;
+    readonly resolve: ReadonlyArray<string>;
+    readonly defer: ReadonlyArray<string>;
+  };
+}>(value: T, knownHookIds: ReadonlySet<string>): T {
+  const submittedIds = [
+    ...value.hookOps.upsert.map((hook) => hook.hookId),
+    ...value.hookOps.mention,
+    ...value.hookOps.resolve,
+    ...value.hookOps.defer,
+  ];
+  const unknown = [...new Set(submittedIds.filter((hookId) => !knownHookIds.has(hookId)))];
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown hook id(s): ${unknown.join(", ")}. Existing hook operations accept only ids from the supplied ledger; submit a newHookCandidate for a new promise.`,
+    );
+  }
+  return value;
 }

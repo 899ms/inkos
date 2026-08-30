@@ -46,15 +46,17 @@ export const SettlementToolSchema = Type.Object({
     expire: Type.Array(StateFactSelectorToolSchema, { description: "Previously active facts explicitly ended or superseded by this chapter." }),
   }),
   hookOps: Type.Object({
-    upsert: Type.Array(HookRecordToolSchema),
-    mention: Type.Array(Type.String()),
-    resolve: Type.Array(Type.String()),
-    defer: Type.Array(Type.String()),
+    upsert: Type.Array(HookRecordToolSchema, {
+      description: "Full updates for hook ids that already exist in the supplied hook ledger. Never invent an id here.",
+    }),
+    mention: Type.Array(Type.String(), { description: "Exact existing hook ids mentioned without changing status." }),
+    resolve: Type.Array(Type.String(), { description: "Exact existing hook ids resolved by this chapter." }),
+    defer: Type.Array(Type.String(), { description: "Exact existing hook ids explicitly deferred by this chapter." }),
   }),
   newHookCandidates: Type.Array(Type.Object({
     type: Type.String({ minLength: 1 }),
     expectedPayoff: Type.String({ minLength: 1 }),
     notes: Type.String(),
-  })),
+  }), { description: "Brand-new unresolved promises. Do not assign a hook id; the host assigns the canonical id." }),
   chapterSummary: ChapterSummaryToolSchema,
 });

@@ -37,6 +37,7 @@ export interface WorkerResultTool<TParameters extends TSchema> {
   readonly label: string;
   readonly description: string;
   readonly parameters: TParameters;
+  readonly validate?: (parameters: Static<TParameters>) => Static<TParameters>;
 }
 
 const EMPTY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -324,10 +325,12 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   }
 
   let submitted: Static<TParameters> | undefined;
+  const { validate, ...toolDefinition } = resultTool;
   const tool: AgentTool<TParameters, Static<TParameters>> = {
-    ...resultTool,
+    ...toolDefinition,
     execute: async (_toolCallId, params): Promise<AgentToolResult<Static<TParameters>>> => {
-      submitted = Value.Parse(resultTool.parameters, params) as Static<TParameters>;
+      const parsed = Value.Parse(resultTool.parameters, params) as Static<TParameters>;
+      submitted = validate ? validate(parsed) : parsed;
       return {
         content: [{ type: "text", text: "Structured result received by the host." }],
         details: submitted,
