@@ -95,7 +95,6 @@ export interface AgentResponse {
     readonly playMode?: PlayMode;
     readonly title?: string | null;
     readonly activeBookId?: string;
-    readonly creationDraft?: unknown;
     readonly messages?: ReadonlyArray<SessionMessage>;
   };
   readonly request?: unknown;
@@ -206,7 +205,7 @@ export interface MessageState {
 export interface CreateState {
   bookDataVersion: number;
   sidebarView: "panel" | "artifact";
-  artifactFile: string | null;         // foundation file name, e.g. "story_bible.md"
+  artifactFile: string | null;
   artifactChapter: number | null;      // chapter number, e.g. 1
   projectArtifactPath: string | null;  // generated Work artifact, e.g. "works/demo/source/script.md"
   bookSummary: BookSummary | null;

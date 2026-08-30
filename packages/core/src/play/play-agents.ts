@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Type } from "@mariozechner/pi-ai";
+import { Type, type Static } from "@mariozechner/pi-ai";
 import { BaseAgent, type AgentContext } from "../agents/base.js";
 import {
   PlayActionIntentSchema,
@@ -9,7 +9,6 @@ import {
   type PlayMutation,
   type PlayMutationInput,
 } from "../models/play.js";
-import { appendPromptPackGuidance } from "../prompts/prompt-pack.js";
 
 export interface PlayActionInterpreterInput {
   readonly input: string;
@@ -53,12 +52,12 @@ export interface PlaySceneReconcileInput {
 
 const PlaySceneRenderSchema = z.object({
   sceneText: z.string().min(1),
-  suggestedActions: z.array(z.string().min(1)).min(0).max(4).default([]),
-});
+  suggestedActions: z.array(z.string().min(1)).max(4),
+}).strict();
 export type PlaySceneRender = z.infer<typeof PlaySceneRenderSchema>;
 
 const PlayEntityResultSchema = Type.Object({
-  id: Type.Optional(Type.String()),
+  id: Type.String({ minLength: 1 }),
   type: Type.Union([
     Type.Literal("actor"), Type.Literal("location"), Type.Literal("item"),
     Type.Literal("evidence"), Type.Literal("clue"), Type.Literal("claim"),
@@ -71,7 +70,7 @@ const PlayEntityResultSchema = Type.Object({
 });
 
 const PlayEdgeResultSchema = Type.Object({
-  id: Type.Optional(Type.String()),
+  id: Type.String({ minLength: 1 }),
   fromId: Type.String(),
   type: Type.String(),
   toId: Type.String(),
@@ -81,7 +80,7 @@ const PlayEdgeResultSchema = Type.Object({
 });
 
 const PlayStateSlotResultSchema = Type.Object({
-  id: Type.Optional(Type.String()),
+  id: Type.String({ minLength: 1 }),
   ownerEntityId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   kind: Type.Union([
     Type.Literal("resource"), Type.Literal("relation"), Type.Literal("pressure"),
@@ -92,21 +91,21 @@ const PlayStateSlotResultSchema = Type.Object({
 });
 
 const PlayMutationResultSchema = Type.Object({
-  summary: Type.Optional(Type.String()),
+  summary: Type.String(),
   timeAdvance: Type.Optional(Type.Object({
     elapsed: Type.String(),
-    anchor: Type.Optional(Type.String()),
-    rationale: Type.Optional(Type.String()),
-    synchronized: Type.Optional(Type.Array(Type.String())),
+    anchor: Type.String(),
+    rationale: Type.String(),
+    synchronized: Type.Array(Type.String()),
   })),
-  entities: Type.Optional(Type.Array(PlayEntityResultSchema)),
-  edges: Type.Optional(Type.Array(PlayEdgeResultSchema)),
-  expiredEdges: Type.Optional(Type.Array(Type.Object({
+  entities: Type.Array(PlayEntityResultSchema),
+  edges: Type.Array(PlayEdgeResultSchema),
+  expiredEdges: Type.Array(Type.Object({
     edgeId: Type.String(),
-    reason: Type.Optional(Type.String()),
-  }))),
-  stateSlots: Type.Optional(Type.Array(PlayStateSlotResultSchema)),
-  evidenceTransitions: Type.Optional(Type.Array(Type.Object({
+    reason: Type.String(),
+  })),
+  stateSlots: Type.Array(PlayStateSlotResultSchema),
+  evidenceTransitions: Type.Array(Type.Object({
     entityId: Type.String(),
     from: Type.Optional(Type.Union([
       Type.Literal("unknown"), Type.Literal("hinted"), Type.Literal("seen"),
@@ -119,10 +118,10 @@ const PlayMutationResultSchema = Type.Object({
       Type.Literal("exposed"), Type.Literal("exhausted"),
     ]),
     reason: Type.Optional(Type.String()),
-  }))),
-  blocked: Type.Optional(Type.Boolean()),
-  blockedReason: Type.Optional(Type.String()),
-  notes: Type.Optional(Type.Array(Type.String())),
+  })),
+  blocked: Type.Boolean(),
+  blockedReason: Type.String(),
+  notes: Type.Array(Type.String()),
 });
 
 const WORLD_MUTATION_TOOL = {
@@ -137,16 +136,6 @@ const GRAPH_RECONCILIATION_TOOL = {
   label: "Submit graph reconciliation",
   description: "Submit only graph facts present in the rendered scene but missing from the applied mutation. Submit empty arrays when nothing is missing.",
   parameters: PlayMutationResultSchema,
-} as const;
-
-const PLAY_SCENE_RENDER_TOOL = {
-  name: "submit_play_scene",
-  label: "Submit play scene",
-  description: "Submit the rendered scene and up to four immediate player actions grounded in the applied world state.",
-  parameters: Type.Object({
-    sceneText: Type.String({ minLength: 1 }),
-    suggestedActions: Type.Array(Type.String({ minLength: 1 }), { maxItems: 4 }),
-  }),
 } as const;
 
 const PLAY_ACTION_TOOL = {
@@ -198,10 +187,7 @@ export class PlayWorldMutatorAgent extends BaseAgent {
   async proposeMutation(input: PlayWorldMutatorInput): Promise<PlayMutation> {
     const language = input.language ?? "zh";
     const actionKind = PlayActionIntentSchema.parse(input.action).actionKind;
-    const systemPrompt = await appendPromptPackGuidance(
-      buildWorldMutatorSystemPrompt(language),
-      { promptId: "play.mutator", projectRoot: this.ctx.projectRoot },
-    );
+    const systemPrompt = buildWorldMutatorSystemPrompt(language);
     const messages: { role: "system" | "user"; content: string }[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: buildWorldMutatorUserPrompt(input, language) },
@@ -213,7 +199,6 @@ export class PlayWorldMutatorAgent extends BaseAgent {
       { temperature: 0.25, maxTokens: 4096 },
     );
     const mutation = mutationFromStructuredResult(raw, input.turn, actionKind);
-    logDroppedMutationItems(raw, mutation, input.turn);
     if (!hasMutationResult(mutation)) {
       throw new Error("Play world mutation was empty; the turn was not committed.");
     }
@@ -222,41 +207,46 @@ export class PlayWorldMutatorAgent extends BaseAgent {
 }
 
 function mutationFromStructuredResult(
-  raw: Record<string, unknown>,
+  raw: Static<typeof PlayMutationResultSchema>,
   turn: number,
   actionKind: PlayActionIntent["actionKind"],
 ): PlayMutation {
-  return withHostMutationIdentity(PlayMutationSchema.parse({
+  const eventId = `evt-${turn}`;
+  const entities = raw.entities.map((entity) => ({
+        ...(entity as Record<string, unknown>),
+        createdEventId: eventId,
+        updatedEventId: eventId,
+      }));
+  const edges = raw.edges.map((edge) => ({
+        ...(edge as Record<string, unknown>),
+        validFromEventId: eventId,
+        validUntilEventId: null,
+        sourceEventId: eventId,
+      }));
+  const stateSlots = raw.stateSlots.map((slot) => ({
+        ...(slot as Record<string, unknown>),
+        updatedEventId: eventId,
+      }));
+
+  return PlayMutationSchema.parse({
+    eventId,
+    turn,
+    actionKind,
     summary: raw.summary,
     timeAdvance: raw.timeAdvance,
-    entities: { upsert: raw.entities },
+    entities: { upsert: entities },
     edges: {
-      upsert: raw.edges,
-      expire: Array.isArray(raw.expiredEdges)
-        ? raw.expiredEdges.map((edge) => ({
-            ...(edge as Record<string, unknown>),
-            validUntilEventId: `evt-${turn}`,
-          }))
-        : [],
+      upsert: edges,
+      expire: raw.expiredEdges.map((edge) => ({
+        ...(edge as Record<string, unknown>),
+        validUntilEventId: eventId,
+      })),
     },
-    stateSlots: { upsert: raw.stateSlots },
+    stateSlots: { upsert: stateSlots },
     evidence: { transitions: raw.evidenceTransitions },
     blocked: raw.blocked,
     blockedReason: raw.blockedReason,
     notes: raw.notes,
-  }), turn, actionKind);
-}
-
-function withHostMutationIdentity(
-  mutation: PlayMutation,
-  turn: number,
-  actionKind: PlayActionIntent["actionKind"],
-): PlayMutation {
-  return PlayMutationSchema.parse({
-    ...mutation,
-    eventId: `evt-${turn}`,
-    turn,
-    actionKind,
   });
 }
 
@@ -272,31 +262,6 @@ function hasMutationResult(mutation: PlayMutation): boolean {
     || mutation.notes.length > 0;
 }
 
-function rawUpsertCount(field: unknown): number {
-  if (Array.isArray(field)) return field.length;
-  if (field && typeof field === "object" && Array.isArray((field as { upsert?: unknown }).upsert)) {
-    return (field as { upsert: unknown[] }).upsert.length;
-  }
-  return 0;
-}
-
-function logDroppedMutationItems(raw: unknown, mutation: PlayMutation, turn: number): void {
-  if (!raw || typeof raw !== "object") return;
-  const r = raw as Record<string, unknown>;
-  const rawE = rawUpsertCount(r.entities);
-  const rawEd = rawUpsertCount(r.edges);
-  const rawS = rawUpsertCount(r.stateSlots);
-  const keptE = mutation.entities.upsert.length;
-  const keptEd = mutation.edges.upsert.length;
-  const keptS = mutation.stateSlots.upsert.length;
-  if (rawE > keptE || rawEd > keptEd || rawS > keptS) {
-    // eslint-disable-next-line no-console -- intentional degradation observability
-    console.warn(
-      `[play-mutator] turn ${turn}: dropped malformed items — entities ${rawE}->${keptE}, edges ${rawEd}->${keptEd}, slots ${rawS}->${keptS}`,
-    );
-  }
-}
-
 export class PlaySceneRendererAgent extends BaseAgent {
   constructor(ctx: AgentContext) {
     super(ctx);
@@ -308,17 +273,26 @@ export class PlaySceneRendererAgent extends BaseAgent {
 
   async render(input: PlaySceneRenderInput & { readonly mode?: "open" | "guided" }): Promise<PlaySceneRender> {
     const language = input.language ?? "zh";
-    const systemPrompt = await appendPromptPackGuidance(
-      buildSceneRendererSystemPrompt(input.mode ?? "open", language),
-      { promptId: "play.renderer", projectRoot: this.ctx.projectRoot },
-    );
+    const systemPrompt = buildSceneRendererSystemPrompt(input.mode ?? "open", language);
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: buildSceneRendererUserPrompt(input, language) },
     ];
     const { result: raw } = await this.submitStructured(
       messages,
-      PLAY_SCENE_RENDER_TOOL,
+      {
+        name: "submit_play_scene",
+        label: "Submit play scene",
+        description: input.mode === "guided"
+          ? "Submit the rendered scene and up to three grounded player choices."
+          : "Submit the rendered open-world scene with an empty suggestedActions array.",
+        parameters: Type.Object({
+          sceneText: Type.String({ minLength: 1 }),
+          suggestedActions: Type.Array(Type.String({ minLength: 1 }), {
+            maxItems: input.mode === "guided" ? 3 : 0,
+          }),
+        }),
+      },
       { temperature: 0.45, maxTokens: 4096 },
     );
     return PlaySceneRenderSchema.parse(raw);
@@ -357,7 +331,7 @@ function buildSceneReconcilerSystemPrompt(language: "zh" | "en"): string {
       "Compare the rendered prose against the already applied changes and current state summary.",
       "If the prose introduced a concrete named object, clue, evidence, location, organization, or person that is not represented in the applied changes/current state, submit ONLY those missing graph facts.",
       "Do not rewrite prose. Do not invent facts that are not in the rendered scene. If nothing is missing, submit empty arrays.",
-      "Use the same eventId/turn/actionKind. For tangible things the player now physically holds, add a holding edge from actor_player with value.role=\"holding\"; if the target is evidence/clue/claim/proof_chain rather than an item, also set value.physical=true. Observed phenomena or learned facts are not holdings.",
+      "For tangible things the player now physically holds, add a holding edge from actor_player with value.role=\"holding\"; if the target is evidence/clue/claim/proof_chain rather than an item, also set value.physical=true. Observed phenomena or learned facts are not holdings.",
       "Call submit_graph_reconciliation once. The host supplies eventId, turn, and actionKind.",
     ].join("\n");
   }
@@ -366,7 +340,7 @@ function buildSceneReconcilerSystemPrompt(language: "zh" | "en"): string {
     "对照已经应用的本回合变化、当前状态摘要和最终正文。",
     "如果正文里出现了具体且具名的新物件、线索、证据、地点、组织或人物，但它还没有体现在已应用变化/当前状态里，只提交这些缺失图谱事实。",
     "不要改正文，不要发明正文没有的事实。没有缺失就提交空数组。",
-    "沿用同一个 eventId/turn/actionKind。玩家获得或拿在手里的实物，需要补一条 actor_player 指向该实体、value.role=\"holding\" 的 edge；如果目标是 evidence/clue/claim/proof_chain 而不是 item，还要设置 value.physical=true。观察到的现象或知道的信息不是持有物。",
+    "玩家获得或拿在手里的实物，需要补一条 actor_player 指向该实体、value.role=\"holding\" 的 edge；如果目标是 evidence/clue/claim/proof_chain 而不是 item，还要设置 value.physical=true。观察到的现象或知道的信息不是持有物。",
     "调用一次 submit_graph_reconciliation；eventId、turn、actionKind 由宿主补入。",
   ].join("\n");
 }
@@ -498,7 +472,7 @@ function buildWorldMutatorUserPrompt(input: PlayWorldMutatorInput, language: "zh
       "Current context:",
       input.context,
       "",
-      "Requirement: use eventId evt-" + input.turn + "; every new or referenced entity id must be stable, readable, and short.",
+      "Every new or referenced entity, edge, and state-slot id must be stable, readable, and short.",
     ].join("\n");
   }
   return [
@@ -512,7 +486,7 @@ function buildWorldMutatorUserPrompt(input: PlayWorldMutatorInput, language: "zh
     "当前上下文：",
     input.context,
     "",
-    "要求：eventId 使用 evt-" + input.turn + "；所有新增或引用的实体 id 要稳定、可读、短小。",
+    "所有新增或引用的实体、关系和状态槽 id 都要稳定、可读、短小。",
   ].join("\n");
 }
 
@@ -520,14 +494,13 @@ export function buildSceneRendererSystemPrompt(mode: "open" | "guided" = "open",
   const actionsRule = language === "en"
     ? mode === "guided"
       ? "suggestedActions contains 0-3 optional springboards only at a genuine decision point."
-      : "suggestedActions contains 0-3 optional hints and may be empty."
+      : "suggestedActions must be empty; open worlds use free player input."
     : mode === "guided"
       ? "suggestedActions 只在真实抉择点提供 0-3 个可选跳板。"
-      : "suggestedActions 可提供 0-3 个可选提示，也可以为空。";
+      : "suggestedActions 必须为空；开放世界只接收玩家自由输入。";
   const contract = language === "en"
     ? [
         "Render the playable scene with the activated play-world Skill from the already-applied state.",
-        "Carry out every completed part of the player's action before its aftermath. Preserve pre-action canon unless Applied changes update it.",
         "Named people, places, objects, clues, and organizations may appear only when present in Applied changes or the current state. Treat supplied elapsed time and anchor as canonical.",
         "sceneText is narrative prose only; choices belong only in suggestedActions.",
         actionsRule,
@@ -535,7 +508,6 @@ export function buildSceneRendererSystemPrompt(mode: "open" | "guided" = "open",
       ]
     : [
         "按已激活的开放世界 Skill，根据已经应用的状态渲染可玩场景。",
-        "先写出玩家动作中已经完成的各部分，再写余波。除非已应用变化明确更新，否则保留动作前正典。",
         "具名人物、地点、物件、线索和组织只能来自已应用变化或当前状态；输入的 elapsed 与 anchor 是权威时间。",
         "sceneText 只写叙事正文，选择只能放在 suggestedActions。",
         actionsRule,

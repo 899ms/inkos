@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { StateManager, formatLengthCount, readGenreProfile, resolveLengthCountingMode } from "@actalk/inkos-core";
+import { StateManager, formatLengthCount, resolveLengthCountingMode } from "@actalk/inkos-core";
 import { findProjectRoot, log, logError } from "../utils.js";
 
 export const reviewCommand = new Command("review")
@@ -16,8 +16,7 @@ export const reviewCommand = new Command("review")
           state.loadBookConfig(id),
           state.loadChapterIndex(id),
         ]);
-        const { profile } = await readGenreProfile(root, book.genre);
-        const countingMode = resolveLengthCountingMode(book.language ?? profile.language);
+        const countingMode = resolveLengthCountingMode(book.language);
         for (const chapter of chapters.filter((item) => item.observations.length > 0)) {
           const row = {
             bookId: id,

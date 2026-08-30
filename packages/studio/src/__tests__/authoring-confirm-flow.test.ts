@@ -104,7 +104,8 @@ describe("Studio Pi mini-flow", () => {
         sessionId,
       }),
     });
-    expect(confirm.status).toBe(200);
+    const confirmBody = await confirm.clone().json();
+    expect(confirm.status, JSON.stringify(confirmBody)).toBe(200);
 
     const graph = await loadStoryGraph(root, bookId);
     expect(graph?.nodes.length).toBeGreaterThanOrEqual(4);

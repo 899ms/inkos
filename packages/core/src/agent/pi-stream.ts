@@ -283,5 +283,5 @@ function readOpenAIError(raw: string): string {
   } catch {
     // Fall through to the bounded raw response.
   }
-  return raw.slice(0, 500);
+  return raw;
 }

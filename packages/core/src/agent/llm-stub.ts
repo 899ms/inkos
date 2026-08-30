@@ -112,20 +112,24 @@ const STRUCTURE_JSON = JSON.stringify({
       type: "start",
       title: "开场",
       sceneDesc: "宫门前",
-      choices: [{ id: "c1", text: "查账", targetNodeId: "b" }],
+      dialogue: [],
+      choices: [{ id: "c1", text: "查账", targetNodeId: "b", effects: [] }],
+      act: "第一幕",
     },
     {
       id: "b",
       type: "branch",
       title: "抉择",
       sceneDesc: "账房",
+      dialogue: [],
       choices: [
-        { id: "c2", text: "公开", targetNodeId: "e1" },
-        { id: "c3", text: "隐瞒", targetNodeId: "e2" },
+        { id: "c2", text: "公开", targetNodeId: "e1", effects: [] },
+        { id: "c3", text: "隐瞒", targetNodeId: "e2", effects: [] },
       ],
+      act: "第二幕",
     },
-    { id: "e1", type: "ending", title: "真相", choices: [] },
-    { id: "e2", type: "ending", title: "沉沦", choices: [] },
+    { id: "e1", type: "ending", title: "真相", sceneDesc: "公开真相", dialogue: [], choices: [], act: "第三幕" },
+    { id: "e2", type: "ending", title: "沉沦", sceneDesc: "隐瞒真相", dialogue: [], choices: [], act: "第三幕" },
   ],
 });
 
@@ -135,6 +139,7 @@ const NODE_JSON = JSON.stringify({
   sceneDesc: "夜色",
   dialogue: [{ speaker: "阿梅", text: "账不能错", emotion: "坚定" }],
   choices: [],
+  act: "第一幕",
 });
 
 /**

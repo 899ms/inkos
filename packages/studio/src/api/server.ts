@@ -19,8 +19,8 @@ import {
   createAndPersistBookSession,
   renameBookSession,
   deleteBookSession,
-  migrateBookSession,
-  SessionAlreadyMigratedError,
+  bindBookSessionToBook,
+  SessionAlreadyBoundError,
   abortAgentSession,
   runAgentSession,
   resolveServicePreset,
@@ -28,6 +28,8 @@ import {
   resolveServiceModelsBaseUrl,
   guessServiceFromBaseUrl,
   resolveServiceModel,
+  ServiceApiKeyNotFoundError,
+  LLMConfigurationError,
   loadSecrets,
   saveSecrets,
   listModelsForService,
@@ -38,7 +40,6 @@ import {
   chatCompletion,
   runWorkerAgent,
   buildExportArtifact,
-  ConsolidatorAgent,
   DetectionConfigSchema,
   ResearchSearchConfigSchema,
   GLOBAL_ENV_PATH,
@@ -62,8 +63,6 @@ import {
   normalizePlayMode as normalizeCorePlayMode,
   normalizeRequestedIntent as normalizeCoreRequestedIntent,
   normalizeSkillIdList as normalizeCoreSkillIdList,
-  normalizePlatformOrOther,
-  inferLanguage,
   isLLMApiFormat,
   ingestMaterial,
   createSkillRegistry,
@@ -77,16 +76,11 @@ import {
   createExportBookTool,
   resolveSessionHarnessBinding,
   parseAgentSkillDocument,
-  getBuiltinPrompt,
-  listBuiltinPromptPacks,
-  listBuiltinPrompts,
-  loadPromptPackPrompt,
-  promptOverridePath,
   toPosixPath,
   type ActionPayload,
   type ActionSource,
   type AgentSkill,
-  type BuiltinPrompt,
+  type WorkManifest,
   createGenerateCoverTool,
   createInteractiveFilmCreationTool,
   createPlayStartTool,
@@ -101,7 +95,13 @@ import {
   createContinuationImportTool,
   createSpinoffBookTool,
   createImitationBookTool,
-  createSubAgentTool,
+  createBookFoundationTool,
+  createWriteChaptersTool,
+  createFoundationRevisionTool,
+  createReviewChapterTool,
+  createReviseChapterTool,
+  createResyncChapterStateTool,
+  DEFAULT_REVISE_MODE,
   createDraftStructureTool,
   createConnectChoiceTool,
   createRemoveNodeTool,
@@ -148,7 +148,7 @@ import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "n
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
-import { buildStudioBookConfig } from "./book-create.js";
+import { buildStudioBookConfig, normalizeStudioPlatform } from "./book-create.js";
 import {
   deleteStudioTaskSnapshot,
   loadStudioTaskSnapshot,
@@ -175,48 +175,11 @@ interface BilingualLabel {
   readonly en: string;
 }
 
-const PIPELINE_STAGES: Record<string, ReadonlyArray<BilingualLabel>> = {
-  writer: [
-    { zh: "准备章节输入", en: "Prepare chapter input" },
-    { zh: "撰写章节草稿", en: "Write chapter draft" },
-    { zh: "落盘最终章节", en: "Save final chapter" },
-    { zh: "生成最终真相文件", en: "Generate final truth files" },
-    { zh: "校验真相文件变更", en: "Validate truth file changes" },
-    { zh: "同步记忆索引", en: "Sync memory index" },
-    { zh: "更新章节索引与快照", en: "Update chapter index and snapshot" },
-  ],
-  architect: [
-    { zh: "生成基础设定", en: "Generate foundation" },
-    { zh: "保存书籍配置", en: "Save book config" },
-    { zh: "写入基础设定文件", en: "Write foundation files" },
-    { zh: "初始化控制文档", en: "Initialize control documents" },
-    { zh: "创建初始快照", en: "Create initial snapshot" },
-  ],
-  reviser: [
-    { zh: "加载修订上下文", en: "Load revision context" },
-    { zh: "修订章节", en: "Revise chapter" },
-    { zh: "落盘修订结果", en: "Save revision result" },
-    { zh: "更新索引与快照", en: "Update index and snapshot" },
-  ],
-  auditor: [{ zh: "审计章节", en: "Audit chapter" }],
-};
-
-function pipelineStages(agent: string, lang: StudioLanguage = "zh"): string[] | undefined {
-  return PIPELINE_STAGES[agent]?.map((stage) => pick(lang, stage.zh, stage.en));
-}
-
 function attachmentDisposition(fileName: string): string {
   const safeAscii = fileName.replace(/[^A-Za-z0-9._-]+/g, "_") || "download";
   return `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
-const AGENT_LABELS: Record<string, BilingualLabel> = {
-  architect: { zh: "建书", en: "Book setup" },
-  writer: { zh: "写作", en: "Writing" },
-  auditor: { zh: "审计", en: "Audit" },
-  reviser: { zh: "修订", en: "Revision" },
-  exporter: { zh: "导出", en: "Export" },
-};
 const TOOL_LABELS: Record<string, BilingualLabel> = {
   read: { zh: "读取文件", en: "Read file" },
   edit: { zh: "编辑文件", en: "Edit file" },
@@ -237,16 +200,18 @@ const TOOL_LABELS: Record<string, BilingualLabel> = {
   play_start: { zh: "启动互动世界", en: "Start interactive world" },
   play_revise: { zh: "重做互动回合", en: "Redo interactive turn" },
   play_step: { zh: "推进互动世界", en: "Advance interactive world" },
+  create_book: { zh: "创建长篇", en: "Create long-form Work" },
+  revise_foundation: { zh: "重建设定", en: "Revise foundation" },
+  write_chapters: { zh: "写作章节", en: "Write chapters" },
+  review_chapter: { zh: "审查章节", en: "Review chapter" },
+  revise_chapter: { zh: "修订章节", en: "Revise chapter" },
+  export_book: { zh: "导出作品", en: "Export Work" },
   create_narrative_forecast: { zh: "剧情多线推演", en: "Narrative forecast" },
   get_narrative_forecast: { zh: "核验剧情推演", en: "Recheck forecast" },
   select_narrative_branch: { zh: "采用候选分支", en: "Select candidate branch" },
 };
 
-function resolveToolLabel(tool: string, agent?: string, lang: StudioLanguage = "zh"): string {
-  if (tool === "sub_agent" && agent) {
-    const label = AGENT_LABELS[agent];
-    return label ? pick(lang, label.zh, label.en) : agent;
-  }
+function resolveToolLabel(tool: string, _agent?: string, lang: StudioLanguage = "zh"): string {
   const label = TOOL_LABELS[tool];
   return label ? pick(lang, label.zh, label.en) : tool;
 }
@@ -435,7 +400,7 @@ function nonTextModelMessage(modelId: string, lang: StudioLanguage = "zh"): stri
 }
 
 function extractToolError(result: unknown): string {
-  return summarizeToolResult(result, 500);
+  return summarizeToolResult(result);
 }
 
 function resolveProjectImageFile(root: string, rawPath: string): { readonly resolved: string; readonly contentType: string } {
@@ -523,17 +488,6 @@ function resolveProjectTextArtifactFile(root: string, rawPath: string): { readon
     throw new ApiError(415, "UNSUPPORTED_PROJECT_ARTIFACT_TYPE", "Unsupported project artifact type");
   }
   return { ...file, contentType };
-}
-
-function hasSuccessfulSubAgentExec(
-  execs: ReadonlyArray<CollectedToolExec>,
-  agent: string,
-): boolean {
-  return execs.some((exec) =>
-    exec.tool.split("__").at(-1) === "sub_agent"
-    && exec.agent === agent
-    && exec.status === "completed"
-  );
 }
 
 function hasSuccessfulToolExec(
@@ -953,30 +907,6 @@ async function loadStudioSkills(root: string) {
   };
 }
 
-async function toStudioPromptPackPrompt(root: string, prompt: BuiltinPrompt) {
-  const loaded = await loadPromptPackPrompt({ promptId: prompt.id, projectRoot: root });
-  const overridePath = promptOverridePath(root, prompt.id);
-  return {
-    id: prompt.id,
-    packId: prompt.packId,
-    title: prompt.title,
-    defaultContent: prompt.content,
-    content: loaded.content,
-    source: loaded.source,
-    overridden: loaded.source === "project",
-    // Windows 上 relative() 产生反斜杠，这个 path 会被前端展示/断言为 posix 相对路径
-    path: loaded.source === "project" ? toPosixPath(relative(root, overridePath)) : undefined,
-  };
-}
-
-function normalizeStudioPromptId(value: unknown): string {
-  const promptId = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (!promptId || !getBuiltinPrompt(promptId)) {
-    throw new ApiError(404, "PROMPT_PACK_PROMPT_NOT_FOUND", `Prompt pack prompt not found: ${String(value)}`);
-  }
-  return promptId;
-}
-
 async function listProjectSkillIds(root: string): Promise<Set<string>> {
   try {
     const entries = await readdir(projectSkillsDir(root), { withFileTypes: true });
@@ -1024,107 +954,47 @@ function validateAgentActionExecution(args: {
     );
   }
 
-  if (
-    args.agentBookId
-    && args.requestedIntent === "write_next"
-    && !hasSuccessfulSubAgentExec(args.collectedToolExecs, "writer")
-  ) {
+  const binding = args.requestedIntent
+    ? confirmedCapabilityBinding(args.requestedIntent)
+    : undefined;
+  if (binding && !hasSuccessfulToolExec(args.collectedToolExecs, binding.actionId)) {
     return pick(
       lang,
-      "模型声称已完成下一章，但没有实际调用写作工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "The model claimed the next chapter is done, but it never called the writing tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (
-    !args.agentBookId
-    && args.requestedIntent === "create_book"
-    && !hasSuccessfulSubAgentExec(args.collectedToolExecs, "architect")
-  ) {
-    return pick(
-      lang,
-      "已确认建书，但模型没有实际调用建书工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Book creation was confirmed, but the model never called the book setup tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (args.requestedIntent === "short_run" && !hasSuccessfulToolExec(args.collectedToolExecs, "short_fiction_run")) {
-    return pick(
-      lang,
-      "已确认生成短篇，但模型没有实际调用短篇生产工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Short fiction was confirmed, but the model never called the short fiction tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (args.requestedIntent === "play_start" && !hasSuccessfulToolExec(args.collectedToolExecs, "play_start")) {
-    return pick(
-      lang,
-      "已确认启动互动世界，但模型没有实际调用互动世界工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Starting the interactive world was confirmed, but the model never called the interactive world tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (args.requestedIntent === "generate_cover" && !hasSuccessfulToolExec(args.collectedToolExecs, "generate_cover")) {
-    return pick(
-      lang,
-      "已确认生成封面，但模型没有实际调用封面工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Cover generation was confirmed, but the model never called the cover tool. Retry; if it keeps failing, check whether the model supports tool calls.",
+      `已确认动作 ${binding.actionId}，但模型没有执行对应 capability action。请重试或检查模型工具调用支持。`,
+      `Action ${binding.actionId} was confirmed, but the model did not execute the matching capability action. Retry or check model tool-call support.`,
     );
   }
 
   return undefined;
 }
 
-type AgentFailureKind = "busy" | "llm" | "internal" | "unknown";
-
-function classifyAgentFailure(message: string): AgentFailureKind {
-  const text = message.trim();
-  if (!text) return "unknown";
-  if (/BookWriteLockError|locked by an active InkOS write|BOOK_BUSY/i.test(text)) {
-    return "busy";
-  }
-  if (
-    /API\s*返回|上游|upstream|Bad Gateway|temporarily unavailable|rate limit|quota|API Key|unauthorized|forbidden|无法连接到 API|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|LLM returned empty response|Provider finish_reason|reasoning_content/i.test(text)
-  ) {
-    return "llm";
-  }
-  if (
-    /Book creation artifact is incomplete|Short-hit draft is incomplete|工具执行失败|执行失败|sub_agent|tool execution|解析失败/i.test(text)
-  ) {
-    return "internal";
-  }
-  return "unknown";
-}
-
 function formatAgentFailure(
-  message: string,
+  error: unknown,
   lang: StudioLanguage = "zh",
+  origin: "model" | "host" = "host",
 ): { readonly code: string; readonly message: string; readonly status: 409 | 500 | 502 } {
-  const kind = classifyAgentFailure(message);
-  if (kind === "busy") {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof Error && error.name === "BookWriteLockError") {
     return { code: "BOOK_BUSY", message, status: 409 };
   }
-  if (kind === "llm") {
+  if (origin === "model") {
     return { code: "AGENT_LLM_ERROR", message, status: 502 };
   }
-  if (kind === "internal") {
-    return {
-      code: "AGENT_INTERNAL_ERROR",
-      message: pick(lang, `InkOS 内部流程错误：${message}`, `InkOS internal pipeline error: ${message}`),
-      status: 500,
-    };
-  }
-  return { code: "AGENT_ERROR", message, status: 500 };
+  return {
+    code: "INKOS_ACTION_ERROR",
+    message: pick(lang, `InkOS 动作失败：${message}`, `InkOS action failed: ${message}`),
+    status: 500,
+  };
 }
 
 function formatAgentActionFailure(
-  message: string,
+  error: unknown,
   lang: StudioLanguage,
-): { readonly code: string; readonly message: string; readonly status: 409 | 502 } {
-  const failure = formatAgentFailure(message, lang);
+): { readonly code: string; readonly message: string; readonly status: 409 | 500 } {
+  const failure = formatAgentFailure(error, lang, "host");
   return failure.code === "BOOK_BUSY"
     ? { code: failure.code, message: failure.message, status: 409 }
-    : { code: "AGENT_ACTION_FAILED", message, status: 502 };
+    : { code: failure.code, message: failure.message, status: 500 };
 }
 
 interface CollectedToolExec {
@@ -1200,11 +1070,11 @@ function manualToolAssistantMessage(
 
 function manualToolAppendOptions(sessionKind: SessionKind, exec: CollectedToolExec): {
   readonly sessionKind: SessionKind;
-  readonly legacyDisplay: { readonly toolExecutions: readonly CollectedToolExec[] };
+  readonly display: { readonly toolExecutions: readonly CollectedToolExec[] };
 } {
   return {
     sessionKind,
-    legacyDisplay: { toolExecutions: [exec] },
+    display: { toolExecutions: [exec] },
   };
 }
 
@@ -1257,7 +1127,8 @@ async function executeConfirmedProductionAction(args: {
     ),
     requestedSkillActivations,
   );
-  let tool: ReturnType<typeof createSubAgentTool>
+  let tool: ReturnType<typeof createBookFoundationTool>
+    | ReturnType<typeof createWriteChaptersTool>
     | ReturnType<typeof createShortFictionRunTool>
     | ReturnType<typeof createGenerateCoverTool>
     | ReturnType<typeof createScriptCreationTool>
@@ -1273,18 +1144,16 @@ async function executeConfirmedProductionAction(args: {
     | ReturnType<typeof createConnectChoiceTool>
     | ReturnType<typeof createRemoveNodeTool>;
   let params: Record<string, unknown>;
-  let agent: string | undefined;
 
   if (args.requestedIntent === "create_book") {
     const payload = actionPayload?.createBook;
     const title = requirePayloadText(payload?.title, pick(lang, "确认建书缺少书名，请重新生成确认卡。", "The book creation confirmation is missing a title. Regenerate the confirmation card."));
-    tool = createSubAgentTool(args.pipeline, null, args.root, {
+    tool = createBookFoundationTool(args.pipeline, {
+      language: lang,
       actionPayload,
       workerSkills: (worker) => worker === "architect" ? profileSkills("longform-novel") : [],
     });
-    agent = "architect";
     params = {
-      agent,
       instruction: args.instruction,
       title,
       ...(payload?.genre ? { genre: payload.genre } : {}),
@@ -1315,13 +1184,11 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "BOOK_ID_REQUIRED", pick(lang, "写下一章需要先打开一本书。", "Writing the next chapter requires an active book."));
     }
     const chapterCount = actionPayload?.writeNext?.chapterCount ?? 1;
-    tool = createSubAgentTool(args.pipeline, args.bookId, args.root, {
+    tool = createWriteChaptersTool(args.pipeline, args.bookId, {
       language: lang,
       workerSkills: (worker) => worker === "writer" ? profileSkills("longform-novel") : [],
     });
-    agent = "writer";
     params = {
-      agent: "writer",
       bookId: args.bookId,
       instruction: args.instruction,
       chapterCount,
@@ -1512,6 +1379,7 @@ async function executeConfirmedProductionAction(args: {
       : undefined;
     tool = createPlayStartTool(args.pipeline, args.root, args.sessionId, args.playMode, {
       actionPayload: confirmedActionPayload,
+      language: lang,
       defaultSkills: profileSkills("interactive-world"),
     });
     params = {
@@ -1569,11 +1437,10 @@ async function executeConfirmedProductionAction(args: {
   const exec: CollectedToolExec = {
     id,
     tool: toolName,
-    agent,
-    label: resolveToolLabel(binding.actionId, agent, lang),
+    label: resolveToolLabel(binding.actionId, undefined, lang),
     status: "running",
     args: params,
-    stages: agent ? pipelineStages(agent, lang)?.map(label => ({ label, status: "pending" as const })) : undefined,
+    stages: undefined,
     startedAt: Date.now(),
   };
 
@@ -1603,8 +1470,7 @@ async function executeConfirmedProductionAction(args: {
         void args.onTaskChange(exec).catch(() => undefined);
       },
     });
-    const resultIsError = actionResult.status === "error";
-    exec.status = resultIsError ? "error" : "completed";
+    exec.status = "completed";
     exec.completedAt = Date.now();
     exec.result = actionResult.content ?? actionResult.summary;
     exec.details = actionResult.data ?? actionResult;
@@ -1613,7 +1479,7 @@ async function executeConfirmedProductionAction(args: {
     const result = {
       content: [{ type: "text", text: exec.result }],
       details: exec.details,
-      isError: resultIsError,
+      isError: false,
       harnessResult: actionResult,
     };
     broadcast("tool:end", {
@@ -1622,7 +1488,7 @@ async function executeConfirmedProductionAction(args: {
       tool: toolName,
       result,
       details: exec.details,
-      isError: resultIsError,
+      isError: false,
     });
     return exec;
   } catch (error) {
@@ -1721,17 +1587,12 @@ function deriveBookIdFromTitle(title: string): string {
 }
 
 async function completeBookExists(bookDir: string): Promise<boolean> {
-  try {
-    await access(join(bookDir, "book.json"));
-    await access(join(bookDir, "story", "story_bible.md"));
-    return true;
-  } catch {
-    return false;
-  }
+  const { isBookFoundationComplete } = await import("@actalk/inkos-core");
+  return isBookFoundationComplete(bookDir);
 }
 
-function resolveArchitectBookIdFromArgs(args?: Record<string, unknown>): string | null {
-  if (!args || args.agent !== "architect" || args.revise === true) return null;
+function resolveCreatedBookIdFromArgs(args?: Record<string, unknown>): string | null {
+  if (!args) return null;
   if (typeof args.bookId === "string" && args.bookId.trim()) return args.bookId.trim();
   if (typeof args.title === "string" && args.title.trim()) {
     return deriveBookIdFromTitle(args.title) || null;
@@ -1762,11 +1623,9 @@ function resolveCreatedBookIdFromDetails(details: Readonly<Record<string, unknow
 function resolveCreatedWorkIdFromToolExec(exec: CollectedToolExec): string | null {
   if (exec.status !== "completed" || !exec.details || typeof exec.details !== "object") return null;
   const details = exec.details as Record<string, unknown>;
-  for (const key of ["workId", "storyId", "projectId", "worldId"]) {
-    const value = details[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
+  return typeof details.workId === "string" && details.workId.trim()
+    ? details.workId.trim()
+    : null;
 }
 
 async function loadStudioBookListSummary(
@@ -1776,6 +1635,15 @@ async function loadStudioBookListSummary(
   const book = await state.loadBookConfig(bookId);
   const nextChapter = await state.getNextChapterNumber(bookId);
   return { ...book, chaptersWritten: nextChapter - 1 };
+}
+
+async function loadWorkIfExists(root: string, workId: string): Promise<WorkManifest | null> {
+  try {
+    return await loadWorkManifest(root, workId);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 function isCustomServiceId(serviceId: string): boolean {
@@ -2187,15 +2055,13 @@ async function loadRadarHistory(root: string): Promise<Array<{
 
 function fallbackTextModelsForEndpoint(
   endpoint: ReturnType<typeof getAllEndpoints>[number] | undefined,
-  preset: ReturnType<typeof resolveServicePreset> | undefined,
 ): Array<{ id: string; name: string }> {
   const endpointModels = endpoint?.models
     .filter((model) => model.enabled !== false)
     .filter((model) => isTextChatModelId(model.id))
     .map((model) => ({ id: model.id, name: model.id }))
     ?? [];
-  if (endpointModels.length > 0) return endpointModels;
-  return preset?.knownModels?.map((id) => ({ id, name: id })) ?? [];
+  return endpointModels;
 }
 
 function shouldTrustStaticModelsWhenLiveListUnavailable(endpoint: ReturnType<typeof getAllEndpoints>[number] | undefined): boolean {
@@ -2335,8 +2201,8 @@ async function fetchModelsFromServiceBaseUrl(
         models: [],
         error: pick(
           lang,
-          `服务商返回 ${res.status}: ${body.slice(0, 200)}`,
-          `Service returned ${res.status}: ${body.slice(0, 200)}`,
+          `服务商返回 ${res.status}: ${body}`,
+          `Service returned ${res.status}: ${body}`,
         ),
         authFailed: res.status === 401 || res.status === 403,
       };
@@ -2429,7 +2295,7 @@ async function probeServiceCapabilities(args: {
     };
   }
   if (shouldTrustStaticModelsWhenLiveListUnavailable(endpoint)) {
-    const models = fallbackTextModelsForEndpoint(endpoint, preset);
+    const models = fallbackTextModelsForEndpoint(endpoint);
     const selectedModel =
       endpoint?.checkModel && models.some((model) => model.id === endpoint.checkModel)
         ? endpoint.checkModel
@@ -2449,7 +2315,6 @@ async function probeServiceCapabilities(args: {
   // Prefer live /models results; if unavailable, probe with the service's own check model before global defaults.
   const serviceFirstModel =
     endpoint?.checkModel
-    ?? preset?.knownModels?.[0]
     ?? endpoint?.models.find((model) => model.enabled !== false)?.id;
   const useDynamicLocalModels = baseService === "ollama" || baseService === "lmstudio";
   const useEndpointCheckModel = !useDynamicLocalModels
@@ -2516,7 +2381,7 @@ async function probeServiceCapabilities(args: {
         );
         const models = discoveredModels.length > 0
           ? discoveredModels
-          : fallbackTextModelsForEndpoint(endpoint, preset);
+          : fallbackTextModelsForEndpoint(endpoint);
         return {
           ok: true,
           models: models.length > 0 ? models : [{ id: model, name: model }],
@@ -2669,9 +2534,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (error instanceof ApiError) {
       return c.json({ error: { code: error.code, message: error.message } }, error.status as 400);
     }
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("LLM API key not set") || message.includes("INKOS_LLM_API_KEY not set")) {
-      return c.json({ error: { code: "LLM_CONFIG_ERROR", message } }, 400);
+    if (error instanceof LLMConfigurationError) {
+      return c.json({ error: { code: "LLM_CONFIG_ERROR", message: error.message } }, 400);
     }
     console.error("[studio] Unexpected server error", error);
     return c.json(
@@ -2927,23 +2791,25 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         title: body.title,
         ...(body.genre ? { genre: body.genre } : {}),
         ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
-        ...(body.platform ? { platform: normalizePlatformOrOther(body.platform) } : {}),
+        ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
         ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
         ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
       },
     };
-    const tool = createSubAgentTool(pipeline, null, root, { actionPayload, architectCreateOnly: true });
+    const tool = createBookFoundationTool(pipeline, {
+      actionPayload,
+      language: body.language === "en" ? "en" : "zh",
+    });
     const binding = confirmedCapabilityBinding("create_book")!;
     executeExplicitCapabilityTool({
       projectRoot: root,
       binding,
       tool,
       parameters: {
-        agent: "architect",
         instruction: body.blurb?.trim() || `Create ${body.title}`,
         title: body.title,
         ...(body.genre ? { genre: body.genre } : {}),
-        ...(body.platform ? { platform: normalizePlatformOrOther(body.platform) } : {}),
+        ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
         ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
         ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
         ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
@@ -2964,7 +2830,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           broadcast("book:error", { bookId: createdBookId, error });
           return;
         }
-        const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
+        const book = await loadStudioBookListSummary(state, createdBookId);
         bookCreateStatus.delete(createdBookId);
         broadcast("book:created", { bookId: createdBookId, ...(book ? { book } : {}) });
       },
@@ -3223,39 +3089,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // --- Truth files ---
 
-  // Flat-file whitelist — the pre-Phase-5 story root files plus dev's legacy
-  // editor targets (author_intent / current_focus / volume_outline).
-  //
-  // Phase 5 cleanup #3 moved the authoritative YAML frontmatter + outline prose
-  // into story/outline/ and character sheets into story/roles/. `story_bible.md`
-  // and `book_rules.md` now exist only as compat pointer shims — we still allow
-  // reading them so legacy books keep rendering, but the server-side writer
-  // (write_truth_file) no longer accepts them as edit targets.
   const TRUTH_FLAT_FILES = [
     "author_intent.md", "current_focus.md",
-    "story_bible.md", "book_rules.md", "volume_outline.md", "current_state.md",
-    "particle_ledger.md", "pending_hooks.md", "chapter_summaries.md",
-    "subplot_board.md", "emotional_arcs.md", "character_matrix.md",
+    "book_rules.md", "current_state.md", "pending_hooks.md", "chapter_summaries.md",
     "style_guide.md", "parent_canon.md", "fanfic_canon.md",
   ];
 
-  // Authoritative Phase 5 paths — prose outline + role sheets live under
-  // dedicated subdirectories of story/. The full path (relative to story/) is
-  // matched literally here. `节奏原则.md` / `rhythm_principles.md` is optional
-  // after Phase 5 consolidation (rhythm lives in volume_map's closing paragraph);
-  // the entries stay whitelisted for legacy books and manual overrides.
   const TRUTH_OUTLINE_FILES = [
     "outline/story_frame.md",
     "outline/volume_map.md",
-    "outline/节奏原则.md",
-    "outline/rhythm_principles.md",
   ];
 
-  // Pointer shims that the runtime no longer treats as authoritative. The
-  // GET handler tags them with `legacy: true` so the UI can surface that the
-  // edits won't land where the user expects.
-  const LEGACY_SHIM_FILES = new Set(["story_bible.md"]);
-  const RUNTIME_DIAGNOSTIC_FILE_RE = /^runtime\/chapter-\d{4}\.(?:intent\.md|plan\.md|context\.json|rule-stack\.yaml|trace\.json)$/;
+  const RUNTIME_DIAGNOSTIC_FILE_RE = /^runtime\/chapter-\d{4}\.(?:intent\.md|plan\.json|context\.json|trace\.json)$/;
 
   /**
    * Validate a requested truth-file path:
@@ -3312,22 +3157,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "Invalid truth file" }, 400);
     }
 
-    // Phase 5: new-layout books keep the authoritative prose under outline/.
-    // A legacy book may only have story_bible.md / book_rules.md on disk —
-    // we still serve those for read-only display, but flag them so the UI
-    // can warn users their edits won't reach the runtime.
-    // Hotfix: only tag as legacy when the book actually HAS the new layout.
-    // Pre-Phase-5 books use story_bible/book_rules as the authoritative source.
-    const { isNewLayoutBook } = await import("@actalk/inkos-core");
-    const legacy = LEGACY_SHIM_FILES.has(file) && await isNewLayoutBook(bookDir);
-
     try {
       const content = await readFile(resolved, "utf-8");
       const runtimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(file);
       return c.json({
         file,
         content,
-        ...(legacy ? { legacy: true } : {}),
         ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
       });
     } catch {
@@ -3335,7 +3170,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({
         file,
         content: null,
-        ...(legacy ? { legacy: true } : {}),
         ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
       });
     }
@@ -3361,11 +3195,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("write:start", { bookId: id });
 
-    // Fire and forget — progress/completion/errors pushed via SSE
     const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
-    pipeline.writeNextChapter(id, body.wordCount).then(
+    const tool = createWriteChaptersTool(pipeline, id);
+    executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: confirmedCapabilityBinding("write_next")!,
+      tool,
+      parameters: {
+        instruction: "Write the next chapter for the active Work.",
+        bookId: id,
+        chapterCount: 1,
+        ...(body.wordCount ? { chapterWordCount: body.wordCount } : {}),
+      },
+      workId: id,
+    }).then(
       (result) => {
-        broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount, observationCount: result.review.issues.length });
+        const data = result.data as { chapters?: ReadonlyArray<{ chapterNumber: number; title: string; wordCount: number; observations?: unknown[] }> } | undefined;
+        const chapter = data?.chapters?.at(-1);
+        broadcast("write:complete", {
+          bookId: id,
+          ...(chapter ? { chapterNumber: chapter.chapterNumber, title: chapter.title, wordCount: chapter.wordCount, observationCount: chapter.observations?.length ?? 0 } : {}),
+        });
       },
       (e) => {
         broadcast("write:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
@@ -3375,65 +3225,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ status: "writing", bookId: id });
   });
 
-  app.post("/api/v1/books/:id/draft", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ wordCount?: number; context?: string }>().catch(() => ({ wordCount: undefined, context: undefined }));
-
-    broadcast("draft:start", { bookId: id });
-
-    const pipeline = new PipelineRunner(await buildPipelineConfig());
-    pipeline.writeDraft(id, body.context, body.wordCount).then(
-      (result) => {
-        broadcast("draft:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
-      },
-      (e) => {
-        broadcast("draft:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
-      },
-    );
-
-    return c.json({ status: "drafting", bookId: id });
-  });
-
-  app.post("/api/v1/books/:id/consolidate", async (c) => {
-    const id = c.req.param("id");
-    try {
-      const pipelineConfig = await buildPipelineConfig();
-      const consolidator = new ConsolidatorAgent({
-        client: pipelineConfig.client,
-        model: pipelineConfig.model,
-        projectRoot: root,
-      });
-      const result = await consolidator.consolidate(state.bookDir(id));
-      broadcast("consolidate:complete", { bookId: id, ...result });
-      return c.json(result);
-    } catch (e) {
-      broadcast("consolidate:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/plan", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ context?: string }>().catch(() => ({ context: undefined }));
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      return c.json(await pipeline.planChapter(id, body.context));
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/compose", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ context?: string }>().catch(() => ({ context: undefined }));
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      return c.json(await pipeline.composeChapter(id, body.context));
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   app.post("/api/v1/books/:id/foundation/revise", async (c) => {
     const id = c.req.param("id");
     const { feedback } = await c.req.json<{ feedback?: string }>().catch(() => ({ feedback: undefined }));
@@ -3441,8 +3232,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "feedback is required" }, 400);
     }
     try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.reviseFoundation(id, feedback.trim());
+      const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_foundation", profileId: "longform-novel" },
+        tool: createFoundationRevisionTool(pipeline, id),
+        parameters: { instruction: feedback.trim(), bookId: id },
+        workId: id,
+      });
       broadcast("foundation:revised", { bookId: id });
       return c.json({ ok: true });
     } catch (e) {
@@ -4024,43 +3821,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json(result);
   });
 
-  app.get("/api/v1/prompt-packs", async (c) => {
-    const prompts = await Promise.all(
-      listBuiltinPrompts().map((prompt) => toStudioPromptPackPrompt(root, prompt)),
-    );
-    return c.json({
-      packs: listBuiltinPromptPacks(),
-      prompts,
-    });
-  });
-
-  app.put("/api/v1/prompt-packs/:promptId", async (c) => {
-    const promptId = normalizeStudioPromptId(c.req.param("promptId"));
-    const payload = await c.req.json().catch(() => {
-      throw new ApiError(400, "INVALID_PROMPT_PACK_PAYLOAD", "Prompt pack payload must be JSON");
-    });
-    const content = payload && typeof payload === "object" && "content" in payload
-      ? (payload as { readonly content?: unknown }).content
-      : undefined;
-    if (typeof content !== "string") {
-      throw new ApiError(400, "INVALID_PROMPT_PACK_PAYLOAD", "content must be a string");
-    }
-
-    const file = promptOverridePath(root, promptId);
-    await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, content, "utf-8");
-    const prompt = listBuiltinPrompts().find((item) => item.id === promptId);
-    return c.json({ prompt: await toStudioPromptPackPrompt(root, prompt!) });
-  });
-
-  app.delete("/api/v1/prompt-packs/:promptId", async (c) => {
-    const promptId = normalizeStudioPromptId(c.req.param("promptId"));
-    const file = promptOverridePath(root, promptId);
-    await rm(file, { force: true });
-    const prompt = listBuiltinPrompts().find((item) => item.id === promptId);
-    return c.json({ prompt: await toStudioPromptPackPrompt(root, prompt!) });
-  });
-
   app.post("/api/v1/skills/import", async (c) => {
     const payload = await c.req.json().catch(() => {
       throw new ApiError(400, "INVALID_SKILL_IMPORT", "Skill import payload must be JSON");
@@ -4126,7 +3886,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (rootName !== "works" || !workId || workPathParts.length === 0) {
       throw new ApiError(400, "INVALID_PROJECT_ARTIFACT_PATH", "Artifact must belong to a Work");
     }
-    const work = await loadWorkManifest(root, workId).catch(() => null);
+    const work = await loadWorkIfExists(root, workId);
     if (!work) throw new ApiError(404, "WORK_NOT_FOUND", `Work not found: ${workId}`);
     const path = workPathParts.join("/");
     const artifact = work.artifacts.find((candidate) => candidate.revisions.some((revision) => (
@@ -4214,21 +3974,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
     }
 
-    // Hotfix: only tag shim files as legacy when the book has the new layout.
-    const { isNewLayoutBook } = await import("@actalk/inkos-core");
-    const newLayout = await isNewLayoutBook(bookDir);
-
-    async function describe(relPath: string): Promise<{ readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true; readonly readonly?: true; readonly readonlyReason?: string } | null> {
+    async function describe(relPath: string): Promise<{ readonly name: string; readonly size: number; readonly preview: string; readonly readonly?: true; readonly readonlyReason?: string } | null> {
       try {
         const content = await readFile(join(storyDir, relPath), "utf-8");
-        const isShim = LEGACY_SHIM_FILES.has(relPath) && newLayout;
         const isRuntimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(relPath);
-        const entry: { readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true; readonly readonly?: true; readonly readonlyReason?: string } =
-          isShim
-            ? { name: relPath, size: content.length, preview: content.slice(0, 200), legacy: true }
-            : isRuntimeDiagnostic
-              ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true, readonlyReason: "runtime-diagnostic" }
-              : { name: relPath, size: content.length, preview: content.slice(0, 200) };
+        const entry = isRuntimeDiagnostic
+          ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true as const, readonlyReason: "runtime-diagnostic" }
+          : { name: relPath, size: content.length, preview: content.slice(0, 200) };
         return entry;
       } catch {
         return null;
@@ -4236,10 +3988,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
 
     try {
-      // Flat story/ files (legacy + runtime logs)
-      const flatFiles = (await listDir(".")).filter((f) => !f.startsWith("outline") && !f.startsWith("roles"));
-      // Phase 5 outline/ files
-      const outlineFiles = (await listDir("outline")).map((f) => `outline/${f}`);
+      const flatFiles = (await listDir(".")).filter((file) => TRUTH_FLAT_FILES.includes(file));
+      const outlineFiles = (await listDir("outline"))
+        .map((file) => `outline/${file}`)
+        .filter((file) => TRUTH_OUTLINE_FILES.includes(file));
       // Phase 5 roles/主要角色 + roles/次要角色, plus Phase hotfix 3
       // English-locale equivalents so en-language books are visible.
       const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`);
@@ -4553,7 +4305,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       : typeof requestedWorkId === "string" && requestedWorkId.trim()
         ? normalizeApiBookId(requestedWorkId, "workId")
         : surfaceBinding.workId;
-    const boundWork = workId ? await loadWorkManifest(root, workId).catch(() => null) : null;
+    const boundWork = workId ? await loadWorkIfExists(root, workId) : null;
     if (typeof requestedWorkId === "string" && requestedWorkId.trim() && !boundWork) {
       return c.json({ error: `Work not found: ${requestedWorkId.trim()}` }, 404);
     }
@@ -4736,7 +4488,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         ? null
         : requestedWorkId ?? bookSession.workId ?? surfaceBinding.workId;
       const boundWork = candidateWorkId
-        ? await loadWorkManifest(root, candidateWorkId).catch(() => null)
+        ? await loadWorkIfExists(root, candidateWorkId)
         : null;
       if (candidateWorkId && !boundWork && sessionKind !== "play") {
         throw new ApiError(404, "WORK_NOT_FOUND", `Work not found: ${candidateWorkId}`);
@@ -4778,7 +4530,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const requestedLanguage = actionPayload?.shortRun?.language ?? actionPayload?.createBook?.language;
       const surfaceLanguage = agentBookId
         ? (bookLanguage ?? configLanguage)
-        : (requestedLanguage ?? inferLanguage(instruction));
+        : (requestedLanguage ?? configLanguage);
       const streamSessionId = loadedBookSession.sessionId;
       const titleBeforeRun = bookSession.title;
       let sessionTitleBroadcasted = false;
@@ -4812,9 +4564,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           );
           resolvedModel = resolved.model;
           resolvedApiKey = resolved.apiKey;
-        } catch (e: any) {
-          const msg = e?.message ?? String(e);
-          if (/API key/i.test(msg)) {
+        } catch (e: unknown) {
+          if (e instanceof ServiceApiKeyNotFoundError) {
             return c.json({
               error: pick(language, `请先为 ${reqService} 配置 API Key`, `Configure an API Key for ${reqService} first`),
               response: pick(
@@ -4876,7 +4627,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
 
       if (!resolvedModel) {
-        // 4. Legacy fallback: use createLLMClient
+        // 4. Use the already resolved effective project client.
         resolvedModel = client._piModel
           ? client._piModel
           : { provider: config.llm.provider ?? "anthropic", modelId: config.llm.model } as any;
@@ -4887,7 +4638,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const agentApiKey = resolvedApiKey;
       const configuredEntry = reqService ? await resolveConfiguredServiceEntry(root, reqService) : undefined;
 
-      // Create pipeline with resolved model (so sub_agent tools use the frontend-selected model)
+      // Create pipeline with the frontend-selected model for capability workers.
       // Don't spread config.llm — its baseUrl/provider belong to the old service.
       // Let createLLMClient resolve baseUrl from the service preset.
       const pipelineClient = (reqService && reqModel && resolvedModel)
@@ -5015,16 +4766,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 throw new ApiError(500, "BOOK_CREATION_INCOMPLETE", message);
               }
               try {
-                const migratedSession = await migrateBookSession(root, bookSession.sessionId, createdBookId);
-                if (migratedSession) {
-                  bookSession = migratedSession;
+                const boundSession = await bindBookSessionToBook(root, bookSession.sessionId, createdBookId);
+                if (boundSession) {
+                  bookSession = boundSession;
                 }
               } catch (e) {
-                if (!(e instanceof SessionAlreadyMigratedError)) {
+                if (!(e instanceof SessionAlreadyBoundError)) {
                   throw e;
                 }
               }
-              const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
+              const book = await loadStudioBookListSummary(state, createdBookId);
               bookCreateStatus.delete(createdBookId);
               broadcast("book:created", {
                 bookId: createdBookId,
@@ -5036,7 +4787,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             if (!createdBookId && !bookSession.workId) {
               const createdWorkId = resolveCreatedWorkIdFromToolExec(exec);
               const createdWork = createdWorkId
-                ? await loadWorkManifest(root, createdWorkId).catch(() => null)
+                ? await loadWorkIfExists(root, createdWorkId)
                 : null;
               if (createdWork) {
                 bookSession = await createAndPersistBookSession(
@@ -5080,7 +4831,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          const failure = formatAgentActionFailure(message, surfaceLanguage);
+          const failure = formatAgentActionFailure(error, surfaceLanguage);
           if (pendingBookId) {
             bookCreateStatus.set(pendingBookId, { status: "error", error: message });
             broadcast("book:error", { bookId: pendingBookId, sessionId: streamSessionId, error: message });
@@ -5177,24 +4928,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             if (event.type === "tool_execution_start") {
               const toolName = capabilityActionId(event.toolName);
               const args = event.args as Record<string, unknown> | undefined;
-              const agent = toolName === "sub_agent" ? (args?.agent as string | undefined) : undefined;
-              const stages = agent ? (pipelineStages(agent, language) ?? []) : [];
 
               collectedToolExecs.push({
                 id: event.toolCallId,
                 tool: toolName,
-                agent,
-                label: resolveToolLabel(toolName, agent, language),
+                label: resolveToolLabel(toolName, undefined, language),
                 status: "running",
                 args,
-                stages: stages.length > 0
-                  ? stages.map(l => ({ label: l, status: "pending" as const }))
-                  : undefined,
                 startedAt: Date.now(),
               });
 
-              if (!agentBookId && toolName === "sub_agent" && agent === "architect") {
-                const bookId = resolveArchitectBookIdFromArgs(args);
+              if (!agentBookId && toolName === "create_book") {
+                const bookId = resolveCreatedBookIdFromArgs(args);
                 if (bookId) {
                   const title = typeof args?.title === "string" && args.title.trim()
                     ? args.title.trim()
@@ -5209,7 +4954,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 id: event.toolCallId,
                 tool: toolName,
                 args,
-                stages,
+                stages: [],
               });
             }
             if (event.type === "tool_execution_end") {
@@ -5224,10 +4969,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 if (
                   event.isError &&
                   !agentBookId &&
-                  exec.tool === "sub_agent" &&
-                  exec.agent === "architect"
+                  exec.tool === "create_book"
                 ) {
-                  const bookId = resolveArchitectBookIdFromArgs(exec.args);
+                  const bookId = resolveCreatedBookIdFromArgs(exec.args);
                   if (bookId) {
                     const error = exec.error ?? "Book creation failed";
                     bookCreateStatus.set(bookId, { status: "error", error });
@@ -5279,17 +5023,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         }
 
         try {
-          const migratedSession = await migrateBookSession(root, bookSession.sessionId, createdBookId);
-          if (migratedSession) {
-            bookSession = migratedSession;
+          const boundSession = await bindBookSessionToBook(root, bookSession.sessionId, createdBookId);
+          if (boundSession) {
+            bookSession = boundSession;
           }
         } catch (e) {
-          if (!(e instanceof SessionAlreadyMigratedError)) {
+          if (!(e instanceof SessionAlreadyBoundError)) {
             throw e;
           }
         }
 
-        const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
+        const book = await loadStudioBookListSummary(state, createdBookId);
         bookCreateStatus.delete(createdBookId);
         broadcast("book:created", {
           bookId: createdBookId,
@@ -5319,7 +5063,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           if (resolveCreatedBookIdFromToolExecs(collectedToolExecs)) {
             await finalizeCreatedBook();
           }
-          const failure = formatAgentFailure(result.errorMessage, language);
+          const failure = formatAgentFailure(result.errorMessage, language, "model");
           return c.json({
             error: { code: failure.code, message: failure.message },
             response: failure.message,
@@ -5387,29 +5131,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       if (e instanceof ApiError) {
         throw e;
       }
-      if (e instanceof SessionAlreadyMigratedError) {
-        const migratedMessage = e instanceof Error ? e.message : String(e);
-        throw new ApiError(409, "SESSION_ALREADY_MIGRATED", migratedMessage);
+      if (e instanceof SessionAlreadyBoundError) {
+        const boundMessage = e instanceof Error ? e.message : String(e);
+        throw new ApiError(409, "SESSION_ALREADY_BOUND", boundMessage);
       }
       const msg = e instanceof Error ? e.message : String(e);
       broadcast("agent:error", { instruction, activeBookId, sessionId, sessionKind: reqSessionKind, error: msg });
 
-      // Agent busy — return 429 with user-friendly message
-      if (/already processing|prompt.*queue/i.test(msg)) {
-        return c.json({
-          error: {
-            code: "AGENT_BUSY",
-            message: pick(language, "正在处理中，请等待当前操作完成", "Still processing. Wait for the current operation to finish"),
-          },
-          response: pick(
-            language,
-            "正在处理中，请等待当前操作完成后再发送。",
-            "Still processing. Wait for the current operation to finish before sending again.",
-          ),
-        }, 429);
-      }
-
-      const failure = formatAgentFailure(msg, language);
+      const failure = formatAgentFailure(e, language, "host");
       return c.json(
         { error: { code: failure.code, message: failure.message } },
         failure.status,
@@ -5439,29 +5168,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/books/:id/audit/:chapter", async (c) => {
     const id = c.req.param("id");
     const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-
     broadcast("audit:start", { bookId: id, chapter: chapterNum });
     try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      const currentConfig = await loadCurrentProjectConfig();
-      const { ContinuityAuditor } = await import("@actalk/inkos-core");
-      const auditor = new ContinuityAuditor({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
+      const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        bookId: id,
+        binding: { capabilityId: "longform", actionId: "review_chapter", profileId: "longform-novel" },
+        tool: createReviewChapterTool(pipeline, id),
+        parameters: { bookId: id, chapterNumber: chapterNum },
+        workId: id,
       });
-      const result = await auditor.auditChapter(bookDir, content, chapterNum, book.genre);
-      broadcast("review:complete", { bookId: id, chapter: chapterNum, observationCount: result.issues.length });
-      return c.json(result);
+      const result = action.data as { summary?: string; issues?: unknown[]; observations?: unknown[] } | undefined;
+      broadcast("review:complete", { bookId: id, chapter: chapterNum, observationCount: result?.observations?.length ?? 0 });
+      return c.json({ summary: result?.summary ?? action.summary, issues: result?.issues ?? [] });
     } catch (e) {
       broadcast("audit:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5473,32 +5192,29 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/books/:id/revise/:chapter", async (c) => {
     const id = c.req.param("id");
     const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-    const body = await c.req
-      .json<{ mode?: string; brief?: string }>()
-      .catch(() => ({ mode: "spot-fix", brief: undefined }));
+    const body = await c.req.json<{ mode?: string; brief?: string }>();
 
     broadcast("revise:start", { bookId: id, chapter: chapterNum });
     try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
         bookIdForSettings: id,
       }));
-      const normalizedMode = body.mode ?? "spot-fix";
-      const result = await pipeline.reviseDraft(
-        id,
-        chapterNum,
-        normalizedMode as "polish" | "rewrite" | "rework" | "spot-fix" | "anti-detect",
-      );
+      const normalizedMode = body.mode ?? DEFAULT_REVISE_MODE;
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel" },
+        tool: createReviseChapterTool(pipeline, id),
+        parameters: {
+          instruction: body.brief?.trim() || "Revise the chapter using its current review observations.",
+          bookId: id,
+          chapterNumber: chapterNum,
+          mode: normalizedMode,
+        },
+        workId: id,
+      });
       broadcast("revise:complete", { bookId: id, chapter: chapterNum });
-      return c.json(result);
+      return c.json(action.data ?? action);
     } catch (e) {
       broadcast("revise:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5667,16 +5383,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!resolved) {
       return c.json({ error: "Invalid truth file" }, 400);
     }
-    // Legacy story_bible pointer shims are read-only in new-layout books.
-    if (LEGACY_SHIM_FILES.has(file)) {
-      const { isNewLayoutBook } = await import("@actalk/inkos-core");
-      if (await isNewLayoutBook(bookDir)) {
-        return c.json(
-          { error: "Legacy compat shim; edit outline/story_frame.md instead" },
-          400,
-        );
-      }
-    }
     if (RUNTIME_DIAGNOSTIC_FILE_RE.test(file)) {
       return c.json({ error: "Runtime diagnostic files are read-only" }, 400);
     }
@@ -5756,14 +5462,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         externalContext: body.brief,
         bookIdForSettings: id,
       }));
-      const result = await pipeline.reviseDraft(id, chapterNum, "rework");
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel" },
+        tool: createReviseChapterTool(pipeline, id),
+        parameters: {
+          instruction: body.brief?.trim() || "Rework this chapter while preserving current Work authority.",
+          bookId: id,
+          chapterNumber: chapterNum,
+          mode: "rework",
+        },
+        workId: id,
+      });
+      const result = action.data as { chapterNumber?: number; wordCount?: number; changed?: boolean } | undefined;
       broadcast("rewrite:complete", {
         bookId: id,
-        chapterNumber: result.chapterNumber,
-        wordCount: result.wordCount,
-        changed: result.changed,
+        chapterNumber: result?.chapterNumber ?? chapterNum,
+        wordCount: result?.wordCount,
+        changed: result?.changed,
       });
-      return c.json({ status: "complete", bookId: id, chapter: chapterNum, result });
+      return c.json({ status: "complete", bookId: id, chapter: chapterNum, result: action.data ?? action });
     } catch (e) {
       broadcast("rewrite:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5780,9 +5498,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
+        bookIdForSettings: id,
       }));
-      const result = await pipeline.resyncChapterArtifacts(id, chapterNum);
-      return c.json(result);
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "resync_chapter_state", profileId: "longform-novel" },
+        tool: createResyncChapterStateTool(pipeline, id),
+        parameters: { bookId: id, chapterNumber: chapterNum },
+        workId: id,
+      });
+      return c.json(action.data ?? action);
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -5806,7 +5531,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // --- Style Analyze ---
 
   app.post("/api/v1/style/analyze", async (c) => {
-    const { text, sourceName } = await c.req.json<{ text: string; sourceName: string }>();
+    const { text, sourceName, language } = await c.req.json<{ text: string; sourceName: string; language?: "zh" | "en" }>();
     if (!text?.trim()) return c.json({ error: "text is required" }, 400);
 
     try {
@@ -5818,7 +5543,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         projectRoot: root,
         referenceText: text,
         sourceName: sourceName ?? "unknown",
-        language: inferLanguage(text) === "en" ? "en" : "zh",
+        language: language ?? (config.language === "en" ? "en" : "zh"),
       });
       return c.json({ guide });
     } catch (e) {
@@ -5993,26 +5718,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
-  // --- Fanfic Refresh ---
-
-  app.post("/api/v1/books/:id/fanfic/refresh", async (c) => {
-    const id = c.req.param("id");
-    const { sourceText, sourceName } = await c.req.json<{ sourceText: string; sourceName?: string }>();
-    if (!sourceText?.trim()) return c.json({ error: "sourceText is required" }, 400);
-
-    broadcast("fanfic:refresh:start", { bookId: id });
-    try {
-      const book = await state.loadBookConfig(id);
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importFanficCanon(id, sourceText, sourceName ?? "source", (book.fanficMode ?? "canon") as "canon");
-      broadcast("fanfic:refresh:complete", { bookId: id });
-      return c.json({ ok: true });
-    } catch (e) {
-      broadcast("fanfic:refresh:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   // --- Side-story (番外) init: companion book inheriting a parent's canon ---
 
   app.post("/api/v1/spinoff/init", async (c) => {
@@ -6067,7 +5772,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             chapterWordCount: bookConfig.chapterWordCount,
           },
         });
-        const book = await loadStudioBookListSummary(state, bookId).catch(() => undefined);
+        const book = await loadStudioBookListSummary(state, bookId);
         bookCreateStatus.delete(bookId);
         broadcast("spinoff:complete", { bookId });
         broadcast("book:created", { bookId, ...(book ? { book } : {}) });
@@ -6129,7 +5834,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             chapterWordCount: bookConfig.chapterWordCount,
           },
         });
-        const book = await loadStudioBookListSummary(state, bookId).catch(() => undefined);
+        const book = await loadStudioBookListSummary(state, bookId);
         bookCreateStatus.delete(bookId);
         broadcast("imitation:complete", { bookId });
         broadcast("book:created", { bookId, ...(book ? { book } : {}) });
@@ -6355,10 +6060,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     } catch (error) {
       if (error instanceof ApiError) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      const isUpstream = /API|LLM|provider|upstream|temporarily unavailable|rate limit|quota|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|503|502|504/i.test(message);
       throw new ApiError(
-        isUpstream ? 502 : 500,
-        "TRANSLATION_RUN_FAILED",
+        500,
+        "INKOS_TRANSLATION_ACTION_FAILED",
         message || "Translation run failed.",
       );
     }

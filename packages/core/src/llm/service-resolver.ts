@@ -15,6 +15,13 @@ export interface ResolvedModel {
   temperatureHint?: string;
 }
 
+export class ServiceApiKeyNotFoundError extends Error {
+  constructor(readonly service: string) {
+    super(`API key not found for service "${service}". Add it in .inkos/secrets.json or set the environment variable.`);
+    this.name = "ServiceApiKeyNotFoundError";
+  }
+}
+
 function resolveProviderCompat(
   provider: InkosEndpoint | undefined,
   baseUrl: string,
@@ -67,9 +74,7 @@ export async function resolveServiceModel(
   // such as Ollama can be used without forcing a fake secret.
   const apiKey = await getServiceApiKey(projectRoot, service);
   if (!apiKey && !isApiKeyOptionalForEndpoint({ provider: preset?.providerFamily, baseUrl: effectiveBaseUrl })) {
-    throw new Error(
-      `API key not found for service "${service}". Add it in .inkos/secrets.json or set the environment variable.`,
-    );
+    throw new ServiceApiKeyNotFoundError(service);
   }
 
   const model: Model<Api> = {

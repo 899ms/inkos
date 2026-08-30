@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { AutomationModeSchema, type AutomationMode } from "./modes.js";
 import { ExecutionStateSchema, InteractionEventSchema, type InteractionEvent } from "./events.js";
 import { assertSafeBookId, isSafeBookId } from "../utils/book-id.js";
 
@@ -7,15 +6,6 @@ export const SessionKindSchema = z.enum(["chat", "work", "book-create", "book", 
 export type SessionKind = z.infer<typeof SessionKindSchema>;
 export const PlayModeSchema = z.enum(["open", "guided"]);
 export type PlayMode = z.infer<typeof PlayModeSchema>;
-
-export const PendingDecisionSchema = z.object({
-  kind: z.string().min(1),
-  bookId: z.string().min(1),
-  chapterNumber: z.number().int().min(1).optional(),
-  summary: z.string().min(1),
-});
-
-export type PendingDecision = z.infer<typeof PendingDecisionSchema>;
 
 // TUI confirmations persist the already-validated action envelope returned by
 // propose_action. The action and payload are revalidated against the current
@@ -30,14 +20,14 @@ export const PendingProposedActionSchema = z.object({
   playMode: PlayModeSchema.optional(),
   requestedSkills: z.array(z.string().min(1)).optional(),
   actionPayload: z.record(z.unknown()).optional(),
-});
+}).strict();
 
 export type PendingProposedAction = z.infer<typeof PendingProposedActionSchema>;
 
 export const PipelineStageSchema = z.object({
   label: z.string(),
   status: z.enum(["pending", "active", "completed"]),
-});
+}).strict();
 
 export type PipelineStage = z.infer<typeof PipelineStageSchema>;
 
@@ -54,7 +44,7 @@ export const ToolExecutionSchema = z.object({
   stages: z.array(PipelineStageSchema).optional(),
   startedAt: z.number(),
   completedAt: z.number().optional(),
-});
+}).strict();
 
 export type ToolExecution = z.infer<typeof ToolExecutionSchema>;
 
@@ -66,45 +56,9 @@ export const InteractionMessageSchema = z.object({
   thinking: z.string().optional(),
   toolExecutions: z.array(ToolExecutionSchema).optional(),
   timestamp: z.number().int().nonnegative(),
-});
+}).strict();
 
 export type InteractionMessage = z.infer<typeof InteractionMessageSchema>;
-
-export const BookCreationDraftSchema = z.object({
-  concept: z.string().min(1),
-  title: z.string().min(1).optional(),
-  genre: z.string().min(1).optional(),
-  platform: z.string().min(1).optional(),
-  language: z.enum(["zh", "en"]).optional(),
-  targetChapters: z.number().int().min(1).optional(),
-  chapterWordCount: z.number().int().min(1).optional(),
-  blurb: z.string().min(1).optional(),
-  worldPremise: z.string().min(1).optional(),
-  settingNotes: z.string().min(1).optional(),
-  protagonist: z.string().min(1).optional(),
-  supportingCast: z.string().min(1).optional(),
-  conflictCore: z.string().min(1).optional(),
-  volumeOutline: z.string().min(1).optional(),
-  constraints: z.string().min(1).optional(),
-  authorIntent: z.string().min(1).optional(),
-  currentFocus: z.string().min(1).optional(),
-  nextQuestion: z.string().min(1).optional(),
-  missingFields: z.array(z.string().min(1)).default([]),
-  readyToCreate: z.boolean().default(false),
-});
-
-export type BookCreationDraft = z.infer<typeof BookCreationDraftSchema>;
-
-export const DraftRoundSchema = z.object({
-  roundId: z.number().int().min(1),
-  userMessage: z.string(),
-  assistantRaw: z.string(),
-  fieldsUpdated: z.array(z.string()).default([]),
-  summary: z.string().default(""),
-  timestamp: z.number().int().nonnegative(),
-});
-
-export type DraftRound = z.infer<typeof DraftRoundSchema>;
 
 export const InteractionSessionSchema = z.object({
   sessionId: z.string().min(1),
@@ -116,15 +70,11 @@ export const InteractionSessionSchema = z.object({
   modelOverride: z.string().min(1).optional(),
   activeBookId: z.string().min(1).optional(),
   activeChapterNumber: z.number().int().min(1).optional(),
-  creationDraft: BookCreationDraftSchema.optional(),
-  draftRounds: z.array(DraftRoundSchema).default([]),
-  automationMode: AutomationModeSchema.default("semi"),
   messages: z.array(InteractionMessageSchema).default([]),
   events: z.array(InteractionEventSchema).default([]),
-  pendingDecision: PendingDecisionSchema.optional(),
   pendingProposedAction: PendingProposedActionSchema.optional(),
   currentExecution: ExecutionStateSchema.optional(),
-});
+}).strict();
 
 export type InteractionSession = z.infer<typeof InteractionSessionSchema>;
 
@@ -140,24 +90,13 @@ export const BookSessionSchema = z.object({
   playMode: PlayModeSchema.optional(),
   title: z.string().nullable().default(null),
   messages: z.array(InteractionMessageSchema).default([]),
-  creationDraft: BookCreationDraftSchema.optional(),
-  draftRounds: z.array(DraftRoundSchema).default([]),
   events: z.array(InteractionEventSchema).default([]),
   currentExecution: ExecutionStateSchema.optional(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
-});
+}).strict();
 
 export type BookSession = z.infer<typeof BookSessionSchema>;
-
-// -- Global session (simplified) --
-
-export const GlobalSessionSchema = z.object({
-  activeBookId: z.string().refine(isSafeBookId, "Invalid activeBookId").optional(),
-  automationMode: AutomationModeSchema.default("semi"),
-});
-
-export type GlobalSession = z.infer<typeof GlobalSessionSchema>;
 
 export function createBookSession(
   bookId: string | null,
@@ -182,7 +121,6 @@ export function createBookSession(
     ...(options?.playMode ? { playMode: options.playMode } : {}),
     title: null,
     messages: [],
-    draftRounds: [],
     events: [],
     createdAt: now,
     updatedAt: now,
@@ -209,49 +147,6 @@ export function bindActiveBook(
     ...session,
     activeBookId: bookId,
     ...(chapterNumber !== undefined ? { activeChapterNumber: chapterNumber } : {}),
-  };
-}
-
-export function clearPendingDecision(session: InteractionSession): InteractionSession {
-  if (!session.pendingDecision) {
-    return session;
-  }
-
-  return {
-    ...session,
-    pendingDecision: undefined,
-  };
-}
-
-export function updateCreationDraft(
-  session: InteractionSession,
-  draft: BookCreationDraft,
-): InteractionSession {
-  return {
-    ...session,
-    creationDraft: draft,
-  };
-}
-
-export function clearCreationDraft(session: InteractionSession): InteractionSession {
-  if (!session.creationDraft) {
-    return session;
-  }
-
-  return {
-    ...session,
-    creationDraft: undefined,
-    draftRounds: [],
-  };
-}
-
-export function updateAutomationMode(
-  session: InteractionSession,
-  automationMode: AutomationMode,
-): InteractionSession {
-  return {
-    ...session,
-    automationMode,
   };
 }
 

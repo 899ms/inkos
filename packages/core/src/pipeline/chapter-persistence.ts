@@ -13,22 +13,13 @@ export async function persistChapterArtifacts(params: {
   readonly chapterTitle: string;
   readonly auditResult: AuditResult;
   readonly finalWordCount: number;
-  readonly lengthWarnings: ReadonlyArray<string>;
   readonly lengthTelemetry?: LengthTelemetry;
   readonly tokenUsage?: ChapterPersistenceUsage;
   readonly loadChapterIndex: () => Promise<ReadonlyArray<ChapterMeta>>;
-  readonly saveChapter: () => Promise<void>;
-  readonly saveTruthFiles: () => Promise<void>;
-  readonly saveChapterIndex: (index: ReadonlyArray<ChapterMeta>) => Promise<void>;
+  readonly saveChapter: (index: ReadonlyArray<ChapterMeta>) => Promise<void>;
   readonly markBookActiveIfNeeded: () => Promise<void>;
-  readonly snapshotState: () => Promise<void>;
-  readonly syncCurrentStateFactHistory: () => Promise<void>;
-  readonly logSnapshotStage: () => void;
   readonly now?: () => string;
 }): Promise<{ readonly entry: ChapterMeta }> {
-  await params.saveChapter();
-  await params.saveTruthFiles();
-
   const existingIndex = await params.loadChapterIndex();
   const now = params.now?.() ?? new Date().toISOString();
   const entry: ChapterMeta = {
@@ -43,7 +34,6 @@ export async function persistChapterArtifacts(params: {
       summary: issue.description,
       evidence: issue.suggestion ? [issue.suggestion] : [],
     })),
-    lengthWarnings: [...params.lengthWarnings],
     provenance: "generated",
     lengthTelemetry: params.lengthTelemetry,
     tokenUsage: params.tokenUsage,
@@ -52,12 +42,8 @@ export async function persistChapterArtifacts(params: {
   const updatedIndex = existingIdx >= 0
     ? existingIndex.map((e, i) => i === existingIdx ? { ...entry, createdAt: e.createdAt } : e)
     : [...existingIndex, entry];
-  await params.saveChapterIndex(updatedIndex);
+  await params.saveChapter(updatedIndex);
   await params.markBookActiveIfNeeded();
-
-  params.logSnapshotStage();
-  await params.snapshotState();
-  await params.syncCurrentStateFactHistory();
 
   return { entry };
 }

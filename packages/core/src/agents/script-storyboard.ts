@@ -108,7 +108,7 @@ export class ScriptCreationAgent extends LongFormProductionAgent {
       language,
       generate: (continuationMessages) => this.chat(continuationMessages, {
         temperature: 0.55,
-        maxTokens: estimateScriptMaxTokens(input),
+        maxTokens: this.ctx.client.defaults.maxTokens,
       }),
       onContinuation: (pass) => this.log?.warn(`[script] Output limit reached; continuing pass ${pass}.`),
       recoverAfterContinuation: (fragments) => this.recoverProductionMarkdown(
@@ -137,7 +137,7 @@ export class StoryboardCreationAgent extends LongFormProductionAgent {
       language,
       generate: (continuationMessages) => this.chat(continuationMessages, {
         temperature: 0.45,
-        maxTokens: estimateStoryboardMaxTokens(input),
+        maxTokens: this.ctx.client.defaults.maxTokens,
       }),
       onContinuation: (pass) => this.log?.warn(`[storyboard] Output limit reached; continuing pass ${pass}.`),
       recoverAfterContinuation: (fragments) => this.recoverProductionMarkdown(
@@ -166,7 +166,7 @@ export class InteractiveFilmCreationAgent extends LongFormProductionAgent {
       language,
       generate: (continuationMessages) => this.chat(continuationMessages, {
         temperature: 0.5,
-        maxTokens: estimateInteractiveFilmMaxTokens(input),
+        maxTokens: this.ctx.client.defaults.maxTokens,
       }),
       onContinuation: (pass) => this.log?.warn(`[interactive-film] Output limit reached; continuing pass ${pass}.`),
       recoverAfterContinuation: (fragments) => this.recoverProductionMarkdown(
@@ -251,10 +251,6 @@ export function renderScriptSpec(input: ScriptCreationInput): string {
       "## User Requirements",
       input.requirements?.trim() || "Not separately specified; follow the instruction the user confirmed.",
       "",
-      "## Adaptation Boundaries",
-      "- Preserve the characters, relationships, conflicts, key events, and taboos the user explicitly specified.",
-      "- Never decide adaptation intensity (\"faithful adaptation / commercial punch-up / low-budget shoot\") on the user's behalf; execute only the spec the user has confirmed.",
-      "",
       "## Source Material Summary",
       summarizeSourceForSpec(input.sourceText, "en"),
     ].join("\n");
@@ -271,10 +267,6 @@ export function renderScriptSpec(input: ScriptCreationInput): string {
     "## 用户要求",
     input.requirements?.trim() || "未单独指定；以用户确认时的 instruction 为准。",
     "",
-    "## 改编边界",
-    "- 优先保留用户明确指定的人物、关系、冲突、关键事件和禁忌。",
-    "- 不替用户擅自决定“忠实改编 / 商业强化 / 低成本拍摄”等强度；只执行用户已确认的规格。",
-    "",
     "## 源素材摘要",
     summarizeSourceForSpec(input.sourceText),
   ].join("\n");
@@ -286,9 +278,9 @@ export function renderStoryboardSpec(input: StoryboardCreationInput): string {
       `# ${input.title} Storyboard Creation Spec`,
       "",
       "## Goal",
-      `- Shot granularity: ${input.granularity?.trim() || "split by scene and key shots"}`,
-      `- Aspect ratio: ${input.aspectRatio?.trim() || "unspecified; default to what the user's material and target imply"}`,
-      `- Visual style: ${input.visualStyle?.trim() || "unspecified; judge from the user's material and target platform"}`,
+      `- Shot granularity: ${input.granularity?.trim() || "unspecified"}`,
+      `- Aspect ratio: ${input.aspectRatio?.trim() || "unspecified"}`,
+      `- Visual style: ${input.visualStyle?.trim() || "unspecified"}`,
       input.maxShots ? `- Shot cap: ${input.maxShots}` : "- Shot cap: unspecified",
       input.sourceKind
         ? `- Source material: ${input.sourceKind}`
@@ -296,10 +288,6 @@ export function renderStoryboardSpec(input: StoryboardCreationInput): string {
       "",
       "## User Requirements",
       input.requirements?.trim() || "Not separately specified; follow the instruction the user confirmed.",
-      "",
-      "## Storyboard Boundaries",
-      "- A storyboard is a creative tool, not a locked-in shooting plan; the output must stay easy to discuss, extend, trim, and re-shoot.",
-      "- Follow only the art style, format, composition, and visual constraints the user has confirmed; never turn unstated preferences into default hard constraints.",
       "",
       "## Source Material Summary",
       summarizeSourceForSpec(input.sourceText, "en"),
@@ -309,18 +297,14 @@ export function renderStoryboardSpec(input: StoryboardCreationInput): string {
     `# ${input.title} 分镜创作规格`,
     "",
     "## 目标",
-    `- 分镜粒度：${input.granularity?.trim() || "按场景和关键镜头拆分"}`,
-    `- 画幅：${input.aspectRatio?.trim() || "未指定，默认按用户素材目标判断"}`,
-    `- 视觉风格：${input.visualStyle?.trim() || "未指定，按用户素材和目标平台判断"}`,
+    `- 分镜粒度：${input.granularity?.trim() || "未指定"}`,
+    `- 画幅：${input.aspectRatio?.trim() || "未指定"}`,
+    `- 视觉风格：${input.visualStyle?.trim() || "未指定"}`,
     input.maxShots ? `- 镜头上限：${input.maxShots}` : "- 镜头上限：未指定",
     input.sourceKind ? `- 原素材：${input.sourceKind}` : "- 原素材：用户输入/对话需求",
     "",
     "## 用户要求",
     input.requirements?.trim() || "未单独指定；以用户确认时的 instruction 为准。",
-    "",
-    "## 分镜边界",
-    "- 分镜是创作工具，不替用户锁死最终拍法；输出要便于继续讨论、增删、改镜头。",
-    "- 只遵循用户已确认的画风、格式、构图和视觉限制；用户没说的，不写成默认硬限制。",
     "",
     "## 源素材摘要",
     summarizeSourceForSpec(input.sourceText),
@@ -353,10 +337,6 @@ export function renderInteractiveFilmSpec(input: InteractiveFilmCreationInput): 
       "## User Requirements",
       input.requirements?.trim() || "Not separately specified; follow the instruction the user confirmed.",
       "",
-      "## Interactive Film Boundaries",
-      "- Do not impose RPG stats, combat formulas, equipment tiers, or any other mechanics the user did not request.",
-      "- Never decide subject matter, budget, art style, or commercial punch-up intensity on the user's behalf; mark anything unspecified as adjustable.",
-      "",
       "## Source Material Summary",
       summarizeSourceForSpec(input.sourceText, "en"),
     ].join("\n");
@@ -376,10 +356,6 @@ export function renderInteractiveFilmSpec(input: InteractiveFilmCreationInput): 
     "",
     "## 用户要求",
     input.requirements?.trim() || "未单独指定；以用户确认时的 instruction 为准。",
-    "",
-    "## 互动影游边界",
-    "- 不擅自加入用户没有要求的 RPG 数值、战斗公式、装备等级或其他玩法系统。",
-    "- 不替用户擅自决定题材、预算、画风和商业强化强度；未指定处写为可调整。",
     "",
     "## 源素材摘要",
     summarizeSourceForSpec(input.sourceText),
@@ -421,7 +397,7 @@ function buildScriptCreationUserPrompt(input: ScriptCreationInput, language: "zh
       "",
       "## Script",
       "",
-      "Follow the target format. Vertical short drama: \"Episode N / scene slug / characters / action / dialogue / end-of-episode hook\". Standard screenplay: \"scene heading / action / character / dialogue\".",
+      "Use the target format defined by the activated Skill and confirmed spec.",
     ].join("\n");
   }
   return [
@@ -438,7 +414,7 @@ function buildScriptCreationUserPrompt(input: ScriptCreationInput, language: "zh
     "",
     "## 剧本正文",
     "",
-    "按目标格式输出。竖屏短剧使用“第N集 / 场次 / 人物 / 动作 / 对白 / 集尾钩子”；标准剧本使用“场景标题 / 动作 / 角色 / 对白”。",
+    "按已激活 Skill 和确认规格中的目标格式输出。",
   ].join("\n");
 }
 
@@ -456,7 +432,9 @@ function buildStoryboardCreationSystemPrompt(language: "zh" | "en" = "zh"): stri
 }
 
 function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, language: "zh" | "en" = "zh"): string {
-  const maxShots = input.maxShots ?? 24;
+  const maxShotsRule = input.maxShots
+    ? (language === "en" ? `Do not exceed ${input.maxShots} shots.` : `镜头总数不得超过 ${input.maxShots}。`)
+    : "";
   if (language === "en") {
     return [
       "## Storyboard Spec",
@@ -476,11 +454,11 @@ function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, langu
       "",
       "## Storyboard",
       "",
-      `Output at most ${maxShots} shots. Each shot includes: shot number, visual, characters/objects, action, shot size/camera, dialogue/captions, suggested duration, notes.`,
+      maxShotsRule,
       "",
       "## Image Prompts",
       "",
-      "Write one generation-ready image prompt per shot. Each prompt MUST be its own `Prompt: ...` line; never merge it into the storyboard body, table headers, or explanations. Include only the visual constraints the user has confirmed.",
+      "Write one image prompt per shot as a standalone `Prompt: ...` line.",
     ].join("\n");
   }
   return [
@@ -500,11 +478,11 @@ function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, langu
     "",
     "## 分镜表",
     "",
-    `输出不超过 ${maxShots} 个镜头。每个镜头包含：镜号、画面、人物/物件、动作、景别/机位、对白/字幕、时长建议、备注。`,
+    maxShotsRule,
     "",
     "## 图像提示词",
     "",
-    "为每个镜头写一条可用于生图的提示词。每条必须单独写成 `Prompt: ...`，不要混入分镜正文、表头或解释；只写用户确认过的视觉限制。",
+    "每个镜头对应一条独立的 `Prompt: ...` 图像提示词。",
   ].join("\n");
 }
 
@@ -537,19 +515,19 @@ function buildInteractiveFilmCreationUserPrompt(input: InteractiveFilmCreationIn
       `# ${input.title} Interactive Film Package`,
       "",
       "## Story Tree",
-      "Lay out main-line nodes, branch nodes, key choices, and merge/no-return relationships as Markdown. The multi-ending structure must be visible at a glance.",
+      "Provide the complete story tree using the activated Skill.",
       "",
       "## Variables and Flags",
-      "List each variable/flag: name, meaning, trigger, scope of impact, and related nodes. Variables may be relationships, states, evidence, items, identities, secret/public status, ending gates, and so on.",
+      "Provide the complete variables and flags surface using the activated Skill.",
       "",
       "## Ending Paths",
-      "For every ending: its unlock conditions, the key choice chain, the required variables/flags, plus any failure or hidden-ending conditions.",
+      "Provide every ending path and its conditions.",
       "",
       "## Interactive Script",
-      "Write a playable script per node: scene, characters, action, dialogue, player choices, variable changes, and branch destinations. Never write summaries only.",
+      "Provide the complete playable node scripts.",
       "",
       "## Storyboard and Image Prompts",
-      "List the key shots. Each shot includes visual, characters/objects, action, shot size, and suggested duration. After each shot, add exactly one standalone `Prompt: ...` line.",
+      "Provide the storyboard; each shot has one standalone `Prompt: ...` line.",
     ].join("\n");
   }
   return [
@@ -563,19 +541,19 @@ function buildInteractiveFilmCreationUserPrompt(input: InteractiveFilmCreationIn
     `# ${input.title} 互动影游方案`,
     "",
     "## 剧情树",
-    "用 Markdown 列出主线节点、分支节点、关键选择、回流/不可回流关系。必须能看出多结局结构。",
+    "按已激活 Skill 提交完整剧情树。",
     "",
     "## 变量与旗标表",
-    "列出变量/旗标名、含义、触发方式、影响范围、对应节点。变量可以是关系、状态、证据、物品、身份、公开/隐瞒、结局门槛等。",
+    "按已激活 Skill 提交完整变量与旗标面。",
     "",
     "## 多结局路径",
-    "列出每个结局的达成条件、关键选择链、必需变量/旗标，以及失败或隐藏结局条件。",
+    "提交全部结局路径及其条件。",
     "",
     "## 互动剧本",
-    "按节点写可演剧本：场景、人物、动作、对白、玩家选择、变量变化和分支去向。不要只写摘要。",
+    "提交完整可玩的节点剧本。",
     "",
     "## 分镜与图像提示词",
-    "列出关键镜头。每个镜头包含画面、人物/物件、动作、景别、时长建议。每个镜头后必须单独写一行 `Prompt: ...`。",
+    "提交分镜；每个镜头对应一条独立的 `Prompt: ...`。",
   ].join("\n");
 }
 
@@ -618,21 +596,4 @@ function summarizeSourceForSpec(sourceText: string | undefined, language: "zh" |
   }
   if (!text) return "未提供完整源素材。";
   return `已提供完整源素材，约 ${text.length} 字符；生成时会读取完整内容。`;
-}
-
-function estimateScriptMaxTokens(input: ScriptCreationInput): number {
-  const episodes = input.episodeCount ?? 6;
-  return Math.min(32000, Math.max(12000, episodes * 2200));
-}
-
-function estimateStoryboardMaxTokens(input: StoryboardCreationInput): number {
-  const shots = input.segment?.estimatedShots ?? input.maxShots ?? 24;
-  // Each shot includes both an editable shot record and a standalone image
-  // prompt. The old 700-token estimate cut off complete 13-shot scenes.
-  return Math.min(48000, Math.max(12000, shots * 1800));
-}
-
-function estimateInteractiveFilmMaxTokens(input: InteractiveFilmCreationInput): number {
-  const episodes = input.episodeCount ?? 6;
-  return Math.min(36000, Math.max(16000, episodes * 3000));
 }

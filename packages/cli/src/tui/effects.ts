@@ -8,7 +8,7 @@ import {
   clearLine, hideCursor, showCursor, reset,
   badge, sleep, stripAnsi, box,
 } from "./ansi.js";
-import { formatModeLabel, getTuiCopy, normalizeStageLabel, resolveTuiLocale, type TuiLocale } from "./i18n.js";
+import { getTuiCopy, normalizeStageLabel, resolveTuiLocale, type TuiLocale } from "./i18n.js";
 
 /* ── Operation themes ── */
 
@@ -368,67 +368,6 @@ export function printStyledHelp(): void {
     console.log(c(`  ${example}`, dim, italic));
   }
   console.log();
-}
-
-/* ── Status display ── */
-
-export function printStyledStatus(params: {
-  readonly mode: string;
-  readonly bookId?: string;
-  readonly status: string;
-  readonly events: ReadonlyArray<{ readonly kind: string; readonly detail?: string; readonly status: string }>;
-}): void {
-  const locale = resolveTuiLocale();
-  console.log();
-  for (const line of formatStyledStatusLines(locale, params)) {
-    console.log(line);
-  }
-  console.log();
-}
-
-export function formatStyledStatusLines(
-  locale: TuiLocale,
-  params: {
-    readonly mode: string;
-    readonly bookId?: string;
-    readonly status: string;
-    readonly events: ReadonlyArray<{ readonly kind: string; readonly detail?: string; readonly status: string }>;
-  },
-): string[] {
-  const copy = getTuiCopy(locale);
-  const modeColors: Record<string, string> = {
-    auto: green,
-    semi: yellow,
-    manual: blue,
-  };
-  const modeColor = modeColors[params.mode] ?? gray;
-  const statusColors: Record<string, string> = {
-    idle: gray,
-    running: cyan,
-    writing: magenta,
-    auditing: yellow,
-    completed: green,
-    failed: red,
-    waiting_human: brightYellow,
-  };
-  const statusColor = statusColors[params.status] ?? gray;
-  const modeLabel = copy.labels.mode;
-  const bookLabel = copy.labels.book;
-  const statusLabel = copy.labels.stage;
-  const recentLabel = copy.labels.recent;
-  const lines = [
-    `  ${c("◇", cyan)} ${c(modeLabel, gray)}     ${c(formatModeLabel(params.mode, copy), modeColor, bold)}`,
-    `  ${c("◇", cyan)} ${c(bookLabel, gray)}     ${params.bookId ? c(params.bookId, brightWhite) : c(copy.labels.none, dim)}`,
-    `  ${c("◇", cyan)} ${c(statusLabel, gray)}   ${c(normalizeStageLabel(params.status, copy), statusColor)}`,
-  ];
-  if (params.events.length > 0) {
-    lines.push(`  ${c("◇", cyan)} ${c(recentLabel, gray)}`);
-    for (const ev of params.events.slice(-3)) {
-      const icon = ev.status === "completed" ? c("✓", green) : c("·", gray);
-      lines.push(`        ${icon} ${c(`${ev.kind}`, dim)} ${c(ev.detail ?? "", gray)}`);
-    }
-  }
-  return lines;
 }
 
 /* ── Utilities ── */

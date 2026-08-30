@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import { StateManager, formatLengthCount, readGenreProfile, resolveLengthCountingMode } from "@actalk/inkos-core";
-import { findProjectRoot, getLegacyMigrationHint, log, logError } from "../utils.js";
+import { StateManager, formatLengthCount, resolveLengthCountingMode } from "@actalk/inkos-core";
+import { findProjectRoot, log, logError } from "../utils.js";
 
 export const statusCommand = new Command("status")
   .description("Show project status")
@@ -32,10 +32,8 @@ export const statusCommand = new Command("status")
       for (const id of bookIds) {
         const book = await state.loadBookConfig(id);
         const index = await state.loadChapterIndex(id);
-        const migrationHint = await getLegacyMigrationHint(root, id);
         const persistedChapterCount = await state.getPersistedChapterCount(id);
-        const { profile: genreProfile } = await readGenreProfile(root, book.genre);
-        const countingMode = resolveLengthCountingMode(book.language ?? genreProfile.language);
+        const countingMode = resolveLengthCountingMode(book.language);
 
         const observationCount = index.reduce((sum, chapter) => sum + chapter.observations.length, 0);
         const chaptersWithObservations = index.filter((chapter) => chapter.observations.length > 0).length;
@@ -54,7 +52,6 @@ export const statusCommand = new Command("status")
           avgWordsPerChapter: avgWords,
           observationCount,
           chaptersWithObservations,
-          ...(migrationHint ? { migrationHint } : {}),
           ...(opts.chapters ? {
             chapterList: index.map((ch) => ({
               number: ch.number,
@@ -73,9 +70,6 @@ export const statusCommand = new Command("status")
           log(`    Chapters: ${persistedChapterCount} / ${book.targetChapters}`);
           log(`    Words: ${totalWords.toLocaleString()} (avg ${avgWords}/ch)`);
           log(`    Review observations: ${observationCount} across ${chaptersWithObservations} chapter(s)`);
-          if (migrationHint) {
-            log(`    Migration: ${migrationHint}`);
-          }
 
           if (opts.chapters && index.length > 0) {
             log("");

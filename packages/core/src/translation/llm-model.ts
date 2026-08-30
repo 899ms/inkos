@@ -3,18 +3,18 @@ import { runWorkerAgentTool } from "../agent/worker-agent.js";
 import { Type } from "@sinclair/typebox";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
-import type { TranslationGlossaryTerm, TranslationModelPort, TranslationSegment } from "./types.js";
+import type { TranslationModelPort, TranslationSegment } from "./types.js";
 
 const TranslationResultToolSchema = Type.Object({
   chapterTitle: Type.Optional(Type.String()),
   segments: Type.Array(Type.Object({
     index: Type.Integer({ minimum: 0 }),
-    target: Type.String(),
+    target: Type.String({ minLength: 1 }),
     notes: Type.Optional(Type.String()),
   })),
   glossary: Type.Optional(Type.Array(Type.Object({
-    source: Type.String(),
-    target: Type.String(),
+    source: Type.String({ minLength: 1 }),
+    target: Type.String({ minLength: 1 }),
     note: Type.Optional(Type.String()),
   }))),
 });
@@ -61,11 +61,15 @@ export function createLLMTranslationModel(input: {
         parameters: TranslationResultToolSchema,
       }, { temperature: 0.2, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
       return {
-        ...(typeof parsed.chapterTitle === "string" && parsed.chapterTitle.trim()
+        ...(parsed.chapterTitle?.trim()
           ? { chapterTitle: parsed.chapterTitle.trim() }
           : {}),
-        segments: parseTranslatedSegments(parsed.segments, request.segments),
-        glossary: parseGlossary(parsed.glossary),
+        segments: validateTranslatedSegments(parsed.segments, request.segments),
+        glossary: (parsed.glossary ?? []).map((term) => ({
+          source: term.source.trim(),
+          target: term.target.trim(),
+          ...(term.note?.trim() ? { note: term.note.trim() } : {}),
+        })),
       };
     },
     async reviewChapter(request) {
@@ -98,50 +102,33 @@ export function createLLMTranslationModel(input: {
         parameters: TranslationReviewToolSchema,
       }, { temperature: 0.1, maxTokens: 4096, signal: input.signal });
       return {
-        summary: typeof parsed.summary === "string" ? parsed.summary : "Translation review completed.",
-        issues: Array.isArray(parsed.issues) ? parsed.issues.filter((issue): issue is string => typeof issue === "string") : [],
+        summary: parsed.summary,
+        issues: parsed.issues,
       };
     },
   };
 }
 
-function parseTranslatedSegments(value: unknown, sourceSegments: ReadonlyArray<TranslationSegment>): ReadonlyArray<{
+function validateTranslatedSegments(
+  value: ReadonlyArray<{ readonly index: number; readonly target: string; readonly notes?: string }>,
+  sourceSegments: ReadonlyArray<TranslationSegment>,
+): ReadonlyArray<{
   readonly index: number;
   readonly target: string;
   readonly notes?: string;
 }> {
-  if (!Array.isArray(value)) {
-    throw new Error("Translation model did not return a segments array.");
-  }
   const sourceIndex = new Set(sourceSegments.map((segment) => segment.index));
-  const parsed = value.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as Record<string, unknown>;
-    const index = Number(record.index);
-    const target = typeof record.target === "string" ? record.target.trim() : "";
-    if (!Number.isInteger(index) || !sourceIndex.has(index) || !target) return [];
-    return [{
-      index,
-      target,
-      ...(typeof record.notes === "string" && record.notes.trim() ? { notes: record.notes.trim() } : {}),
-    }];
-  });
-  if (parsed.length === 0) throw new Error("Translation model returned no usable translated segments.");
-  return parsed;
-}
-
-function parseGlossary(value: unknown): ReadonlyArray<TranslationGlossaryTerm> {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as Record<string, unknown>;
-    const source = typeof record.source === "string" ? record.source.trim() : "";
-    const target = typeof record.target === "string" ? record.target.trim() : "";
-    if (!source || !target) return [];
-    return [{
-      source,
-      target,
-      ...(typeof record.note === "string" && record.note.trim() ? { note: record.note.trim() } : {}),
-    }];
-  });
+  const byIndex = new Map<number, { readonly index: number; readonly target: string; readonly notes?: string }>();
+  for (const item of value) {
+    if (!sourceIndex.has(item.index)) throw new Error(`Translation returned unknown segment index ${item.index}.`);
+    if (byIndex.has(item.index)) throw new Error(`Translation returned duplicate segment index ${item.index}.`);
+    byIndex.set(item.index, {
+      index: item.index,
+      target: item.target.trim(),
+      ...(item.notes?.trim() ? { notes: item.notes.trim() } : {}),
+    });
+  }
+  const missing = sourceSegments.map((segment) => segment.index).filter((index) => !byIndex.has(index));
+  if (missing.length > 0) throw new Error(`Translation omitted segment index(es): ${missing.join(", ")}.`);
+  return sourceSegments.map((segment) => byIndex.get(segment.index)!);
 }

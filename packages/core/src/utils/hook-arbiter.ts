@@ -4,18 +4,15 @@ import {
   type NewHookCandidate,
   type RuntimeStateDelta,
 } from "../models/runtime-state.js";
-import { normalizeHookId } from "./story-markdown.js";
 
 export interface HookArbiterDecision {
-  readonly action: "created" | "rejected";
+  readonly action: "created";
   readonly reason: string;
   readonly hookId?: string;
   readonly candidate: NewHookCandidate;
 }
 
-interface PendingHookCandidate extends NewHookCandidate {
-  readonly preferredHookId?: string;
-}
+type PendingHookCandidate = NewHookCandidate;
 
 export function arbitrateRuntimeStateDeltaHooks(params: {
   readonly hooks: ReadonlyArray<HookRecord>;
@@ -29,10 +26,9 @@ export function arbitrateRuntimeStateDeltaHooks(params: {
   const workingHooks = params.hooks.map((hook) => ({ ...hook }));
   const knownHookIds = new Set(workingHooks.map((hook) => hook.hookId));
   const upsertsById = new Map<string, HookRecord>();
-  const mentions = new Set(delta.hookOps.mention);
-  const resolves = uniqueStrings(delta.hookOps.resolve);
-  const defers = uniqueStrings(delta.hookOps.defer);
-  const fallbackCandidates: PendingHookCandidate[] = [];
+  const mentions = uniqueHookIds(delta.hookOps.mention, "mention");
+  const resolves = uniqueHookIds(delta.hookOps.resolve, "resolve");
+  const defers = uniqueHookIds(delta.hookOps.defer, "defer");
   const decisions: HookArbiterDecision[] = [];
 
   for (const hook of delta.hookOps.upsert) {
@@ -43,22 +39,15 @@ export function arbitrateRuntimeStateDeltaHooks(params: {
       continue;
     }
 
-    fallbackCandidates.push({
-      type: hook.type,
-      expectedPayoff: hook.expectedPayoff,
-      notes: hook.notes,
-      preferredHookId: hook.hookId,
-    });
+    throw new Error(`Hook upsert references unknown hook id: ${hook.hookId}. Submit a newHookCandidate instead.`);
   }
 
-  for (const candidate of [...fallbackCandidates, ...delta.newHookCandidates]) {
-    if (params.allowNewHooks === false) {
-      decisions.push({
-        action: "rejected",
-        reason: "new_hooks_disabled",
-        candidate,
-      });
-      continue;
+  if (params.allowNewHooks === false && delta.newHookCandidates.length > 0) {
+    throw new Error("This settlement forbids new hooks, but the model submitted newHookCandidates.");
+  }
+  for (const candidate of delta.newHookCandidates) {
+    if (!candidate.type.trim() || !candidate.expectedPayoff.trim()) {
+      throw new Error("New hook candidates require non-empty type and expectedPayoff.");
     }
 
     const created = createCanonicalHook({
@@ -83,7 +72,7 @@ export function arbitrateRuntimeStateDeltaHooks(params: {
     ...delta,
     hookOps: {
       upsert: [...upsertsById.values()].sort(sortHooks),
-      mention: [...mentions]
+      mention: mentions
         .filter((hookId) => !upsertsById.has(hookId))
         .filter((hookId) => !resolves.includes(hookId))
         .filter((hookId) => !defers.includes(hookId))
@@ -117,14 +106,9 @@ function createCanonicalHook(params: {
 }
 
 function buildCanonicalHookId(
-  candidate: PendingHookCandidate,
+  _candidate: PendingHookCandidate,
   existingIds: ReadonlySet<string>,
 ): string {
-  const preferred = normalizeHookId(candidate.preferredHookId);
-  if (preferred && !existingIds.has(preferred)) {
-    return preferred;
-  }
-
   const base = "hook";
   let next = base;
   let suffix = 2;
@@ -153,6 +137,9 @@ function sortHooks(left: HookRecord, right: HookRecord): number {
     || left.hookId.localeCompare(right.hookId);
 }
 
-function uniqueStrings(values: ReadonlyArray<string>): string[] {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+function uniqueHookIds(values: ReadonlyArray<string>, operation: string): string[] {
+  const normalized = values.map((value) => value.trim());
+  if (normalized.some((value) => !value)) throw new Error(`Hook ${operation} contains an empty id.`);
+  if (new Set(normalized).size !== normalized.length) throw new Error(`Hook ${operation} contains duplicate ids.`);
+  return normalized;
 }

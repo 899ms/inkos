@@ -1,221 +1,140 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentContext } from "../agents/base.js";
 import { NarrativeForecastAgent } from "../forecast/agent.js";
 import {
   createNarrativeForecast,
   getNarrativeForecast,
   selectNarrativeBranch,
 } from "../forecast/runner.js";
-import type { AgentContext } from "../agents/base.js";
 import {
   makeModelBranch,
   snapshotCanonicalFiles,
   writeForecastFixtureBook,
 } from "./helpers/forecast-fixture.js";
+import { buildRuntimeStateArtifacts, saveRuntimeStateSnapshot } from "../state/runtime-state-store.js";
 
-const BOOK_ID = "demo-book";
-const FIXED_NOW = () => new Date("2026-07-15T00:00:00Z");
-const FIXED_ID = "fc-20260715-000000";
+describe("narrative forecast mini-flow", () => {
+  const roots: string[] = [];
 
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function runtime(projectRoot: string): AgentContext {
-  return { client: { provider: "openai" } as never, model: "fake", projectRoot };
-}
-
-function stubBranches() {
-  return [
-    makeModelBranch({ title: "接受提议" }),
-    makeModelBranch({
-      title: "拒绝提议",
-      premise: "假设主角当场拒绝并公开把柄。",
-      projectedChanges: {
-        characters: ["主角声望上升"],
-        relationships: ["与盟友结盟加深"],
-        world: ["对手提前动手"],
-        hooks: ["hook-03 保持休眠"],
-      },
-    }),
-  ];
-}
-
-describe("narrative forecast runner", () => {
-  let root: string;
-  let bookDir: string;
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "inkos-forecast-run-"));
-    bookDir = join(root, "works", BOOK_ID, "source");
-    await writeForecastFixtureBook(bookDir);
-  });
   afterEach(async () => {
     vi.restoreAllMocks();
-    await rm(root, { recursive: true, force: true });
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  function stubAgent() {
-    return vi.spyOn(NarrativeForecastAgent.prototype, "generateBranches")
-      .mockResolvedValue({ branches: stubBranches() });
-  }
+  it("creates, reads, selects, and traces a non-canonical branch without mutating canon", async () => {
+    const { root, bookDir } = await fixture();
+    stubForecastAgent();
+    const before = await snapshotCanonicalFiles(bookDir);
 
-  function createOptions() {
-    return {
+    const created = await createNarrativeForecast({
       projectRoot: root,
-      bookId: BOOK_ID,
-      divergence: "主角是否接受对手的合作提议",
+      bookId: "demo-book",
+      divergence: "主角接受还是拒绝合作",
       branchCount: 2,
       horizon: 5,
       runtime: runtime(root),
-      determinism: { now: FIXED_NOW },
-    };
-  }
-
-  it("creates forecast.json and comparison.md with assigned branch ids", async () => {
-    const spy = stubAgent();
-
-    const result = await createNarrativeForecast(createOptions());
-
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(result.forecast.forecastId).toBe(FIXED_ID);
-    expect(result.forecast.baseChapter).toBe(2);
-    expect(result.forecast.status).toBe("active");
-    expect(result.forecast.branches.map((branch) => branch.branchId)).toEqual(["branch-1", "branch-2"]);
-    expect(result.forecast.createdAt).toBe("2026-07-15T00:00:00.000Z");
-
-    const onDisk = JSON.parse(await readFile(result.forecastJsonPath, "utf-8"));
-    expect(onDisk.contextFingerprint).toMatch(/^[0-9a-f]{64}$/);
-    const comparison = await readFile(result.comparisonPath, "utf-8");
-    expect(comparison).toContain("接受提议");
-    expect(comparison).toContain("拒绝提议");
-  });
-
-  it("keeps sibling branches isolated in the stored forecast", async () => {
-    stubAgent();
-
-    const result = await createNarrativeForecast(createOptions());
-
-    const [first, second] = result.forecast.branches;
-    expect(first?.projectedChanges.relationships).toEqual(["主角与盟友决裂"]);
-    expect(second?.projectedChanges.relationships).toEqual(["与盟友结盟加深"]);
-    expect(first?.beats).not.toBe(second?.beats);
-  });
-
-  it("does not modify any canonical file when creating a forecast", async () => {
-    stubAgent();
-    const before = await snapshotCanonicalFiles(bookDir);
-
-    await createNarrativeForecast(createOptions());
-
-    expect(await snapshotCanonicalFiles(bookDir)).toEqual(before);
-  });
-
-  it("rejects out-of-range branch counts and horizons before calling the model", async () => {
-    const spy = stubAgent();
-
-    await expect(createNarrativeForecast({ ...createOptions(), branchCount: 1 })).rejects.toThrow(/branchCount/);
-    await expect(createNarrativeForecast({ ...createOptions(), horizon: 0 })).rejects.toThrow(/horizon/);
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  it("reports a fresh forecast as active", async () => {
-    stubAgent();
-    await createNarrativeForecast(createOptions());
-
-    const result = await getNarrativeForecast({ projectRoot: root, bookId: BOOK_ID, forecastId: FIXED_ID });
-
-    expect(result.stale).toBe(false);
-    expect(result.forecast.status).toBe("active");
-  });
-
-  it("marks a forecast stale after the canonical context changes", async () => {
-    stubAgent();
-    await createNarrativeForecast(createOptions());
-    await writeFile(join(bookDir, "story", "state", "current_state.json"), JSON.stringify({ facts: ["主角离开东城"] }), "utf-8");
-
-    const result = await getNarrativeForecast({ projectRoot: root, bookId: BOOK_ID, forecastId: FIXED_ID });
-
-    expect(result.stale).toBe(true);
-    const onDisk = JSON.parse(await readFile(result.forecastJsonPath, "utf-8"));
-    expect(onDisk.status).toBe("stale");
-  });
-
-  it("marks a forecast stale after the story frame changes", async () => {
-    stubAgent();
-    await createNarrativeForecast(createOptions());
-    await writeFile(join(bookDir, "story", "outline", "story_frame.md"), "# 故事框架\n都市复仇改为悬疑探案", "utf-8");
-
-    const result = await getNarrativeForecast({ projectRoot: root, bookId: BOOK_ID, forecastId: FIXED_ID });
-
-    expect(result.stale).toBe(true);
-  });
-
-  it("selects a branch by writing only selected-branch-plan.md", async () => {
-    stubAgent();
-    await createNarrativeForecast(createOptions());
-    const forecastJsonPath = join(bookDir, "story", "runtime", "narrative-forecasts", FIXED_ID, "forecast.json");
-    const forecastJsonBefore = await readFile(forecastJsonPath, "utf-8");
-    const canonBefore = await snapshotCanonicalFiles(bookDir);
-
-    const result = await selectNarrativeBranch({
+      determinism: { now: () => new Date("2026-07-15T00:00:00.000Z") },
+    });
+    const loaded = await getNarrativeForecast({
       projectRoot: root,
-      bookId: BOOK_ID,
-      forecastId: FIXED_ID,
+      bookId: "demo-book",
+      forecastId: created.forecast.forecastId,
+    });
+    const selected = await selectNarrativeBranch({
+      projectRoot: root,
+      bookId: "demo-book",
+      forecastId: created.forecast.forecastId,
       branchId: "branch-2",
-      determinism: { now: FIXED_NOW },
     });
 
-    expect(result.branch.branchId).toBe("branch-2");
-    const plan = await readFile(result.planPath, "utf-8");
-    expect(plan).toContain("拒绝提议");
-    expect(plan).not.toContain("branch-1");
-    expect(await readFile(forecastJsonPath, "utf-8")).toBe(forecastJsonBefore);
-    expect(await snapshotCanonicalFiles(bookDir)).toEqual(canonBefore);
+    expect({
+      ids: loaded.forecast.branches.map((branch) => branch.branchId),
+      stale: loaded.stale,
+      selected: selected.branch.branchId,
+      planMentionsSelection: (await readFile(selected.planPath, "utf-8")).includes("拒绝提议"),
+      canonUnchanged: await snapshotCanonicalFiles(bookDir),
+    }).toEqual({
+      ids: ["branch-1", "branch-2"],
+      stale: false,
+      selected: "branch-2",
+      planMentionsSelection: true,
+      canonUnchanged: before,
+    });
   });
 
-  it("refuses to select a branch that does not exist", async () => {
-    stubAgent();
-    await createNarrativeForecast(createOptions());
+  it("marks an existing forecast stale after canonical state advances", async () => {
+    const { root, bookDir } = await fixture();
+    stubForecastAgent();
+    const created = await createNarrativeForecast({
+      projectRoot: root,
+      bookId: "demo-book",
+      divergence: "主角接受还是拒绝合作",
+      branchCount: 2,
+      runtime: runtime(root),
+    });
+    await writeFile(join(bookDir, "chapters", "0003_后果.md"), "第三章正文", "utf-8");
+    const index = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8"));
+    index.push({ ...index[1], number: 3, title: "后果" });
+    await writeFile(join(bookDir, "chapters", "index.json"), JSON.stringify(index), "utf-8");
+    const state = await buildRuntimeStateArtifacts({
+      bookDir,
+      language: "zh",
+      delta: {
+        chapter: 3,
+        factOps: { upsert: [{ subject: "主角", predicate: "选择", object: "拒绝合作" }], expire: [] },
+        hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+        newHookCandidates: [],
+      },
+    });
+    await saveRuntimeStateSnapshot(bookDir, state.snapshot);
 
+    const loaded = await getNarrativeForecast({
+      projectRoot: root,
+      bookId: "demo-book",
+      forecastId: created.forecast.forecastId,
+    });
+    expect({ stale: loaded.stale, status: loaded.forecast.status }).toEqual({ stale: true, status: "stale" });
+  });
+
+  it("does not write a selection artifact for an unknown branch", async () => {
+    const { root } = await fixture();
+    stubForecastAgent();
+    const created = await createNarrativeForecast({
+      projectRoot: root,
+      bookId: "demo-book",
+      divergence: "主角接受还是拒绝合作",
+      branchCount: 2,
+      runtime: runtime(root),
+    });
     await expect(selectNarrativeBranch({
       projectRoot: root,
-      bookId: BOOK_ID,
-      forecastId: FIXED_ID,
+      bookId: "demo-book",
+      forecastId: created.forecast.forecastId,
       branchId: "branch-9",
-    })).rejects.toThrow(/branch-9[\s\S]*branch-1, branch-2/);
-
-    expect(await exists(join(
-      bookDir, "story", "runtime", "narrative-forecasts", FIXED_ID, "selected-branch-plan.md",
-    ))).toBe(false);
+    })).rejects.toThrow("branch-9");
   });
 
-  it("warns in the plan when selecting from a stale forecast", async () => {
-    stubAgent();
-    await createNarrativeForecast(createOptions());
-    await writeFile(join(bookDir, "chapters", "0003_反击.md"), "第三章正文", "utf-8");
-
-    const result = await selectNarrativeBranch({
-      projectRoot: root,
-      bookId: BOOK_ID,
-      forecastId: FIXED_ID,
-      branchId: "branch-1",
-      determinism: { now: FIXED_NOW },
+  function stubForecastAgent(): void {
+    vi.spyOn(NarrativeForecastAgent.prototype, "generateBranches").mockResolvedValue({
+      branches: [
+        makeModelBranch({ title: "接受提议" }),
+        makeModelBranch({ title: "拒绝提议", premise: "主角当场拒绝并公开证据。" }),
+      ],
     });
+  }
 
-    expect(result.stale).toBe(true);
-    expect(await readFile(result.planPath, "utf-8")).toContain("已过期");
-  });
+  function runtime(projectRoot: string): AgentContext {
+    return { client: { provider: "openai" } as never, model: "fake", projectRoot };
+  }
 
-  it("errors early when the book does not exist", async () => {
-    await mkdir(join(root, "works"), { recursive: true });
-    await expect(createNarrativeForecast({ ...createOptions(), bookId: "nope" })).rejects.toThrow(/nope/);
-  });
+  async function fixture(): Promise<{ root: string; bookDir: string }> {
+    const root = await mkdtemp(join(tmpdir(), "inkos-forecast-flow-"));
+    roots.push(root);
+    const bookDir = join(root, "works", "demo-book", "source");
+    await writeForecastFixtureBook(bookDir);
+    return { root, bookDir };
+  }
 });

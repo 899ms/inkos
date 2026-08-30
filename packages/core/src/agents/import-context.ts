@@ -50,8 +50,8 @@ export async function compileImportSource(input: {
       {
         role: "system",
         content: input.language === "en"
-          ? "Compile these source chapters into evidence-backed canon and continuation context. Preserve chronology, named facts, character knowledge, unresolved promises, and the exact ending state. Cite chapter numbers. Return Markdown only."
-          : "把这些源章节编译为有章节证据的正典与续写上下文。保留时间线、具名事实、角色知情边界、未解承诺和准确结尾状态，并引用章节号。只返回 Markdown。",
+          ? "Apply the activated import and continuation Skills to this complete source chunk. Return traceable Markdown only."
+          : "按已激活的导入与续写 Skill 处理这份完整源片段，只返回可追溯 Markdown。",
       },
       { role: "user", content: `Source chunk ${index + 1}/${chunks.length}\n\n${chunk}` },
     ], mergeActivatedSkillGuidance(input.activeSkills ?? [], skills)), {

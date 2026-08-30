@@ -1,4 +1,5 @@
 import { BaseAgent } from "./base.js";
+import { z } from "zod";
 import {
   countChapterLength,
   resolveLengthCountingMode,
@@ -51,6 +52,18 @@ export interface ShortFictionBatchDraft {
   readonly chapters: ReadonlyArray<ShortFictionChapter>;
   readonly rawContent: string;
 }
+
+export const ShortFictionBatchDraftSchema = z.object({
+  storyTitle: z.string().min(1),
+  openingHook: z.string().optional(),
+  chapters: z.array(z.object({
+    number: z.number().int().positive(),
+    title: z.string().min(1),
+    content: z.string(),
+    charCount: z.number().int().nonnegative(),
+  }).strict()),
+  rawContent: z.string(),
+}).strict();
 
 export interface ShortFictionSalesPackage {
   readonly title: string;
@@ -164,9 +177,7 @@ export class ShortFictionWriterAgent extends BaseAgent {
   }
 
   async continueDraft(input: ShortFictionDraftInput & { readonly draft: ShortFictionBatchDraft }): Promise<ShortFictionBatchDraft> {
-    const missingChapters = findIncompleteShortFictionChapters(input.draft, {
-      minimumChapterLength: minimumShortFictionChapterLength(input.charsPerChapter),
-    });
+    const missingChapters = findIncompleteShortFictionChapters(input.draft);
     if (missingChapters.length === 0) return input.draft;
 
     let currentDraft = input.draft;
@@ -247,15 +258,21 @@ export class ShortFictionPackagingAgent extends BaseAgent {
       }, { temperature: 0.45, maxTokens: 4096 });
 
     const result = response.result;
+    const title = result.title.trim();
+    const intro = result.intro.trim();
+    const sellingPoints = result.sellingPoints.map((point) => point.trim());
+    if (!title || !intro || sellingPoints.some((point) => !point)) {
+      throw new Error("Short-fiction packaging returned incomplete structured fields.");
+    }
     return {
-      title: result.title.trim() || input.draft.storyTitle,
-      intro: result.intro.trim(),
-      sellingPoints: result.sellingPoints.map((point) => point.trim()).filter(Boolean),
+      title,
+      intro,
+      sellingPoints,
       coverPrompt: result.coverPrompt.trim(),
       rawContent: [
-        `# ${result.title.trim() || input.draft.storyTitle}`,
-        `## Intro\n${result.intro.trim()}`,
-        `## Selling Points\n${result.sellingPoints.map((point) => `- ${point}`).join("\n")}`,
+        `# ${title}`,
+        `## Intro\n${intro}`,
+        `## Selling Points\n${sellingPoints.map((point) => `- ${point}`).join("\n")}`,
         `## Cover Prompt\n${result.coverPrompt.trim()}`,
       ].join("\n\n"),
     };
@@ -265,7 +282,7 @@ export class ShortFictionPackagingAgent extends BaseAgent {
 function mergeShortFictionBatch(
   current: ShortFictionBatchDraft | undefined,
   batch: {
-    readonly storyTitle?: string;
+    readonly storyTitle: string;
     readonly openingHook?: string;
     readonly chapters: ReadonlyArray<{ readonly number: number; readonly title: string; readonly content: string }>;
   },
@@ -274,23 +291,31 @@ function mergeShortFictionBatch(
 ): ShortFictionBatchDraft {
   const countingMode = resolveLengthCountingMode(language);
   const byNumber = new Map(current?.chapters.map((chapter) => [chapter.number, chapter]) ?? []);
+  const seen = new Set<number>();
   for (const chapter of batch.chapters) {
-    if (!Number.isInteger(chapter.number) || chapter.number < 1 || chapter.number > expectedChapters) continue;
+    if (!Number.isInteger(chapter.number) || chapter.number < 1 || chapter.number > expectedChapters) {
+      throw new Error(`Short-fiction batch returned invalid chapter number ${chapter.number}.`);
+    }
+    if (seen.has(chapter.number)) throw new Error(`Short-fiction batch returned duplicate chapter ${chapter.number}.`);
+    seen.add(chapter.number);
     const content = chapter.content.trim();
+    const title = chapter.title.trim();
+    if (!content || !title) throw new Error(`Short-fiction batch returned empty chapter ${chapter.number}.`);
     byNumber.set(chapter.number, {
       number: chapter.number,
-      title: chapter.title.trim() || fallbackChapterTitle(chapter.number, language),
+      title,
       content,
       charCount: countChapterLength(content, countingMode),
     });
   }
-  const storyTitle = batch.storyTitle?.trim() || current?.storyTitle || untitledShortTitle(language);
+  const storyTitle = batch.storyTitle.trim();
+  if (!storyTitle) throw new Error("Short-fiction batch returned an empty story title.");
   const openingHook = batch.openingHook?.trim() || current?.openingHook;
   const chapters = Array.from({ length: expectedChapters }, (_, index) => {
     const number = index + 1;
     return byNumber.get(number) ?? {
       number,
-      title: fallbackChapterTitle(number, language),
+      title: "",
       content: "",
       charCount: 0,
     };
@@ -305,13 +330,13 @@ function mergeShortFictionBatch(
 }
 export function validateShortFictionDraftForFinal(
   draft: ShortFictionBatchDraft,
-  options?: { readonly expectedChapters?: number; readonly minimumChapterLength?: number },
+  options?: { readonly expectedChapters?: number },
 ): void {
   if (options?.expectedChapters !== undefined && draft.chapters.length !== options.expectedChapters) {
     throw new Error(`Short-hit draft is incomplete; expected ${options.expectedChapters} chapters, got ${draft.chapters.length}.`);
   }
 
-  const invalidChapters = findIncompleteShortFictionChapters(draft, options);
+  const invalidChapters = findIncompleteShortFictionChapters(draft);
   if (invalidChapters.length > 0) {
     const details = invalidChapters
       .map((number) => {
@@ -329,11 +354,9 @@ export function findEmptyShortFictionChapters(draft: ShortFictionBatchDraft): nu
 
 export function findIncompleteShortFictionChapters(
   draft: ShortFictionBatchDraft,
-  options?: { readonly minimumChapterLength?: number },
 ): number[] {
-  const minimum = Math.max(1, Math.floor(options?.minimumChapterLength ?? 1));
   return draft.chapters
-    .filter((chapter) => !chapter.content.trim() || chapter.charCount < minimum)
+    .filter((chapter) => !chapter.content.trim())
     .map((chapter) => chapter.number);
 }
 
@@ -359,21 +382,8 @@ export function formatShortFictionChapterHeading(
   language: ShortFictionLanguage = "zh",
 ): string {
   const trimmed = title.trim();
-  if (!trimmed) return fallbackChapterTitle(number, language);
-  if (language === "en") {
-    if (new RegExp(`^Chapter\\s*${number}\\b`, "i").test(trimmed)) return trimmed;
-    return `Chapter ${number}: ${trimmed}`;
-  }
-  if (new RegExp(`^第\\s*${number}\\s*章`).test(trimmed)) return trimmed;
-  return `第${number}章 ${trimmed}`;
-}
-
-function untitledShortTitle(language: ShortFictionLanguage): string {
-  return language === "en" ? "Untitled Short Story" : "未命名短篇";
-}
-
-function fallbackChapterTitle(number: number, language: ShortFictionLanguage): string {
-  return language === "en" ? `Chapter ${number}` : `第${number}章`;
+  if (!trimmed) throw new Error(`Short-fiction chapter ${number} has no title.`);
+  return language === "en" ? `Chapter ${number}: ${trimmed}` : `第${number}章 ${trimmed}`;
 }
 
 // charsPerChapter is the language's native unit (zh chars / en words). The 2.2
@@ -389,13 +399,6 @@ function estimateShortFictionMaxTokens(
 }
 
 const MAX_SHORT_FICTION_CHAPTERS_PER_CALL = 1;
-
-export function minimumShortFictionChapterLength(targetLength: number): number {
-  // This is a corruption/truncation floor, not the editorial length target.
-  // Normal range observations remain stricter; this gate only prevents a title
-  // or a few lines from masquerading as a completed chapter.
-  return Math.max(120, Math.floor(targetLength * 0.2));
-}
 
 export function buildShortFictionChapterBatches(
   chapterNumbers: readonly number[],

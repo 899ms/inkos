@@ -11,7 +11,6 @@ import { join } from "node:path";
 export interface DetectChapterResult {
   readonly chapterNumber: number;
   readonly detection: DetectionResult;
-  readonly passed: boolean;
 }
 
 export async function detectChapter(
@@ -34,7 +33,6 @@ export async function detectChapter(
   return {
     chapterNumber,
     detection,
-    passed: detection.score <= config.threshold,
   };
 }
 
@@ -49,8 +47,8 @@ async function recordHistory(
   try {
     const raw = await readFile(historyPath, "utf-8");
     history = JSON.parse(raw);
-  } catch {
-    // File doesn't exist yet
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
   history.push(entry);
@@ -67,7 +65,8 @@ export async function loadDetectionHistory(
   try {
     const raw = await readFile(historyPath, "utf-8");
     return JSON.parse(raw);
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
 }

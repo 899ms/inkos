@@ -2,41 +2,38 @@ import { z } from "zod";
 
 const ProtagonistSchema = z.object({
   name: z.string(),
-  personalityLock: z.array(z.string()).default([]),
-  behavioralConstraints: z.array(z.string()).default([]),
-}).optional();
+  personalityLock: z.array(z.string()),
+  behavioralConstraints: z.array(z.string()),
+}).strict().optional();
 
 const GenreLockSchema = z.object({
   primary: z.string(),
-  forbidden: z.array(z.string()).default([]),
-}).optional();
+  forbidden: z.array(z.string()),
+}).strict().optional();
 
 const NumericalOverridesSchema = z.object({
   hardCap: z.union([z.number(), z.string()]).optional(),
-  resourceTypes: z.array(z.string()).default([]),
-}).optional();
+  resourceTypes: z.array(z.string()),
+}).strict().optional();
 
 const EraConstraintsSchema = z.object({
-  enabled: z.boolean().default(false),
+  enabled: z.boolean(),
   period: z.string().optional(),
   region: z.string().optional(),
-}).optional();
+}).strict().optional();
 
 export const BookRulesSchema = z.object({
-  version: z.string().default("1.0"),
+  version: z.literal("2"),
   protagonist: ProtagonistSchema,
   genreLock: GenreLockSchema,
-  // Narrative person, set ONLY when the user explicitly asked for one. Lenient:
-  // a stray/placeholder value degrades to undefined rather than breaking the
-  // whole book_rules parse (fail-open).
-  narrativePerson: z.enum(["first", "third"]).optional().catch(undefined),
+  narrativePerson: z.enum(["first", "third"]).optional(),
   numericalSystemOverrides: NumericalOverridesSchema,
   eraConstraints: EraConstraintsSchema,
-  prohibitions: z.array(z.string()).default([]),
-  enableFullCastTracking: z.boolean().default(false),
+  prohibitions: z.array(z.string()),
+  enableFullCastTracking: z.boolean(),
   fanficMode: z.enum(["canon", "au", "ooc", "cp"]).optional(),
-  allowedDeviations: z.array(z.string()).default([]),
-});
+  allowedDeviations: z.array(z.string()),
+}).strict();
 
 export type BookRules = z.infer<typeof BookRulesSchema>;
 

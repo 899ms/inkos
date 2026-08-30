@@ -62,7 +62,7 @@ export function buildShortFictionWriterUserPrompt(input: ShortFictionDraftPrompt
     "",
     language === "en" ? "## Plan" : "## 故事方案",
     input.outlineMarkdown,
-    ...(previous ? ["", language === "en" ? "## Accepted previous chapters" : "## 已接受的前文章节", previous] : []),
+    ...(previous ? ["", language === "en" ? "## Persisted previous chapters" : "## 已落盘前文章节", previous] : []),
   ].join("\n");
 }
 export function buildShortFictionDraftReviewSystemPrompt(language: ShortFictionLanguage = "zh"): string {
@@ -74,22 +74,22 @@ export function buildShortFictionDraftReviewSystemPrompt(language: ShortFictionL
 export function buildShortFictionDraftReviewUserPrompt(input: ShortFictionDraftReviewPromptInput, language: ShortFictionLanguage = "zh"): string {
   return [
     language === "en" ? "## Direction" : "## 创作方向", input.direction,
-    "", language === "en" ? "## Accepted plan" : "## 已接受方案", input.outlineMarkdown,
+    "", language === "en" ? "## Current plan" : "## 当前方案", input.outlineMarkdown,
     "", language === "en" ? "## Draft under review" : "## 待审正文", input.draftMarkdown,
   ].join("\n");
 }
 
 export function buildShortFictionPackageSystemPrompt(language: ShortFictionLanguage = "zh"): string {
   return language === "en"
-    ? "Package the accepted draft using the activated short-writing Skill. Preserve its actual title and plot, then submit through the package tool."
-    : "按已激活的短篇写作 Skill 包装已接受正文，保留实际标题与剧情，通过包装工具提交。";
+    ? "Package the persisted draft using the activated short-writing Skill. Preserve its actual title and plot, then submit through the package tool."
+    : "按已激活的短篇写作 Skill 包装已落盘正文，保留实际标题与剧情，通过包装工具提交。";
 }
 
 export function buildShortFictionPackageUserPrompt(input: ShortFictionPackagePromptInput, language: ShortFictionLanguage = "zh"): string {
   return [
     language === "en" ? "## Direction" : "## 创作方向", input.direction,
     "", language === "en" ? "## Plan" : "## 故事方案", input.outlineMarkdown.trim(),
-    "", language === "en" ? "## Accepted draft" : "## 已接受正文", input.draftMarkdown.trim(),
+    "", language === "en" ? "## Persisted draft" : "## 已落盘正文", input.draftMarkdown.trim(),
     "", language === "en" ? "## Existing title" : "## 当前标题", input.draftTitle,
   ].join("\n");
 }

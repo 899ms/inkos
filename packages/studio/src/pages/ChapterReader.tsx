@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { fetchJson, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
@@ -11,8 +11,6 @@ import {
   List,
   RotateCcw,
   BookOpen,
-  CheckCircle2,
-  XCircle,
   Hash,
   Type,
   Clock,
@@ -96,24 +94,6 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
     .join("\n")
     .trim();
 
-  const handleApprove = async () => {
-    try {
-      await postApi(`/books/${bookId}/chapters/${chapterNumber}/approve`);
-      nav.toBook(bookId);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Approve failed");
-    }
-  };
-
-  const handleReject = async () => {
-    try {
-      await postApi(`/books/${bookId}/chapters/${chapterNumber}/reject`);
-      nav.toBook(bookId);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Reject failed");
-    }
-  };
-
   const paragraphs = body.split(/\n\n+/).filter(Boolean);
 
   return (
@@ -179,20 +159,6 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
             </button>
           )}
 
-          <button
-            onClick={handleApprove}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-emerald-500/10 text-emerald-600 rounded-xl hover:bg-emerald-500 hover:text-white transition-all border border-emerald-500/20 shadow-sm"
-          >
-            <CheckCircle2 size={14} />
-            {t("reader.approve")}
-          </button>
-          <button
-            onClick={handleReject}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-destructive/10 text-destructive rounded-xl hover:bg-destructive hover:text-white transition-all border border-destructive/20 shadow-sm"
-          >
-            <XCircle size={14} />
-            {t("reader.reject")}
-          </button>
         </div>
       </div>
 

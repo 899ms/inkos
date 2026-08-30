@@ -413,10 +413,6 @@ export function formatFanficInvalidModeError(mode: string): string {
   return `Invalid fanfic mode: "${mode}". Valid modes: canon, au, ooc, cp（无效的同人模式："${mode}"，可选 canon、au、ooc、cp）`;
 }
 
-export function formatFanficSourceTooShortError(length: number): string {
-  return `Source material too short (${length} chars); provide at least 100 chars（源素材内容过短，仅 ${length} 字符，请提供至少 100 字符的原作素材）`;
-}
-
 export function formatFanficCanonMissingError(): string {
   return "No fanfic canon found for this book. Create one with `inkos fanfic init`（该书没有同人正典文件，用 inkos fanfic init 创建同人书）";
 }

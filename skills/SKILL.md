@@ -15,7 +15,7 @@ InkOS is a text-creation harness. The main Pi agent understands the request, act
 - Skills provide professional methods but never grant write permission.
 - Review returns evidence-backed observations. It does not score prose, reject a chapter, or authorize an automatic rewrite.
 - Revision is an explicit action. Preserve source revisions and report the new artifact revision.
-- Context remains complete until the active model budget requires semantic compaction. Protected intent and current facts are not compressed.
+- Context is assembled per task: LLM semantic selection chooses relevant source sections after deterministic candidate discovery. Protected intent and selected current facts are never compressed; lower-priority context is semantically compiled only on budget overflow.
 
 ## Creation profiles
 
@@ -48,16 +48,14 @@ inkos studio
 inkos tui
 inkos book create --title "My Story" --genre other --lang en
 inkos write next <book-id> --count 3
-inkos plan chapter <book-id>
-inkos audit <book-id> <chapter>
 inkos revise <book-id> <chapter> --mode rewrite
+inkos review <book-id>
 inkos short run --title "A Short Story"
 inkos fanfic init --title "Derived Story" --from source.txt --mode canon
-inkos consolidate <book-id>
 inkos export <book-id> --format epub
 ```
 
-`audit` produces qualitative observations. `consolidate` writes a derived volume-summary artifact and preserves source chapter summaries.
+Internal planning, semantic context selection, writing, state projection, and review are one Harness trajectory. `review` displays persisted qualitative observations.
 
 ## Revision modes
 

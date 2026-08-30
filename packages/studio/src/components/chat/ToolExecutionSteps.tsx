@@ -88,14 +88,6 @@ function encodeProjectPath(path: string): string {
   return path.split("/").map((part) => encodeURIComponent(part)).join("/");
 }
 
-function extractResultPath(result: string | undefined, label: string): string | null {
-  if (!result) return null;
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = result.match(new RegExp(`^${escaped}:\\s*(.+)$`, "im"));
-  const path = match?.[1]?.trim();
-  return path || null;
-}
-
 export interface GeneratedArtifactDetails {
   readonly kind: "short_fiction_created" | "cover_generated" | "script_created" | "storyboard_created" | "interactive_film_created";
   readonly title?: string;
@@ -267,7 +259,7 @@ function parseChapterContextTrace(value: unknown, chapterNumber?: number): Chapt
 }
 
 export function getChapterContextTraceDetails(exec: ToolExecution): ReadonlyArray<ChapterContextTraceDetails> {
-  if (exec.tool !== "sub_agent" || !exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return [];
+  if (exec.tool !== "write_chapters" || !exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return [];
   const details = exec.details as Record<string, unknown>;
   if (details.kind === "chapter_written") {
     const trace = parseChapterContextTrace(details.contextTrace, numberField(details, "chapterNumber"));
@@ -358,7 +350,7 @@ function parseChapterAuditIssues(value: unknown): ReadonlyArray<ChapterRevisionI
 }
 
 export function getChapterRevisionDetails(exec: ToolExecution): ChapterRevisionDetails | null {
-  if (exec.tool !== "sub_agent" || !exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return null;
+  if (exec.tool !== "revise_chapter" || !exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return null;
   const details = exec.details as Record<string, unknown>;
   if (details.kind !== "chapter_revision") return null;
   return {
@@ -553,8 +545,8 @@ function ScriptStoryboardResultPreview({ exec, onOpenFilmStudio }: { exec: ToolE
 function ShortFictionResultPreview({ exec }: { exec: ToolExecution }) {
   if (!["short_fiction_run", "generate_cover"].includes(exec.tool) || exec.status !== "completed") return null;
   const details = getGeneratedArtifactDetails(exec);
-  const coverPath = details?.coverImagePath ?? extractResultPath(exec.result, "Cover image");
-  const coverError = details?.coverError ?? extractResultPath(exec.result, "Cover image reason");
+  const coverPath = details?.coverImagePath;
+  const coverError = details?.coverError;
   if (!coverPath || !/\.(png|jpe?g|webp)$/iu.test(coverPath)) {
     if (!coverError) return null;
     return (
@@ -878,7 +870,12 @@ function hasStructuredResultPreview(exec: ToolExecution): boolean {
 }
 
 function isPipelineTool(tool: string): boolean {
-  return tool === "sub_agent"
+  return tool === "create_book"
+    || tool === "revise_foundation"
+    || tool === "write_chapters"
+    || tool === "review_chapter"
+    || tool === "revise_chapter"
+    || tool === "export_book"
     || tool === "resync_chapter_state"
     || tool === "context_compression"
     || tool === "propose_action"
@@ -909,7 +906,7 @@ function useElapsedTimer(startedAt: number, active: boolean): number {
   return elapsed;
 }
 
-// -- Pipeline operation (sub_agent) --
+// -- Capability operation --
 
 /**
  * Uncontrolled <details>: `open` only sets the initial state, so manual

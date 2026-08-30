@@ -21,7 +21,7 @@ export const ExecutionStateSchema = z.object({
   bookId: z.string().min(1).optional(),
   chapterNumber: z.number().int().min(1).optional(),
   stageLabel: z.string().min(1).optional(),
-});
+}).strict();
 
 export type ExecutionState = z.infer<typeof ExecutionStateSchema>;
 
@@ -32,7 +32,7 @@ export const InteractionEventSchema = z.object({
   bookId: z.string().min(1).optional(),
   chapterNumber: z.number().int().min(1).optional(),
   detail: z.string().min(1).optional(),
-});
+}).strict();
 
 export type InteractionEvent = z.infer<typeof InteractionEventSchema>;
 

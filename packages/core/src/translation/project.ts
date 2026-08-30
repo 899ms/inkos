@@ -1,7 +1,7 @@
 import { join, relative } from "node:path";
 import { toPosixPath } from "../utils/posix-path.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
-import { createAcceptedArtifact } from "../harness/artifact-revisions.js";
+import { createCurrentArtifact } from "../harness/artifact-revisions.js";
 import { createWorkManifest } from "../harness/work-store.js";
 import { WorkManifestSchema } from "../harness/contracts.js";
 import { extractTranslationSource } from "./source.js";
@@ -87,7 +87,7 @@ export async function createTranslationProjectFromFile(
     now,
     metadata: { sourceLanguage: manifest.sourceLanguage, targetLanguage: manifest.targetLanguage },
   });
-  const artifacts = writes.map((write, index) => createAcceptedArtifact({
+  const artifacts = writes.map((write, index) => createCurrentArtifact({
     artifactId: `translation-${index + 1}`,
     artifactKind: translationArtifactKind(write.relativePath),
     path: toPosixPath(relative(join("works", id), write.relativePath)),

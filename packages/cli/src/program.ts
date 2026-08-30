@@ -12,12 +12,8 @@ import { radarCommand } from "./commands/radar.js";
 import { upCommand, downCommand } from "./commands/daemon.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { exportCommand } from "./commands/export.js";
-import { draftCommand } from "./commands/draft.js";
-import { auditCommand } from "./commands/audit.js";
 import { reviseCommand } from "./commands/revise.js";
 import { agentCommand } from "./commands/agent.js";
-import { planCommand } from "./commands/plan.js";
-import { composeCommand } from "./commands/compose.js";
 import { genreCommand } from "./commands/genre.js";
 import { updateCommand } from "./commands/update.js";
 import { detectCommand } from "./commands/detect.js";
@@ -29,7 +25,6 @@ import { shortCommand } from "./commands/short-fiction.js";
 import { forecastCommand } from "./commands/forecast.js";
 import { translateCommand } from "./commands/translate.js";
 import { createStudioCommand, launchStudioEntry } from "./commands/studio.js";
-import { consolidateCommand } from "./commands/consolidate.js";
 import { createInteractCommand, type InteractCommandHooks } from "./commands/interact.js";
 import { createTuiCommand } from "./commands/tui.js";
 import { launchTui } from "./tui/app.js";
@@ -81,12 +76,8 @@ export function createProgram(hooks: ProgramHooks = {}): Command {
   program.addCommand(downCommand);
   program.addCommand(doctorCommand);
   program.addCommand(exportCommand);
-  program.addCommand(draftCommand);
-  program.addCommand(auditCommand);
   program.addCommand(reviseCommand);
   program.addCommand(agentCommand);
-  program.addCommand(planCommand);
-  program.addCommand(composeCommand);
   program.addCommand(genreCommand);
   program.addCommand(updateCommand);
   program.addCommand(detectCommand);
@@ -101,7 +92,6 @@ export function createProgram(hooks: ProgramHooks = {}): Command {
     launchStudio: hooks.launchStudio,
     recentProjectPath: hooks.studioRecentProjectPath,
   }));
-  program.addCommand(consolidateCommand);
   program.addCommand(createInteractCommand({
     readInput: hooks.readInteractionInput,
   }));

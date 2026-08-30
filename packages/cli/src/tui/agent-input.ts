@@ -2,7 +2,6 @@ import {
   ActionPayloadSchema,
   CreativeEpisodeStore,
   appendInteractionMessage,
-  clearPendingDecision,
   createLLMClient,
   RequestedIntentSchema,
   runAgentSession,
@@ -91,7 +90,7 @@ export async function processTuiAgentInput(params: {
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message) => ({ role: message.role, content: message.content }));
 
-  let nextSession = appendInteractionMessage(clearPendingDecision({
+  let nextSession = appendInteractionMessage({
     ...params.session,
     sessionKind: route.sessionKind,
     profileId: harnessBinding.profileId,
@@ -104,7 +103,7 @@ export async function processTuiAgentInput(params: {
       ...(params.session.activeChapterNumber ? { chapterNumber: params.session.activeChapterNumber } : {}),
       stageLabel: "agent",
     },
-  }), {
+  }, {
     role: "user",
     content: params.input,
     timestamp: userTimestamp,

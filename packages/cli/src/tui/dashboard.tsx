@@ -13,7 +13,7 @@ import { renderComposerDisplay } from "./composer-display.js";
 import { renderMarkdown } from "./markdown.js";
 import { buildDashboardViewModel, type DashboardMessageRow } from "./dashboard-model.js";
 import { buildInputHistory, moveHistoryCursor } from "./input-history.js";
-import { formatModeLabel, getTuiCopy, normalizeStageLabel, type TuiLocale } from "./i18n.js";
+import { getTuiCopy, normalizeStageLabel, type TuiLocale } from "./i18n.js";
 import { loadProjectSession, persistProjectSession, resolveSessionActiveBook } from "./session-store.js";
 import { classifyLocalTuiCommand, parseDepthCommand, parseModelCommand } from "./local-commands.js";
 import {
@@ -328,7 +328,7 @@ export function InkTuiApp(props: InkTuiAppProps): React.JSX.Element {
             session.currentExecution?.stageLabel ?? session.currentExecution?.status ?? "idle",
             copy,
           );
-          appendSystemNote(copy.notes.status(stage, formatModeLabel(session.automationMode, copy)));
+          appendSystemNote(copy.notes.status(stage));
           return;
         }
 

@@ -2,6 +2,8 @@ import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { commitAtomicFileSet } from "../../utils/atomic-file-set.js";
 import { loadWorkManifest } from "../work-store.js";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 const ReplaceWorkArtifactParams = Type.Object({
   path: Type.String({ description: "Exact current source/ artifact path shown by the Work inspector or read context." }),
@@ -17,7 +19,7 @@ export function createReplaceWorkArtifactTool(
     name: "replace_work_artifact",
     label: "Replace Work Artifact",
     description:
-      "Replace one registered text artifact in the current Work. The path must already be the accepted source/ revision; " +
+      "Replace one registered text artifact in the current Work. The path must already be the current source/ revision; " +
       "this cannot create arbitrary files or edit binary artifacts.",
     parameters: ReplaceWorkArtifactParams,
     async execute(_toolCallId, params: Static<typeof ReplaceWorkArtifactParams>) {
@@ -37,6 +39,8 @@ export function createReplaceWorkArtifactTool(
       if (params.expectedRevisionId && params.expectedRevisionId !== current.id) {
         throw new Error(`Work artifact changed: expected ${params.expectedRevisionId}, current ${current.id}`);
       }
+      const currentContent = await readFile(join(projectRoot, "works", workId, current.path), "utf-8");
+      if (currentContent === params.content) throw new Error(`Work artifact already has the supplied content: ${current.path}`);
       await commitAtomicFileSet({
         rootDir: projectRoot,
         writes: [{ relativePath: `works/${workId}/${current.path}`, content: params.content }],

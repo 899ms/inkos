@@ -30,10 +30,17 @@ import {
   createShortFictionRunTool,
   createSpinoffBookTool,
   createStoryboardCreationTool,
-  createSubAgentTool,
   createImitationBookTool,
   type ProposedActionName,
 } from "../agent/agent-tools.js";
+import {
+  createBookFoundationTool,
+  createFoundationRevisionTool,
+  createReviewChapterTool,
+  createReviseChapterTool,
+  createWriteChaptersTool,
+} from "./tools/longform-production.js";
+import { createExportBookTool } from "./tools/export-book.js";
 import {
   createPatchChapterTextTool,
   createRenameEntityTool,
@@ -69,6 +76,7 @@ import {
 import { loadWorkManifest } from "./work-store.js";
 import { syncWorkSourceArtifacts } from "./source-sync.js";
 import { ObservationSchema, type Observation } from "../models/observation.js";
+import { StateManager } from "../state/manager.js";
 
 export interface ProductionCapabilityEnvironment {
   readonly pipeline: PipelineRunner;
@@ -134,8 +142,8 @@ export interface ConfirmedCapabilityBinding {
 }
 
 const CONFIRMED_CAPABILITY_BINDINGS: Readonly<Partial<Record<RequestedIntent, ConfirmedCapabilityBinding>>> = {
-  create_book: { capabilityId: "longform", actionId: "sub_agent", profileId: "longform-novel" },
-  write_next: { capabilityId: "longform", actionId: "sub_agent", profileId: "longform-novel" },
+  create_book: { capabilityId: "longform", actionId: "create_book", profileId: "longform-novel" },
+  write_next: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel" },
   short_run: { capabilityId: "short-fiction", actionId: "short_fiction_run", profileId: "short-fiction" },
   play_start: { capabilityId: "interactive-world", actionId: "play_start", profileId: "interactive-world" },
   play_step: { capabilityId: "interactive-world", actionId: "play_step", profileId: "interactive-world" },
@@ -205,12 +213,19 @@ export function createProductionCapabilityRegistry(
 
   const longformTools: ProductionAgentTool[] = environment.work
     ? [
-        createSubAgentTool(environment.pipeline, environment.work.id, environment.projectRoot, {
-          actionPayload: environment.actionPayload,
-          language: lang,
-          activeSkills: environment.activeSkills,
-          workerSkills: environment.workerSkills,
+        createFoundationRevisionTool(environment.pipeline, environment.work.id, {
+          language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
         }),
+        createWriteChaptersTool(environment.pipeline, environment.work.id, {
+          language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
+        }),
+        createReviewChapterTool(environment.pipeline, environment.work.id, {
+          language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
+        }),
+        createReviseChapterTool(environment.pipeline, environment.work.id, {
+          language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
+        }),
+        createExportBookTool(new StateManager(environment.projectRoot), environment.work.id),
         createWriteTruthFileTool(environment.projectRoot, environment.work.id),
         createRenameEntityTool(environment.projectRoot, environment.work.id),
         createPatchChapterTextTool(environment.projectRoot, environment.work.id),
@@ -229,15 +244,14 @@ export function createProductionCapabilityRegistry(
         createGrepTool(environment.projectRoot),
         createLsTool(environment.projectRoot),
       ]
-    : [createSubAgentTool(environment.pipeline, null, environment.projectRoot, {
+    : [createBookFoundationTool(environment.pipeline, {
         actionPayload: environment.actionPayload,
-        architectCreateOnly: true,
         language: lang,
         activeSkills: environment.activeSkills,
         workerSkills: environment.workerSkills,
       })];
   registerToolCapability(registry, "longform", "Long-form creation", longformTools, {
-    forceConfirmation: environment.work ? [] : ["sub_agent"],
+    forceConfirmation: environment.work ? [] : ["create_book"],
   });
 
   registerToolCapability(registry, "short-fiction", "Short fiction", [
@@ -314,6 +328,7 @@ export function createProductionCapabilityRegistry(
         environment.playMode,
         {
           actionPayload: environment.actionPayload,
+          language: lang,
           defaultSkills: environment.profileSkills?.("interactive-world"),
           activeSkills: environment.activeSkills,
         },
@@ -431,7 +446,13 @@ function toolBackedAction(
     async execute(context: CapabilityExecutionContext, input: unknown): Promise<ActionResult> {
       const before = await loadKnownWork(context.projectRoot, context.work?.id);
       const result = await tool.execute(context.episodeId, input, context.signal, context.onUpdate);
-      return normalizeToolResult(context, result, before, risk !== "read");
+      return normalizeToolResult(
+        context,
+        result,
+        before,
+        risk !== "read",
+        tool.label || tool.name,
+      );
     },
   });
 }
@@ -447,6 +468,7 @@ async function normalizeToolResult(
   result: AgentToolResult<unknown>,
   before: WorkManifest | null,
   syncArtifacts: boolean,
+  summary: string,
 ): Promise<ActionResult> {
   const content = result.content
     .filter((item): item is Extract<typeof item, { type: "text" }> => item.type === "text")
@@ -457,7 +479,10 @@ async function normalizeToolResult(
   const isError = (result as { isError?: boolean }).isError === true;
   const workIds = new Set<string>();
   if (syncArtifacts && context.work) workIds.add(context.work.id);
-  collectWorkIds(details, workIds);
+  if (details && typeof details === "object") {
+    const workId = (details as Record<string, unknown>).workId;
+    if (typeof workId === "string" && workId) workIds.add(workId);
+  }
   const artifacts: ActionArtifactRef[] = [];
   for (const workId of workIds) {
     if (await loadKnownWork(context.projectRoot, workId)) {
@@ -486,55 +511,32 @@ async function normalizeToolResult(
       });
     }
   }
+  if (isError) throw new Error(content || "Capability tool execution failed.");
   const observations = extractObservations(details);
-  const status = isError ? "error" : "success";
-  const summary = content.split("\n").map((line) => line.trim()).find(Boolean)
-    ?? (status === "error" ? "Action failed." : "Action completed.");
   return ActionResultSchema.parse({
-    status,
+    status: "success",
     summary,
     ...(content ? { content } : {}),
     nextActions: [],
     artifacts,
     observations,
     ...(details === undefined ? {} : { data: details }),
-    ...(status === "error" ? { retry: { allowed: true } } : {}),
   });
 }
 
 function extractObservations(details: unknown): Observation[] {
   if (!details || typeof details !== "object") return [];
   const raw = (details as Record<string, unknown>).observations;
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item, index) => {
-    const parsed = ObservationSchema.safeParse(item);
-    if (parsed.success) return [parsed.data];
-    if (!item || typeof item !== "object") return [];
-    const record = item as Record<string, unknown>;
-    if (typeof record.description !== "string") return [];
-    return [ObservationSchema.parse({
-      code: typeof record.category === "string" && record.category ? record.category : `review-${index + 1}`,
-      kind: "soft",
-      summary: record.description,
-      evidence: typeof record.suggestion === "string" && record.suggestion ? [record.suggestion] : [],
-    })];
-  });
-}
-
-function collectWorkIds(value: unknown, target: Set<string>): void {
-  if (!value || typeof value !== "object") return;
-  const record = value as Record<string, unknown>;
-  for (const key of ["workId", "bookId", "storyId", "projectId", "worldId"]) {
-    if (typeof record[key] === "string" && record[key]) target.add(record[key]);
-  }
-  if (record.data && record.data !== value) collectWorkIds(record.data, target);
+  if (raw === undefined) return [];
+  return ObservationSchema.array().parse(raw);
 }
 
 async function loadKnownWork(projectRoot: string, workId: string | undefined): Promise<WorkManifest | null> {
   if (!workId) return null;
   try {
     return await loadWorkManifest(projectRoot, workId);
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }

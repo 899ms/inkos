@@ -1,5 +1,5 @@
 // Models
-export { type BookConfig, type Platform, type Genre, type BookStatus, type FanficMode, BookConfigSchema, PlatformSchema, GenreSchema, BookStatusSchema, FanficModeSchema, normalizePlatformId, normalizePlatformOrOther } from "./models/book.js";
+export { type BookConfig, type Platform, type Genre, type BookStatus, type FanficMode, BookConfigSchema, PlatformSchema, GenreSchema, BookStatusSchema, FanficModeSchema } from "./models/book.js";
 export { type ChapterMeta, ChapterMetaSchema } from "./models/chapter.js";
 export { type Observation, ObservationSchema } from "./models/observation.js";
 export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionConfig, type AgentLLMOverride, type ResearchSearchConfig, ProjectConfigSchema, LLMConfigSchema, AgentLLMOverrideSchema, DetectionConfigSchema, ResearchSearchConfigSchema } from "./models/project.js";
@@ -18,7 +18,9 @@ export {
   type ChapterSummariesState,
   type CurrentStateFact,
   type CurrentStateState,
-  type CurrentStatePatch,
+  type StateFactInput,
+  type StateFactSelector,
+  type StateFactOps,
   type HookOps,
   type NewHookCandidate,
   type RuntimeStateDelta,
@@ -31,7 +33,9 @@ export {
   ChapterSummariesStateSchema,
   CurrentStateFactSchema,
   CurrentStateStateSchema,
-  CurrentStatePatchSchema,
+  StateFactInputSchema,
+  StateFactSelectorSchema,
+  StateFactOpsSchema,
   HookOpsSchema,
   NewHookCandidateSchema,
   RuntimeStateDeltaSchema,
@@ -82,7 +86,7 @@ export {
 } from "./play/play-agents.js";
 export { PlayDB } from "./play/play-db.js";
 export { createPlayDB, type PlayGraphDB } from "./play/play-db-factory.js";
-export { PlayFileDB, type PlayGraphSnapshot } from "./play/play-file-db.js";
+export { type PlayGraphSnapshot } from "./play/play-db.js";
 export {
   applyPlayMutation,
   type PlayReducerDB,
@@ -117,23 +121,11 @@ export {
   type ChapterIntent,
   type ContextSource,
   type ContextPackage,
-  type RuleLayerScope,
-  type RuleLayer,
-  type OverrideEdge,
-  type ActiveOverride,
-  type RuleStackSections,
-  type RuleStack,
   type ChapterTrace,
   ChapterMemoSchema,
   ChapterIntentSchema,
   ContextSourceSchema,
   ContextPackageSchema,
-  RuleLayerScopeSchema,
-  RuleLayerSchema,
-  OverrideEdgeSchema,
-  ActiveOverrideSchema,
-  RuleStackSectionsSchema,
-  RuleStackSchema,
   ChapterTraceSchema,
 } from "./models/input-governance.js";
 export {
@@ -160,22 +152,6 @@ export {
   type SkillResolutionResult,
 } from "./skills/index.js";
 export type { ActivatedSkillGuidance } from "./agent/skill-tool.js";
-export {
-  BUILTIN_PROMPTS,
-  BUILTIN_PROMPT_PACKS,
-  PromptPackManifestSchema,
-  PromptPackPromptNotFoundError,
-  getBuiltinPrompt,
-  listBuiltinPromptPacks,
-  listBuiltinPrompts,
-  loadPromptPackPrompt,
-  promptOverridePath,
-  type BuiltinPrompt,
-  type LoadedPromptPackPrompt,
-  type LoadPromptPackPromptInput,
-  type PromptPackManifest,
-  type PromptSource,
-} from "./prompts/index.js";
 export { PlannerAgent, type PlanChapterInput, type PlanChapterOutput } from "./agents/planner.js";
 export {
   ComposerAgent,
@@ -205,13 +181,9 @@ export {
   type ReferenceSectionSelector,
 } from "./references/reference-context.js";
 export {
-  PLANNER_MEMO_SYSTEM_PROMPT,
-  PLANNER_MEMO_USER_TEMPLATE,
   buildPlannerUserMessage,
-  type PlannerUserMessageInput,
+  getPlannerMemoSystemPrompt,
 } from "./agents/planner-prompts.js";
-export {
-} from "./utils/planning-materials.js";
 export {
   buildProxyFetchInit,
   fetchWithProxy,
@@ -220,11 +192,6 @@ export {
 export { assertSafeBookId, deriveBookIdFromTitle, isSafeBookId } from "./utils/book-id.js";
 export { safeChildPath } from "./utils/path-safety.js";
 export { toPosixPath } from "./utils/posix-path.js";
-export {
-  AutomationModeSchema,
-  type AutomationMode,
-  normalizeAutomationMode,
-} from "./interaction/modes.js";
 export {
   ActionSourceSchema,
   ActionPayloadSchema,
@@ -262,33 +229,21 @@ export {
   isTerminalExecutionStatus,
 } from "./interaction/events.js";
 export {
-  BookCreationDraftSchema,
-  DraftRoundSchema,
-  PendingDecisionSchema,
   PendingProposedActionSchema,
   InteractionMessageSchema,
   InteractionSessionSchema,
-  type BookCreationDraft,
-  type DraftRound,
-  type PendingDecision,
   type PendingProposedAction,
   type InteractionMessage,
   type InteractionSession,
   bindActiveBook,
-  clearCreationDraft,
-  clearPendingDecision,
-  updateAutomationMode,
-  updateCreationDraft,
   appendInteractionMessage,
   appendInteractionEvent,
   BookSessionSchema,
   SessionKindSchema,
   PlayModeSchema,
-  GlobalSessionSchema,
   type BookSession,
   type SessionKind,
   type PlayMode,
-  type GlobalSession,
   createBookSession,
   appendBookSessionMessage,
 } from "./interaction/session.js";
@@ -298,8 +253,6 @@ export {
   loadProjectSession,
   persistProjectSession,
   resolveSessionActiveBook,
-  loadGlobalSession,
-  persistGlobalSession,
 } from "./interaction/project-session-store.js";
 export {
   loadBookSession,
@@ -307,9 +260,9 @@ export {
   listBookSessions,
   renameBookSession,
   deleteBookSession,
-  migrateBookSession,
+  bindBookSessionToBook,
   createAndPersistBookSession,
-  SessionAlreadyMigratedError,
+  SessionAlreadyBoundError,
 } from "./interaction/book-session-store.js";
 export {
   appendManualSessionMessages,
@@ -318,7 +271,6 @@ export {
   readTranscriptEvents,
   nextTranscriptSeq,
   transcriptPath,
-  legacyBookSessionPath,
 } from "./interaction/session-transcript.js";
 export {
   cleanRestoredAgentMessages,
@@ -438,7 +390,6 @@ export * from "./agent/index.js";
 // LLM
 export { createLLMClient, chatCompletion, createStreamMonitor, PartialResponseError, type LLMClient, type LLMResponse, type LLMMessage, type StreamProgress, type OnStreamProgress } from "./llm/provider.js";
 export {
-  SERVICE_PRESETS,
   SERVICE_TO_PI_PROVIDER,
   resolveServicePreset,
   resolveServiceProviderFamily,
@@ -450,7 +401,7 @@ export {
   type ServicePreset,
   type ModelInfo,
 } from "./llm/service-presets.js";
-export { resolveServiceModel, type ResolvedModel } from "./llm/service-resolver.js";
+export { resolveServiceModel, ServiceApiKeyNotFoundError, type ResolvedModel } from "./llm/service-resolver.js";
 export { loadSecrets, saveSecrets, getServiceApiKey, type SecretsFile } from "./llm/secrets.js";
 export {
   COVER_PROVIDER_PRESETS,
@@ -460,7 +411,6 @@ export {
   type CoverProviderId,
   type CoverProviderPreset,
 } from "./llm/cover-providers.js";
-export { migrateConfig, type MigrationResult } from "./llm/config-migration.js";
 export { getAllEndpoints, getEndpoint, type InkosEndpoint, type InkosModel, type EndpointGroup } from "./llm/providers/index.js";
 export { probeModelsFromUpstream, type ProbedModel } from "./llm/providers/probe.js";
 
@@ -470,21 +420,18 @@ export { ArchitectAgent, type ArchitectOutput } from "./agents/architect.js";
 export { WriterAgent, type WriteChapterInput, type WriteChapterOutput, type TokenUsage } from "./agents/writer.js";
 export { ContinuityAuditor, type AuditResult, type AuditIssue } from "./agents/continuity.js";
 export { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseOutput, type ReviseMode } from "./agents/reviser.js";
-export { PolisherAgent, type PolishChapterInput, type PolishChapterOutput } from "./agents/polisher.js";
 export { RadarAgent, type RadarResult, type RadarRecommendation } from "./agents/radar.js";
 export { FanqieRadarSource, QidianRadarSource, TextRadarSource, type RadarSource, type PlatformRankings, type RankingEntry } from "./agents/radar-source.js";
 export { readGenreProfile, readBookRules, listAvailableGenres, getBuiltinGenresDir } from "./agents/rules-reader.js";
 export { buildWriterSystemPrompt } from "./agents/writer-prompts.js";
-export { analyzeSensitiveWords, type SensitiveWordResult, type SensitiveWordMatch } from "./agents/sensitive-words.js";
 export { detectAIContent, type DetectionResult } from "./agents/detector.js";
 export { analyzeDetectionInsights } from "./agents/detection-insights.js";
 export { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./agents/settler-prompts.js";
 export { FanficCanonImporter, type FanficCanonOutput } from "./agents/fanfic-canon-importer.js";
-export { getFanficDimensionConfig, FANFIC_DIMENSIONS, type FanficDimensionConfig } from "./agents/fanfic-dimensions.js";
-export * from "./prompts/index.js";
+export * from "./prompts/short-fiction.js";
 
 // Utils
-export { isNewLayoutBook, isBookFoundationComplete } from "./utils/outline-paths.js";
+export { isBookFoundationComplete } from "./utils/outline-paths.js";
 export { fetchUrl, searchWeb } from "./utils/web-search.js";
 export {
   runResearchReport,
@@ -493,24 +440,22 @@ export {
   type ResearchPurpose,
   type ResearchReport,
 } from "./agents/researcher.js";
-export { ConsolidatorAgent } from "./agents/consolidator.js";
-export { MemoryDB, type Fact, type StoredSummary } from "./state/memory-db.js";
+export { MemoryDB, type Fact } from "./state/memory-db.js";
 export { StateValidatorAgent } from "./agents/state-validator.js";
-export { loadRuntimeStateSnapshot, buildRuntimeStateArtifacts, saveRuntimeStateSnapshot, loadNarrativeMemorySeed, loadSnapshotCurrentStateFacts, type RuntimeStateArtifacts, type NarrativeMemorySeed } from "./state/runtime-state-store.js";
+export { createInitialRuntimeState, loadRuntimeStateSnapshot, buildRuntimeStateArtifacts, saveRuntimeStateSnapshot, type RuntimeStateArtifacts } from "./state/runtime-state-store.js";
 export { splitChapters, type SplitChapter } from "./utils/chapter-splitter.js";
 export * from "./translation/index.js";
 export { countChapterLength, resolveLengthCountingMode, formatLengthCount, buildLengthSpec, defaultChapterLength, DEFAULT_CHAPTER_LENGTH_ZH, DEFAULT_CHAPTER_LENGTH_EN, isOutsideSoftRange, isOutsideHardRange, type LengthLanguage } from "./utils/length-metrics.js";
 export { createLogger, createStderrSink, createJsonLineSink, nullSink, type Logger, type LogSink, type LogLevel, type LogEntry } from "./utils/logger.js";
-export { inferLanguage, type WritingLanguage } from "./utils/language.js";
 export { loadProjectConfig, GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH, isApiKeyOptionalForEndpoint } from "./utils/config-loader.js";
-export { resolveEffectiveLLMConfig, type EffectiveLLMConfigResult, type EffectiveLLMDiagnostics, type LLMConfigCliOverrides, type LLMConfigMode, type LLMConsumer, type LLMValueSource } from "./utils/effective-llm-config.js";
-export { loadLLMEnvLayers, mergeEnvMaps, studioIgnoredEnv, cliOverlayEnv, legacyEnv, type LLMEnvLayers, type LLMEnvMap } from "./utils/llm-env.js";
+export { resolveEffectiveLLMConfig, LLMConfigurationError, type EffectiveLLMConfigResult, type EffectiveLLMDiagnostics, type LLMConfigCliOverrides, type LLMConfigMode, type LLMConsumer, type LLMValueSource } from "./utils/effective-llm-config.js";
+export { loadLLMEnvLayers, mergeEnvMaps, studioIgnoredEnv, mergedLLMEnv, type LLMEnvLayers, type LLMEnvMap } from "./utils/llm-env.js";
 export type { ContextCompressionCallback, ContextCompressionCategory, ContextCompressionEvent, ContextCompressionPhase } from "./models/context-compression.js";
 export { computeAnalytics, type AnalyticsData, type TokenStats } from "./utils/analytics.js";
 export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./utils/hook-arbiter.js";
 
 // Pipeline
-export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
+export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
 export { Scheduler, type SchedulerConfig } from "./pipeline/scheduler.js";
 export { detectChapter, loadDetectionHistory, type DetectChapterResult } from "./pipeline/detection-runner.js";
 export { runScriptCreation, runStoryboardCreation, runInteractiveFilmCreation, createStoryboardAssetsManifest, type ScriptCreationRunOptions, type ScriptCreationRunResult, type StoryboardAssetsManifest, type StoryboardCreationRunOptions, type StoryboardCreationRunResult, type InteractiveFilmCreationRunOptions, type InteractiveFilmCreationRunResult, type StoryboardImageAsset, type StoryboardImageAssetVariant } from "./pipeline/script-storyboard-runner.js";
@@ -531,7 +476,6 @@ export {
   type ChapterVersionSource,
 } from "./state/chapter-workspace.js";
 export { loadChaptersFromPath, compareChapterSourceNames } from "./agent/chapter-import-source.js";
-export { bootstrapStructuredStateFromMarkdown } from "./state/state-bootstrap.js";
 export { renderCurrentStateProjection, renderHooksProjection, renderChapterSummariesProjection } from "./state/state-projections.js";
 export { applyRuntimeStateDelta, type RuntimeStateSnapshot } from "./state/state-reducer.js";
 export { validateRuntimeState, type RuntimeStateValidationIssue } from "./state/state-validator.js";

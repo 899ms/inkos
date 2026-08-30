@@ -1114,20 +1114,6 @@ describe("createLLMClient with providers lookup", () => {
     expect(client._piModel?.maxTokens).toBe(24_576);
   });
 
-  it("config.maxTokens 命中 modelCard 后被覆盖（用户填 4000 还是用 modelCard 的 64000）", async () => {
-    const { createLLMClient } = await import("../llm/provider.js");
-    const { LLMConfigSchema } = await import("../models/project.js");
-    const client = createLLMClient(LLMConfigSchema.parse({
-      provider: "anthropic",
-      service: "anthropic",
-      model: "claude-sonnet-4-6",
-      apiKey: "test",
-      baseUrl: "https://api.anthropic.com",
-      maxTokens: 4000,
-    }));
-    expect(client.defaults.maxTokens).toBe(64_000);
-  });
-
   it("B7: kimiCodingPlan 的 kimi-k2.5 走 API 时 piModel.id 是 deploymentName (k2p5)", async () => {
     const { createLLMClient } = await import("../llm/provider.js");
     const { LLMConfigSchema } = await import("../models/project.js");

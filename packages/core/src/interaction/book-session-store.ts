@@ -1,21 +1,16 @@
-import { readdir, unlink } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { createBookSession } from "./session.js";
 import type { BookSession, PlayMode, SessionKind } from "./session.js";
 import {
   appendTranscriptEvents,
-  legacyBookSessionPath,
   readTranscriptEvents,
   sessionsDir,
   transcriptPath,
 } from "./session-transcript.js";
-import {
-  migrateLegacyBookSessionToTranscript,
-  readLegacyBookSession,
-} from "./session-transcript-legacy.js";
 import { deriveBookSessionFromTranscript } from "./session-transcript-restore.js";
 
 /**
- * 从 messages 数组里取第一条 user 消息，裁剪成 ≤20 字的单行字符串。
+ * 从 messages 数组里取第一条 user 消息作为会话标题。
  * 用于把用户首条提问作为会话标题。
  */
 export function extractFirstUserMessageTitle(messages: unknown): string | null {
@@ -27,15 +22,15 @@ export function extractFirstUserMessageTitle(messages: unknown): string | null {
     if (typeof content !== "string") return null;
     const oneLine = content.trim().replace(/\s+/g, " ");
     if (oneLine.length === 0) return null;
-    return oneLine.length > 20 ? `${oneLine.slice(0, 20)}…` : oneLine;
+    return oneLine;
   }
   return null;
 }
 
-export class SessionAlreadyMigratedError extends Error {
+export class SessionAlreadyBoundError extends Error {
   constructor(sessionId: string, currentBookId: string) {
     super(`Session "${sessionId}" is already bound to book "${currentBookId}"`);
-    this.name = "SessionAlreadyMigratedError";
+    this.name = "SessionAlreadyBoundError";
   }
 }
 
@@ -43,14 +38,7 @@ export async function loadBookSession(
   projectRoot: string,
   sessionId: string,
 ): Promise<BookSession | null> {
-  const transcriptSession = await deriveBookSessionFromTranscript(projectRoot, sessionId);
-  if (transcriptSession) return transcriptSession;
-
-  const legacySession = await readLegacyBookSession(projectRoot, sessionId);
-  if (!legacySession) return null;
-
-  await migrateLegacyBookSessionToTranscript(projectRoot, legacySession);
-  return await deriveBookSessionFromTranscript(projectRoot, sessionId) ?? legacySession;
+  return deriveBookSessionFromTranscript(projectRoot, sessionId);
 }
 
 async function appendSessionCreatedEvent(
@@ -115,11 +103,10 @@ export async function persistBookSession(
 ): Promise<void> {
   const events = await readTranscriptEvents(projectRoot, session.sessionId);
   if (events.length === 0) {
-    if (session.messages.length === 0) {
-      await appendSessionCreatedEvent(projectRoot, session);
-      return;
+    if (session.messages.length > 0) {
+      throw new Error("Persist session messages through transcript events, not BookSession.messages.");
     }
-    await migrateLegacyBookSessionToTranscript(projectRoot, session);
+    await appendSessionCreatedEvent(projectRoot, session);
     return;
   }
 
@@ -157,41 +144,34 @@ export async function listBookSessions(
   let files: string[];
   try {
     files = await readdir(dir);
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
 
   const sessionIds = new Set<string>();
   for (const file of files) {
-    if (file.endsWith(".jsonl")) {
-      sessionIds.add(file.slice(0, -".jsonl".length));
-    } else if (file.endsWith(".json")) {
-      sessionIds.add(file.slice(0, -".json".length));
-    }
+    if (file.endsWith(".jsonl")) sessionIds.add(file.slice(0, -".jsonl".length));
   }
 
   const summaries = await Promise.all(
     [...sessionIds].map(async (sessionId): Promise<BookSessionSummary | null> => {
-      try {
-        const session = await loadBookSession(projectRoot, sessionId);
-        if (!session || session.bookId !== bookId) return null;
+      const session = await loadBookSession(projectRoot, sessionId);
+      if (!session || session.bookId !== bookId) return null;
 
-        return {
-          sessionId: session.sessionId,
-          bookId: session.bookId,
-          sessionKind: session.sessionKind,
-          profileId: session.profileId,
-          workId: session.workId,
-          proposalAction: session.proposalAction,
-          playMode: session.playMode,
-          title: session.title,
-          messageCount: session.messages.length,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-        };
-      } catch {
-        return null;
-      }
+      return {
+        sessionId: session.sessionId,
+        bookId: session.bookId,
+        sessionKind: session.sessionKind,
+        profileId: session.profileId,
+        workId: session.workId,
+        proposalAction: session.proposalAction,
+        playMode: session.playMode,
+        title: session.title,
+        messageCount: session.messages.length,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      };
     }),
   );
 
@@ -216,13 +196,10 @@ export async function deleteBookSession(
   projectRoot: string,
   sessionId: string,
 ): Promise<void> {
-  await Promise.all([
-    unlink(transcriptPath(projectRoot, sessionId)).catch(() => undefined),
-    unlink(legacyBookSessionPath(projectRoot, sessionId)).catch(() => undefined),
-  ]);
+  await rm(transcriptPath(projectRoot, sessionId), { force: true });
 }
 
-export async function migrateBookSession(
+export async function bindBookSessionToBook(
   projectRoot: string,
   sessionId: string,
   newBookId: string,
@@ -230,7 +207,7 @@ export async function migrateBookSession(
   const session = await loadBookSession(projectRoot, sessionId);
   if (!session) return null;
   if (session.bookId !== null) {
-    throw new SessionAlreadyMigratedError(sessionId, session.bookId);
+    throw new SessionAlreadyBoundError(sessionId, session.bookId);
   }
 
   await appendSessionMetadataUpdatedEvent(projectRoot, sessionId, {

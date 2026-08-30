@@ -1,6 +1,6 @@
 import type { AuditIssue, AuditResult } from "../agents/continuity.js";
 import type { WriteChapterOutput } from "../agents/writer.js";
-import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
+import type { ContextPackage } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import { countChapterLength, isOutsideHardRange } from "../utils/length-metrics.js";
 
@@ -11,11 +11,7 @@ export interface ChapterReviewUsage {
 }
 
 export interface ChapterReviewControlInput {
-  readonly chapterIntent: string;
-  readonly chapterMemo?: ChapterMemo;
-  readonly chapterIntentData?: ChapterIntent;
   readonly contextPackage: ContextPackage;
-  readonly ruleStack: RuleStack;
 }
 
 export interface ChapterReviewResult {
@@ -30,7 +26,7 @@ export async function reviewChapterDraft(params: {
   readonly bookDir: string;
   readonly chapterNumber: number;
   readonly output: Pick<WriteChapterOutput, "content">;
-  readonly controlInput?: ChapterReviewControlInput;
+  readonly controlInput: ChapterReviewControlInput;
   readonly lengthSpec: LengthSpec;
   readonly initialUsage: ChapterReviewUsage;
   readonly auditor: {
@@ -38,8 +34,12 @@ export async function reviewChapterDraft(params: {
       bookDir: string,
       chapterContent: string,
       chapterNumber: number,
-      genre?: string,
-      options?: ChapterReviewControlInput & { readonly temperature?: number },
+      genre: string | undefined,
+      options: {
+        readonly language: "zh" | "en";
+        readonly contextPackage: ContextPackage;
+        readonly temperature?: number;
+      },
     ) => Promise<AuditResult>;
   };
   readonly assertNotEmpty: (content: string) => void;
@@ -55,7 +55,11 @@ export async function reviewChapterDraft(params: {
       content,
       params.chapterNumber,
       params.book.genre,
-      params.controlInput ? { ...params.controlInput, temperature: 0.3 } : undefined,
+      {
+        language: params.lengthSpec.countingMode === "en_words" ? "en" : "zh",
+        contextPackage: params.controlInput.contextPackage,
+        temperature: 0.3,
+      },
     );
   } catch (error) {
     const isEnglish = params.lengthSpec.countingMode === "en_words";

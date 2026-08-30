@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { StoryGraphSchema, type StoryGraph } from "./graph-schema.js";
+import { z } from "zod";
 import { applyStoryGraphDelta, type StoryGraphDelta } from "./delta.js";
 import { loadStoryGraph, saveStoryGraph, storyGraphPath } from "./graph-store.js";
 
@@ -26,6 +27,12 @@ export interface AuthoringState {
   readonly phaseRevs?: Record<string, number>;
 }
 
+const AuthoringStateSchema = z.object({
+  phase: z.enum(["world", "scale", "structure", "workshop"]),
+  rev: z.number().int().nonnegative(),
+  phaseRevs: z.record(z.string(), z.number().int().nonnegative()).optional(),
+}).strict();
+
 const DEFAULT_STATE: AuthoringState = { phase: "world", rev: 0 };
 
 function projectDir(projectRoot: string, projectId: string): string {
@@ -42,17 +49,7 @@ export async function loadAuthoringState(
 ): Promise<AuthoringState> {
   try {
     const raw = await readFile(authoringStatePath(projectRoot, projectId), "utf-8");
-    const parsed = JSON.parse(raw) as Partial<AuthoringState>;
-    const validPhases = new Set<string>(["world", "scale", "structure", "workshop"]);
-    const phase: AuthoringState["phase"] =
-      typeof parsed.phase === "string" && validPhases.has(parsed.phase)
-        ? (parsed.phase as AuthoringState["phase"])
-        : DEFAULT_STATE.phase;
-    return {
-      phase,
-      rev: typeof parsed.rev === "number" ? parsed.rev : DEFAULT_STATE.rev,
-      ...(parsed.phaseRevs !== undefined && { phaseRevs: parsed.phaseRevs as Record<string, number> }),
-    };
+    return AuthoringStateSchema.parse(JSON.parse(raw));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_STATE;
     throw error;

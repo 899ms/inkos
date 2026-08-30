@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createLLMClient, StateManager, createLogger, createStderrSink, createJsonLineSink, resolveEffectiveLLMConfig, loadLLMEnvLayers, GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH, createBuiltInWorkProfileRegistry, loadAvailableAgentSkills, mergeActivatedSkillGuidance, resolveProfileSkillActivations, type ActivatedSkillGuidance, type EffectiveLLMConfigResult, type LLMApiFormat, type LLMConfigCliOverrides, type ProjectConfig, type PipelineConfig, type PipelineRunner, type LogSink } from "@actalk/inkos-core";
 
@@ -217,21 +217,4 @@ export async function resolveBookId(
   throw new Error(
     `Multiple books found: ${books.join(", ")}\nPlease specify a book-id.`,
   );
-}
-
-export async function getLegacyMigrationHint(
-  root: string,
-  bookId: string,
-): Promise<string | null> {
-  const state = new StateManager(root);
-  const stateDir = join(state.bookDir(bookId), "story", "state");
-  try {
-    const info = await stat(stateDir);
-    if (info.isDirectory()) {
-      return null;
-    }
-  } catch {
-    return `Book "${bookId}" uses legacy format (pre-v0.6). The next write will auto-migrate its state files.`;
-  }
-  return `Book "${bookId}" uses legacy format (pre-v0.6). The next write will auto-migrate its state files.`;
 }

@@ -61,7 +61,8 @@ export async function deleteLatestChapter(
     const snapshotFile = join(bookDir, "story", "snapshots", String(rollbackTarget), required);
     try {
       await stat(snapshotFile);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       throw new Error(
         `Cannot delete chapter ${latest}: the state snapshot for chapter ${rollbackTarget} is missing `
         + `(story/snapshots/${rollbackTarget}/${required}). Nothing was changed.`,
@@ -87,7 +88,25 @@ export async function deleteLatestChapter(
     trashedFiles.push(toPosixPath(join("chapters", ".trash", trashedName)));
   }
 
-  const discarded = await deps.rollbackToChapter(bookId, rollbackTarget);
+  let discarded: ReadonlyArray<number>;
+  try {
+    discarded = await deps.rollbackToChapter(bookId, rollbackTarget);
+  } catch (error) {
+    const restoreErrors: unknown[] = [];
+    for (let index = chapterFiles.length - 1; index >= 0; index -= 1) {
+      const original = chapterFiles[index]!;
+      const trashed = trashedFiles[index]!;
+      try {
+        await rename(join(bookDir, trashed), join(chaptersDir, original));
+      } catch (restoreError) {
+        restoreErrors.push(restoreError);
+      }
+    }
+    if (restoreErrors.length > 0) {
+      throw new AggregateError([error, ...restoreErrors], "Chapter rollback failed and the archived manuscript could not be fully restored");
+    }
+    throw error;
+  }
   const entry = index.find((chapter) => chapter.number === latest);
 
   return {
@@ -112,5 +131,11 @@ async function pickAvailableName(dir: string, fileName: string): Promise<string>
 }
 
 async function pathExists(path: string): Promise<boolean> {
-  return access(path).then(() => true).catch(() => false);
+  return access(path).then(
+    () => true,
+    (error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    },
+  );
 }

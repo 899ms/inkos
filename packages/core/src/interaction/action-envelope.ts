@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PlayModeSchema, type PlayMode } from "./session.js";
+import { PlatformSchema } from "../models/book.js";
 import { StoryNodeSchema } from "../interactive-film/graph-schema.js";
 import {
   SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER,
@@ -23,7 +24,6 @@ export const RequestedIntentSchema = z.enum([
   "play_start",
   "play_step",
   "generate_cover",
-  "edit_artifact",
   "fanfic_init",
   "continuation_import",
   "spinoff_create",
@@ -41,7 +41,7 @@ export type RequestedIntent = z.infer<typeof RequestedIntentSchema>;
 export const CreateBookActionPayloadSchema = z.object({
   title: z.string().min(1).optional(),
   genre: z.string().min(1).optional(),
-  platform: z.enum(["tomato", "qidian", "feilu", "other"]).optional(),
+  platform: PlatformSchema.optional(),
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
@@ -99,6 +99,7 @@ export const PlayStartActionPayloadSchema = z.object({
   premise: z.string().min(1).optional(),
   worldContract: z.string().min(1).optional(),
   visualContract: z.string().min(1).optional(),
+  language: z.enum(["zh", "en"]).optional(),
   mode: PlayModeSchema.optional(),
   initialScene: z.string().min(1).optional(),
   suggestedActions: z.array(z.string().min(1)).min(1).max(4).optional(),
@@ -107,7 +108,7 @@ export const PlayStartActionPayloadSchema = z.object({
 export const GenerateCoverActionPayloadSchema = z.object({
   title: z.string().min(1).optional(),
   intro: z.string().min(1).optional(),
-  sellingPoints: z.string().min(1).optional(),
+  sellingPoints: z.array(z.string().min(1)).optional(),
   coverPrompt: z.string().min(1).optional(),
   outputDir: z.string().min(1).optional(),
 }).strict();
@@ -174,7 +175,7 @@ export const FanficCreateActionPayloadSchema = z.object({
   sourceName: z.string().min(1).optional(),
   mode: z.enum(["canon", "au", "ooc", "cp"]).optional(),
   genre: z.string().min(1).optional(),
-  platform: z.enum(["tomato", "qidian", "feilu", "other"]).optional(),
+  platform: PlatformSchema.optional(),
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
@@ -190,7 +191,7 @@ export const ContinuationImportActionPayloadSchema = z.object({
   splitPattern: z.string().min(1).optional(),
   resumeFrom: z.number().int().min(1).optional(),
   genre: z.string().min(1).optional(),
-  platform: z.enum(["tomato", "qidian", "feilu", "other"]).optional(),
+  platform: PlatformSchema.optional(),
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
@@ -201,7 +202,7 @@ export const SpinoffCreateActionPayloadSchema = z.object({
   parentBookId: z.string().min(1).optional(),
   direction: z.string().min(1).optional(),
   genre: z.string().min(1).optional(),
-  platform: z.enum(["tomato", "qidian", "feilu", "other"]).optional(),
+  platform: PlatformSchema.optional(),
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
@@ -214,7 +215,7 @@ export const ImitationCreateActionPayloadSchema = z.object({
   storyIdea: z.string().min(1).optional(),
   sourceName: z.string().min(1).optional(),
   genre: z.string().min(1).optional(),
-  platform: z.enum(["tomato", "qidian", "feilu", "other"]).optional(),
+  platform: PlatformSchema.optional(),
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
@@ -240,15 +241,15 @@ export const ActionPayloadSchema = z.object({
   draftStructure: z.object({
     projectId: z.string().min(1).optional(),
     instruction: z.string().default(""),
-  }).optional(),
+  }).strict().optional(),
   connectChoice: z.object({
     projectId: z.string().min(1).optional(),
     node: StoryNodeSchema,
-  }).optional(),
+  }).strict().optional(),
   removeNode: z.object({
     projectId: z.string().min(1).optional(),
     nodeId: z.string().min(1),
-  }).optional(),
+  }).strict().optional(),
 }).strict();
 
 export type ActionPayload = z.infer<typeof ActionPayloadSchema>;

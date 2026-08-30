@@ -3,7 +3,7 @@ import { PipelineRunner, StateManager } from "@actalk/inkos-core";
 import { readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { loadConfig, buildPipelineConfig, findProjectRoot, getLegacyMigrationHint, resolveContext, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveContext, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatNotifyBatchWriteBody,
   formatNotifyCommandTitle,
@@ -42,10 +42,6 @@ writeCommand
       const language = resolveCliLanguage(book.language);
       notifyLanguage = language;
       notifyBookName = book.title ?? bookId;
-      const migrationHint = await getLegacyMigrationHint(root, bookId);
-      if (migrationHint && !opts.json) {
-        log(`[migration] ${migrationHint}`);
-      }
       const config = await loadConfig();
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
@@ -171,10 +167,6 @@ writeCommand
       await stat(restoreSnapshotDir).catch(() => {
         throw new Error(`Cannot rewrite chapter ${chapter}: missing snapshot for chapter ${restoreFrom}`);
       });
-      const migrationHint = await getLegacyMigrationHint(root, bookId);
-      if (migrationHint && !opts.json) {
-        log(`[migration] ${migrationHint}`);
-      }
 
       // Remove existing chapter file
       const files = await readdir(chaptersDir);

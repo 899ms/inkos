@@ -17,6 +17,7 @@ async function writeFoundation(bookDir: string, parts: {
   if (parts.storyFrame) await writeFile(join(bookDir, "story", "outline", "story_frame.md"), "frame");
   if (parts.volumeMap) await writeFile(join(bookDir, "story", "outline", "volume_map.md"), "map");
   if (parts.bookRules) await writeFile(join(bookDir, "story", "book_rules.md"), "rules");
+  if (parts.bookRules) await writeFile(join(bookDir, "story", "book_rules.json"), "{}");
   if (parts.pendingHooks) await writeFile(join(bookDir, "story", "pending_hooks.md"), "hooks");
   if (parts.role) {
     await mkdir(join(bookDir, "story", "roles", "主要角色"), { recursive: true });
@@ -50,29 +51,9 @@ describe("isBookFoundationComplete", () => {
     expect(await isBookFoundationComplete(dir)).toBe(false);
   });
 
-  it("is false when neither a roles/ sheet nor character_matrix.md exists", async () => {
+  it("is false when no roles/ sheet exists", async () => {
     await writeFoundation(dir, { bookJson: true, storyFrame: true, volumeMap: true, bookRules: true, pendingHooks: true });
     expect(await isBookFoundationComplete(dir)).toBe(false);
   });
 
-  it("accepts roles persisted to legacy character_matrix.md (the runtime's fallback source)", async () => {
-    // The architect routinely writes roles to character_matrix.md instead of the
-    // roles/ dir; the runtime reads either, so this book IS complete/usable.
-    await writeFoundation(dir, { bookJson: true, storyFrame: true, volumeMap: true, bookRules: true, pendingHooks: true });
-    await writeFile(join(dir, "story", "character_matrix.md"), "## 林秋\n- 定位: 主角");
-    expect(await isBookFoundationComplete(dir)).toBe(true);
-  });
-
-  it("does not treat an empty legacy character_matrix pointer as real roles", async () => {
-    await writeFoundation(dir, { bookJson: true, storyFrame: true, volumeMap: true, bookRules: true, pendingHooks: true });
-    await writeFile(join(dir, "story", "character_matrix.md"), [
-      "# 角色矩阵",
-      "",
-      "兼容提示：新角色卡位于 `story/roles/`。",
-      "",
-      "## 主要角色",
-      "(none)",
-    ].join("\n"));
-    expect(await isBookFoundationComplete(dir)).toBe(false);
-  });
 });

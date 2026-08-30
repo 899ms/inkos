@@ -2,32 +2,38 @@ import { appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:
 import { randomUUID } from "node:crypto";
 import { join, normalize, sep } from "node:path";
 import { z } from "zod";
-import { PlayEventSchema, type PlayEvent } from "../models/play.js";
-import type { PlayGraphSnapshot } from "./play-file-db.js";
+import {
+  PlayCurrentStateSchema,
+  PlayEventSchema,
+  type PlayCurrentState,
+  type PlayCurrentStateInput,
+  type PlayEvent,
+} from "../models/play.js";
+import type { PlayGraphSnapshot } from "./play-db.js";
 import type { PlayGraphDB } from "./play-db-factory.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { createInitialWorkManifestWrite, syncWorkSourceArtifacts } from "../harness/source-sync.js";
-import { listWorkManifests, loadWorkManifest, workDirectory } from "../harness/work-store.js";
+import { listWorkManifests, workDirectory } from "../harness/work-store.js";
 
 const PlayTranscriptTurnSchema = z.object({
   role: z.enum(["user", "assistant", "system", "tool"]),
   content: z.string(),
   timestamp: z.number().int().nonnegative(),
-});
+}).strict();
 
 export type PlayTranscriptTurn = z.infer<typeof PlayTranscriptTurnSchema>;
 
 const PlayWorldSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
-  premise: z.string().default(""),
-  worldContract: z.string().default(""),
-  visualContract: z.string().default(""),
-  mode: z.enum(["open", "guided"]).default("open"),
-  language: z.enum(["zh", "en"]).default("zh"),
+  premise: z.string(),
+  worldContract: z.string(),
+  visualContract: z.string(),
+  mode: z.enum(["open", "guided"]),
+  language: z.enum(["zh", "en"]),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
-});
+}).strict();
 
 export type PlayWorld = z.infer<typeof PlayWorldSchema>;
 export type PlayWorldInput = Omit<z.input<typeof PlayWorldSchema>, "createdAt" | "updatedAt"> & {
@@ -72,31 +78,7 @@ export class PlayStore {
   async ensureWorldDefinition(worldId: string): Promise<PlayWorld> {
     const existing = await this.loadWorld(worldId);
     if (existing) return existing;
-    try {
-      const work = await loadWorkManifest(this.projectRoot, worldId);
-      const now = new Date().toISOString();
-      const world = PlayWorldSchema.parse({
-        id: worldId,
-        title: work.title,
-        premise: "",
-        mode: "open",
-        language: work.language === "en" ? "en" : "zh",
-        createdAt: work.createdAt,
-        updatedAt: now,
-      });
-      await commitAtomicFileSet({
-        rootDir: this.projectRoot,
-        writes: [{
-          relativePath: join("works", worldId, "source", "world.json"),
-          content: `${JSON.stringify(world, null, 2)}\n`,
-        }],
-      });
-      await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: worldId, updatedAt: now, accept: true });
-      return world;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      return this.createWorld({ id: worldId, title: worldId, premise: "", mode: "open", language: "zh" });
-    }
+    throw new Error(`Interactive-world Work is missing world.json: ${worldId}`);
   }
 
   async createWorld(input: PlayWorldInput): Promise<PlayWorld> {
@@ -156,10 +138,10 @@ export class PlayStore {
   async loadWorld(worldId: string): Promise<PlayWorld | null> {
     try {
       const raw = await readFile(join(this.worldDir(worldId), "world.json"), "utf-8");
-      const parsed = PlayWorldSchema.safeParse(JSON.parse(raw));
-      return parsed.success ? parsed.data : null;
-    } catch {
-      return null;
+      return PlayWorldSchema.parse(JSON.parse(raw));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
   }
 
@@ -167,15 +149,8 @@ export class PlayStore {
     const worlds: PlayWorld[] = [];
     for (const work of await listWorkManifests(this.projectRoot, "interactive-world")) {
       const world = await this.loadWorld(work.id);
-      worlds.push(world ?? PlayWorldSchema.parse({
-        id: work.id,
-        title: work.title,
-        premise: "",
-        mode: "open",
-        language: work.language === "en" ? "en" : "zh",
-        createdAt: work.createdAt,
-        updatedAt: work.updatedAt,
-      }));
+      if (!world) throw new Error(`Interactive-world Work is missing world.json: ${work.id}`);
+      worlds.push(world);
     }
     return worlds.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
   }
@@ -196,16 +171,17 @@ export class PlayStore {
     let entries: string[];
     try {
       entries = await readdir(runsRoot);
-    } catch {
-      return [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
     }
 
     const runs: PlayRunSummary[] = [];
     for (const entry of entries.sort()) {
       if (!isSafeSegment(entry)) continue;
       const runDir = join(runsRoot, entry);
-      const entryStat = await stat(runDir).catch(() => null);
-      if (!entryStat?.isDirectory()) continue;
+      const entryStat = await stat(runDir);
+      if (!entryStat.isDirectory()) continue;
       const [events, transcript] = await Promise.all([
         this.readEvents(worldId, entry),
         this.readTranscript(worldId, entry),
@@ -256,19 +232,25 @@ export class PlayStore {
   async saveCurrentState(
     worldId: string,
     runId: string,
-    state: unknown,
+    state: PlayCurrentStateInput,
   ): Promise<void> {
     await this.ensureRun(worldId, runId);
+    const parsed = PlayCurrentStateSchema.parse(state);
     await writeFile(
       join(this.runDir(worldId, runId), "state", "current.json"),
-      `${JSON.stringify(state, null, 2)}\n`,
+      `${JSON.stringify(parsed, null, 2)}\n`,
       "utf-8",
     );
   }
 
-  async loadCurrentState(worldId: string, runId: string): Promise<unknown> {
-    const raw = await readFile(join(this.runDir(worldId, runId), "state", "current.json"), "utf-8");
-    return JSON.parse(raw) as unknown;
+  async loadCurrentState(worldId: string, runId: string): Promise<PlayCurrentState | null> {
+    try {
+      const raw = await readFile(join(this.runDir(worldId, runId), "state", "current.json"), "utf-8");
+      return PlayCurrentStateSchema.parse(JSON.parse(raw));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
   }
 
   async writeProjection(
@@ -391,23 +373,23 @@ export class PlayStore {
 
   private async readJsonLines<T>(
     path: string,
-    schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } },
+    schema: { parse(value: unknown): T },
   ): Promise<T[]> {
     let raw: string;
     try {
       raw = await readFile(path, "utf-8");
-    } catch {
-      return [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
     }
 
     const rows: T[] = [];
-    for (const line of raw.split(/\r?\n/)) {
+    for (const [index, line] of raw.split(/\r?\n/).entries()) {
       if (!line.trim()) continue;
       try {
-        const parsed = schema.safeParse(JSON.parse(line));
-        if (parsed.success) rows.push(parsed.data);
-      } catch {
-        // Ignore malformed rows so one interrupted write does not break a run.
+        rows.push(schema.parse(JSON.parse(line)));
+      } catch (error) {
+        throw new Error(`Invalid Play event at ${path}:${index + 1}: ${String(error)}`);
       }
     }
     return rows;
@@ -416,8 +398,9 @@ export class PlayStore {
   private async readOptionalRunFile(worldId: string, runId: string, relativePath: string): Promise<string> {
     try {
       return await readFile(this.safeRunChildPath(worldId, runId, relativePath), "utf-8");
-    } catch {
-      return "";
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
     }
   }
 
@@ -425,8 +408,9 @@ export class PlayStore {
     try {
       const raw = await readFile(this.safeRunChildPath(worldId, runId, relativePath), "utf-8");
       return PlayRunSnapshotSchema.parse(JSON.parse(raw));
-    } catch {
-      return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
   }
 

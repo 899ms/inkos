@@ -1,10 +1,14 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
-  TranslationChapterManifest,
   TranslationChapterFile,
   TranslationGlossaryTerm,
   TranslationProjectManifest,
+} from "./types.js";
+import {
+  TranslationChapterFileSchema,
+  TranslationGlossarySchema,
+  TranslationProjectManifestSchema,
 } from "./types.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { workDirectory } from "../harness/work-store.js";
@@ -17,50 +21,27 @@ export function translationManifestPath(projectRoot: string, projectId: string):
   return join(translationProjectDir(projectRoot, projectId), "manifest.json");
 }
 
-type LegacyTranslationChapterManifest = Omit<TranslationChapterManifest, "translatedSegments"> & {
-  readonly translatedSegments?: number;
-  readonly status?: string;
-};
-
-type LegacyTranslationProjectManifest = Omit<TranslationProjectManifest, "chapters"> & {
-  readonly chapters: ReadonlyArray<LegacyTranslationChapterManifest>;
-};
-
 export async function loadTranslationManifest(
   projectRoot: string,
   projectId: string,
 ): Promise<TranslationProjectManifest> {
   const path = translationManifestPath(projectRoot, projectId);
-  const raw = JSON.parse(await readFile(path, "utf-8")) as LegacyTranslationProjectManifest;
-  const migrated = {
-    ...raw,
-    chapters: raw.chapters.map(({ status, ...chapter }) => ({
-      ...chapter,
-      translatedSegments: typeof chapter.translatedSegments === "number"
-        ? chapter.translatedSegments
-        : status === "pending"
-          ? 0
-          : chapter.segmentCount,
-    })),
-  } satisfies TranslationProjectManifest;
-  if (raw.chapters.some((chapter) => "status" in chapter || typeof chapter.translatedSegments !== "number")) {
-    await writeFile(path, `${JSON.stringify(migrated, null, 2)}\n`, "utf-8");
-  }
-  return migrated;
+  return TranslationProjectManifestSchema.parse(JSON.parse(await readFile(path, "utf-8")));
 }
 
 export async function saveTranslationManifest(
   projectRoot: string,
   manifest: TranslationProjectManifest,
 ): Promise<void> {
-  await writeFile(translationManifestPath(projectRoot, manifest.id), JSON.stringify(manifest, null, 2), "utf-8");
+  const parsed = TranslationProjectManifestSchema.parse(manifest);
+  await writeFile(translationManifestPath(projectRoot, parsed.id), JSON.stringify(parsed, null, 2), "utf-8");
 }
 
 export async function loadTranslationChapter(
   projectRoot: string,
   chapterPath: string,
 ): Promise<TranslationChapterFile> {
-  return JSON.parse(await readFile(join(projectRoot, chapterPath), "utf-8")) as TranslationChapterFile;
+  return TranslationChapterFileSchema.parse(JSON.parse(await readFile(join(projectRoot, chapterPath), "utf-8")));
 }
 
 export async function saveTranslationChapter(
@@ -68,7 +49,8 @@ export async function saveTranslationChapter(
   chapterPath: string,
   chapter: TranslationChapterFile,
 ): Promise<void> {
-  await writeFile(join(projectRoot, chapterPath), JSON.stringify(chapter, null, 2), "utf-8");
+  const parsed = TranslationChapterFileSchema.parse(chapter);
+  await writeFile(join(projectRoot, chapterPath), JSON.stringify(parsed, null, 2), "utf-8");
 }
 
 export async function loadTranslationGlossary(
@@ -76,12 +58,11 @@ export async function loadTranslationGlossary(
   projectId: string,
 ): Promise<ReadonlyArray<TranslationGlossaryTerm>> {
   try {
-    const raw = JSON.parse(await readFile(join(translationProjectDir(projectRoot, projectId), "glossary.json"), "utf-8")) as {
-      terms?: unknown;
-    };
-    return Array.isArray(raw.terms) ? raw.terms.filter(isGlossaryTerm) : [];
-  } catch {
-    return [];
+    const raw = JSON.parse(await readFile(join(translationProjectDir(projectRoot, projectId), "glossary.json"), "utf-8"));
+    return TranslationGlossarySchema.parse(raw).terms;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
 }
 
@@ -131,10 +112,4 @@ export function mergeGlossaryTerms(terms: ReadonlyArray<TranslationGlossaryTerm>
     });
   }
   return [...map.values()];
-}
-
-function isGlossaryTerm(value: unknown): value is TranslationGlossaryTerm {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
-  return typeof record.source === "string" && typeof record.target === "string";
 }

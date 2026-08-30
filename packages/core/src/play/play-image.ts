@@ -10,6 +10,7 @@
 import { Buffer } from "node:buffer";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { z } from "zod";
 import {
   generateImageFromPrompt,
   resolveCoverGenerationRequest,
@@ -78,6 +79,12 @@ export interface PlayImageEntry {
 
 export type PlayImageManifest = Record<string, PlayImageEntry>;
 
+const PlayImageEntrySchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("ready"), file: z.string().min(1), error: z.string().optional() }).strict(),
+  z.object({ status: z.literal("failed"), file: z.string().optional(), error: z.string().min(1) }).strict(),
+]);
+const PlayImageManifestSchema = z.record(z.string(), PlayImageEntrySchema);
+
 function manifestPath(runDir: string): string {
   return join(runDir, "images", "manifest.json");
 }
@@ -85,16 +92,17 @@ function manifestPath(runDir: string): string {
 export async function readPlayImageManifest(runDir: string): Promise<PlayImageManifest> {
   try {
     const raw = await readFile(manifestPath(runDir), "utf-8");
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? (parsed as PlayImageManifest) : {};
-  } catch {
-    return {};
+    return PlayImageManifestSchema.parse(JSON.parse(raw));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
   }
 }
 
 export async function writePlayImageManifest(runDir: string, manifest: PlayImageManifest): Promise<void> {
   await mkdir(join(runDir, "images"), { recursive: true });
-  await writeFile(manifestPath(runDir), JSON.stringify(manifest, null, 2), "utf-8");
+  const parsed = PlayImageManifestSchema.parse(manifest);
+  await writeFile(manifestPath(runDir), JSON.stringify(parsed, null, 2), "utf-8");
 }
 
 /** Immutably set one manifest entry and persist it. Returns the new manifest. */
@@ -125,26 +133,28 @@ export const DEFAULT_PLAY_IMAGE_SETTINGS: PlayImageSettings = {
   inventory: false,
 };
 
+const PlayImageSettingsSchema = z.object({
+  actors: z.boolean(),
+  moments: z.boolean(),
+  inventory: z.boolean(),
+}).strict();
+
 function settingsPath(runDir: string): string {
   return join(runDir, "images", "settings.json");
 }
 
 export async function readPlayImageSettings(runDir: string): Promise<PlayImageSettings> {
   try {
-    const raw = JSON.parse(await readFile(settingsPath(runDir), "utf-8"));
-    return {
-      actors: Boolean(raw?.actors),
-      moments: Boolean(raw?.moments),
-      inventory: Boolean(raw?.inventory),
-    };
-  } catch {
-    return DEFAULT_PLAY_IMAGE_SETTINGS;
+    return PlayImageSettingsSchema.parse(JSON.parse(await readFile(settingsPath(runDir), "utf-8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_PLAY_IMAGE_SETTINGS;
+    throw error;
   }
 }
 
 export async function writePlayImageSettings(runDir: string, settings: PlayImageSettings): Promise<void> {
   await mkdir(join(runDir, "images"), { recursive: true });
-  await writeFile(settingsPath(runDir), JSON.stringify(settings, null, 2), "utf-8");
+  await writeFile(settingsPath(runDir), JSON.stringify(PlayImageSettingsSchema.parse(settings), null, 2), "utf-8");
 }
 
 /** Filesystem-safe leaf name derived from an entity id / scene key. */

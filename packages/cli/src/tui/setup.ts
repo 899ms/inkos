@@ -347,15 +347,8 @@ export async function detectModelInfo(projectRoot: string): Promise<ModelInfo | 
       baseUrl: config.llm.baseUrl ?? "",
     };
   } catch {
-    // Fall back to legacy env parsing below.
+    return undefined;
   }
-
-  const paths = [join(projectRoot, ".env"), GLOBAL_ENV_PATH];
-  for (const p of paths) {
-    const info = await parseEnvModel(p);
-    if (info) return info;
-  }
-  return undefined;
 }
 
 export async function detectProjectLanguage(projectRoot: string): Promise<string | undefined> {
@@ -363,25 +356,6 @@ export async function detectProjectLanguage(projectRoot: string): Promise<string
     const raw = await readFile(join(projectRoot, "inkos.json"), "utf-8");
     const parsed = JSON.parse(raw) as { language?: string };
     return parsed.language;
-  } catch {
-    return undefined;
-  }
-}
-
-async function parseEnvModel(envPath: string): Promise<ModelInfo | undefined> {
-  try {
-    const content = await readFile(envPath, "utf-8");
-    const get = (key: string) => {
-      const m = content.match(new RegExp(`^${key}=(.+)$`, "m"));
-      return m?.[1]?.trim() ?? "";
-    };
-    const key = get("INKOS_LLM_API_KEY");
-    if (!key || key.includes("your-api-key")) return undefined;
-    return {
-      provider: get("INKOS_LLM_PROVIDER") || "openai",
-      model: get("INKOS_LLM_MODEL") || "unknown",
-      baseUrl: get("INKOS_LLM_BASE_URL") || "",
-    };
   } catch {
     return undefined;
   }

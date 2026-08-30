@@ -9,7 +9,6 @@ describe("validateRuntimeState", () => {
         language: "en",
         lastAppliedChapter: 12,
         projectionVersion: 1,
-        migrationWarnings: [],
       },
       currentState: {
         chapter: 12,
@@ -43,7 +42,6 @@ describe("validateRuntimeState", () => {
         language: "en",
         lastAppliedChapter: 12,
         projectionVersion: 1,
-        migrationWarnings: [],
       },
       currentState: {
         chapter: 12,
@@ -93,7 +91,6 @@ describe("validateRuntimeState", () => {
         language: "zh",
         lastAppliedChapter: 30,
         projectionVersion: 1,
-        migrationWarnings: [],
       },
       currentState: {
         chapter: 30,

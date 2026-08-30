@@ -1,21 +1,13 @@
 import type { ContextPackage } from "../models/input-governance.js";
-import {
-  parsePendingHooksMarkdown,
-  renderHookSnapshot,
-} from "./memory-retrieval.js";
+import type { HookRecord } from "../models/runtime-state.js";
+import { renderHooksProjection } from "../state/state-projections.js";
 
 export function buildGovernedHookWorkingSet(params: {
-  readonly hooksMarkdown: string;
+  readonly hooks: ReadonlyArray<HookRecord>;
   readonly contextPackage: ContextPackage;
   readonly language: "zh" | "en";
 }): string {
-  const { hooksMarkdown } = params;
-  if (!hooksMarkdown || hooksMarkdown === "(文件不存在)" || hooksMarkdown === "(文件尚未创建)") {
-    return hooksMarkdown;
-  }
-
-  const hooks = parsePendingHooksMarkdown(hooksMarkdown);
-  if (hooks.length === 0) return hooksMarkdown;
+  if (params.hooks.length === 0) return renderHooksProjection({ hooks: [] }, params.language);
 
   const selectedIds = new Set(
     params.contextPackage.selectedContext
@@ -23,10 +15,10 @@ export function buildGovernedHookWorkingSet(params: {
       .map((entry) => entry.source.slice("story/pending_hooks.md#".length))
       .filter(Boolean),
   );
-  if (selectedIds.size === 0) return hooksMarkdown;
+  if (selectedIds.size === 0) return renderHooksProjection({ hooks: [...params.hooks] }, params.language);
 
-  const workingSet = hooks.filter((hook) => selectedIds.has(hook.hookId));
+  const workingSet = params.hooks.filter((hook) => selectedIds.has(hook.hookId));
   return workingSet.length > 0
-    ? renderHookSnapshot(workingSet, params.language)
-    : hooksMarkdown;
+    ? renderHooksProjection({ hooks: workingSet }, params.language)
+    : renderHooksProjection({ hooks: [...params.hooks] }, params.language);
 }

@@ -12,6 +12,7 @@ import {
 import { toPosixPath } from "../utils/posix-path.js";
 
 const MAX_SKILL_RESOURCE_BYTES = 512 * 1024;
+const MAX_SKILL_ACTIVATION_BYTES = 512 * 1024;
 const EXPIRED_SKILL_GUIDANCE = "This skill was used for its original turn only. Its instructions are not active for later turns.";
 
 const UseSkillParams = Type.Object({
@@ -106,13 +107,7 @@ export function createUseSkillTool(
               charStart: 0,
               charEnd: resource.body.length,
             }]
-          : retrievedResources.map(({ path, heading, body, charStart, charEnd }) => ({
-              path,
-              heading,
-              body,
-              charStart,
-              charEnd,
-            })),
+          : [],
       });
       return textResult(
         [
@@ -223,22 +218,33 @@ export async function hydrateActivatedSkillGuidance(
   if (!activations || activations.length === 0 || !query.trim()) return activations;
   return Promise.all(activations.map(async (activation) => {
     if (activation.resources.length > 0 || !activation.skill.baseDir) return activation;
-    const resources = await retrieveSkillResources(
-      activation.skill.id,
-      activation.skill.baseDir,
-      query,
-    );
+    const resources = await loadAllSkillResources(activation.skill.baseDir);
     return {
       skill: activation.skill,
-      resources: resources.map(({ path, heading, body, charStart, charEnd }) => ({
-        path,
-        heading,
-        body,
-        charStart,
-        charEnd,
-      })),
+      resources,
     };
   }));
+}
+
+async function loadAllSkillResources(baseDir: string): Promise<ActivatedSkillResource[]> {
+  const resources: ActivatedSkillResource[] = [];
+  let totalBytes = 0;
+  for (const path of await listSkillTextFiles(baseDir)) {
+    const fullPath = safeChildPath(baseDir, path);
+    const info = await lstatWithoutSymlinks(baseDir, fullPath);
+    if (!info.isFile()) continue;
+    if (info.size > MAX_SKILL_RESOURCE_BYTES) {
+      throw new Error(`Skill resource is too large to activate: ${path}`);
+    }
+    totalBytes += info.size;
+    if (totalBytes > MAX_SKILL_ACTIVATION_BYTES) {
+      throw new Error(`Activated skill references exceed ${MAX_SKILL_ACTIVATION_BYTES} bytes; load a narrower external skill.`);
+    }
+    const body = await readFile(fullPath, "utf-8");
+    if (body.includes("\0")) throw new Error(`Skill resource is not UTF-8 text: ${path}`);
+    resources.push({ path, body, charStart: 0, charEnd: body.length });
+  }
+  return resources;
 }
 
 async function listSkillTextFiles(root: string, current = root): Promise<string[]> {

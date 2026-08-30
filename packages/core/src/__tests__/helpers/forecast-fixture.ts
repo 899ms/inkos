@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { ForecastBranch, ForecastModelBranch, NarrativeForecast } from "../../forecast/schema.js";
+import { buildRuntimeStateArtifacts, createInitialRuntimeState, saveRuntimeStateSnapshot } from "../../state/runtime-state-store.js";
 
 export function makeForecastBranch(overrides: Partial<ForecastBranch> = {}): ForecastBranch {
   return {
@@ -40,16 +41,41 @@ export async function writeForecastFixtureBook(bookDir: string): Promise<void> {
   await mkdir(join(bookDir, "story", "state"), { recursive: true });
   await mkdir(join(bookDir, "story", "outline"), { recursive: true });
 
-  await writeFile(join(bookDir, "book.json"), JSON.stringify({ id: "demo-book", title: "示例书", language: "zh" }), "utf-8");
+  const now = "2026-07-15T00:00:00.000Z";
+  await writeFile(join(bookDir, "book.json"), JSON.stringify({
+    id: "demo-book", title: "示例书", language: "zh", genre: "other", platform: "other",
+    status: "active", targetChapters: 20, chapterWordCount: 1000, createdAt: now, updatedAt: now,
+  }), "utf-8");
   await writeFile(join(bookDir, "chapters", "0001_开局.md"), "第一章正文", "utf-8");
   await writeFile(join(bookDir, "chapters", "0002_升级.md"), "第二章正文", "utf-8");
-  await writeFile(join(bookDir, "story", "state", "current_state.json"), JSON.stringify({ facts: ["主角在东城"] }), "utf-8");
-  await writeFile(join(bookDir, "story", "state", "hooks.json"), JSON.stringify({ hooks: [] }), "utf-8");
+  await writeFile(join(bookDir, "chapters", "index.json"), JSON.stringify([
+    { number: 1, title: "开局", wordCount: 5, createdAt: now, updatedAt: now, observations: [], provenance: "generated" },
+    { number: 2, title: "升级", wordCount: 5, createdAt: now, updatedAt: now, observations: [], provenance: "generated" },
+  ]), "utf-8");
+  await createInitialRuntimeState({ bookDir, language: "zh" });
+  for (const chapter of [1, 2]) {
+    const artifacts = await buildRuntimeStateArtifacts({
+      bookDir,
+      language: "zh",
+      delta: {
+        chapter,
+        factOps: { upsert: [{ subject: "主角", predicate: "位置", object: "东城" }], expire: [] },
+        hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+        newHookCandidates: [],
+        chapterSummary: {
+          chapter, title: chapter === 1 ? "开局" : "升级", characters: "主角", events: "推进调查",
+          stateChanges: "主角在东城", hookActivity: "", mood: "紧张", chapterType: "调查",
+        },
+      },
+    });
+    await saveRuntimeStateSnapshot(bookDir, artifacts.snapshot);
+  }
   await writeFile(join(bookDir, "story", "author_intent.md"), "# 作者意图\n复仇主线", "utf-8");
   await writeFile(join(bookDir, "story", "current_focus.md"), "# 当前聚焦\n推进证据链", "utf-8");
-  await writeFile(join(bookDir, "story", "current_state.md"), "# 当前状态\n主角在东城", "utf-8");
-  await writeFile(join(bookDir, "story", "pending_hooks.md"), "| hook_id | 描述 |\n| --- | --- |\n| hook-03 | 遗嘱 |", "utf-8");
   await writeFile(join(bookDir, "story", "outline", "story_frame.md"), "# 故事框架\n都市复仇", "utf-8");
+  await writeFile(join(bookDir, "story", "outline", "volume_map.md"), "# 卷纲\n第一卷推进东城证据链", "utf-8");
+  await mkdir(join(bookDir, "story", "roles", "主要角色"), { recursive: true });
+  await writeFile(join(bookDir, "story", "roles", "主要角色", "主角.md"), "# 主角\n坚持追查东城旧案。", "utf-8");
 }
 
 /**

@@ -10,7 +10,7 @@ export const LengthSpecSchema = z.object({
   hardMin: z.number().int().min(1),
   hardMax: z.number().int().min(1),
   countingMode: LengthCountingModeSchema,
-});
+}).strict();
 
 export type LengthSpec = z.infer<typeof LengthSpecSchema>;
 
@@ -26,7 +26,7 @@ export const LengthTelemetrySchema = z.object({
   finalCount: z.number().int().min(0),
   repairApplied: z.boolean(),
   lengthWarning: z.boolean(),
-});
+}).strict();
 
 export type LengthTelemetry = z.infer<typeof LengthTelemetrySchema>;
 
@@ -36,6 +36,6 @@ export const LengthWarningSchema = z.object({
   actual: z.number().int().min(0),
   countingMode: LengthCountingModeSchema,
   reason: z.string().min(1),
-});
+}).strict();
 
 export type LengthWarning = z.infer<typeof LengthWarningSchema>;

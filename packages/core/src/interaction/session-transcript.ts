@@ -16,10 +16,6 @@ export function transcriptPath(projectRoot: string, sessionId: string): string {
   return join(sessionsDir(projectRoot), `${sessionId}.jsonl`);
 }
 
-export function legacyBookSessionPath(projectRoot: string, sessionId: string): string {
-  return join(sessionsDir(projectRoot), `${sessionId}.json`);
-}
-
 export async function readTranscriptEvents(
   projectRoot: string,
   sessionId: string,
@@ -27,18 +23,18 @@ export async function readTranscriptEvents(
   let raw: string;
   try {
     raw = await readFile(transcriptPath(projectRoot, sessionId), "utf-8");
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
 
   const events: TranscriptEvent[] = [];
-  for (const line of raw.split(/\r?\n/)) {
+  for (const [index, line] of raw.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     try {
-      const parsed = TranscriptEventSchema.safeParse(JSON.parse(line));
-      if (parsed.success) events.push(parsed.data);
-    } catch {
-      continue;
+      events.push(TranscriptEventSchema.parse(JSON.parse(line)));
+    } catch (error) {
+      throw new Error(`Invalid transcript event at ${transcriptPath(projectRoot, sessionId)}:${index + 1}: ${String(error)}`);
     }
   }
 
@@ -133,7 +129,7 @@ export async function appendManualSessionMessages(
   input = "",
   options: {
     readonly sessionKind?: SessionKind;
-    readonly legacyDisplay?: {
+    readonly display?: {
       readonly thinking?: string;
       readonly toolExecutions?: readonly unknown[];
     };
@@ -164,11 +160,11 @@ export async function appendManualSessionMessages(
       const uuid = randomUUID();
       const isToolResult = role === "toolResult";
       const toolCallId = toolCallIdForMessage(message);
-      const legacyDisplay = role === "assistant" && options.legacyDisplay
+      const display = role === "assistant" && options.display
         ? {
-            ...(options.legacyDisplay.thinking ? { thinking: options.legacyDisplay.thinking } : {}),
-            ...(options.legacyDisplay.toolExecutions?.length
-              ? { toolExecutions: [...options.legacyDisplay.toolExecutions] }
+            ...(options.display.thinking ? { thinking: options.display.thinking } : {}),
+            ...(options.display.toolExecutions?.length
+              ? { toolExecutions: [...options.display.toolExecutions] }
               : {}),
           }
         : undefined;
@@ -186,8 +182,8 @@ export async function appendManualSessionMessages(
         ...(isToolResult && lastAssistantUuid
           ? { sourceToolAssistantUuid: lastAssistantUuid }
           : {}),
-        ...(legacyDisplay && (legacyDisplay.thinking || legacyDisplay.toolExecutions?.length)
-          ? { legacyDisplay }
+        ...(display && (display.thinking || display.toolExecutions?.length)
+          ? { display }
           : {}),
         message,
       });

@@ -86,15 +86,13 @@ export const detectCommand = new Command("detect")
   });
 
 function printResult(
-  result: { chapterNumber: number; detection: { score: number; provider: string }; passed: boolean },
+  result: { chapterNumber: number; detection: { score: number; provider: string } },
   json: boolean,
 ): void {
   if (json) {
     log(JSON.stringify(result, null, 2));
   } else {
-    const icon = result.passed ? "✅" : "⚠️";
-    const thresholdState = result.passed ? "below threshold" : "above threshold";
-    log(`  ${icon} Chapter ${result.chapterNumber}: score=${result.detection.score.toFixed(3)} (${result.detection.provider}) ${thresholdState}`);
+    log(`  Chapter ${result.chapterNumber}: score=${result.detection.score.toFixed(3)} (${result.detection.provider})`);
   }
 }
 

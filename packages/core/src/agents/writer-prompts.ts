@@ -1,48 +1,37 @@
-import type { BookConfig, FanficMode } from "../models/book.js";
-import type { GenreProfile } from "../models/genre-profile.js";
+import type { BookConfig } from "../models/book.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
 
-export interface FanficContext {
-  readonly fanficCanon: string;
-  readonly fanficMode: FanficMode;
-  readonly allowedDeviations: ReadonlyArray<string>;
-}
-
 /** Writer protocol. Narrative craft comes from the active long-writing Skill. */
 export function buildWriterSystemPrompt(
   book: BookConfig,
-  genreProfile: GenreProfile,
   bookRules: BookRules | null,
   bookRulesBody: string,
   styleGuide: string,
-  fanficContext?: FanficContext,
   languageOverride?: "zh" | "en",
   lengthSpec?: LengthSpec,
 ): string {
-  const language = languageOverride ?? genreProfile.language;
+  const language = languageOverride ?? book.language;
   const resolvedLength = lengthSpec ?? buildLengthSpec(book.chapterWordCount, language);
   const sections = language === "en"
     ? [
-        `Write one chapter for the active ${genreProfile.name} Work on ${book.platform} using the activated professional Skills.`,
+        `Write one chapter for the active ${book.genre} Work on ${book.platform} using the activated professional Skills.`,
         governedContract("en"),
         lengthContract(resolvedLength, "en"),
         narrativePersonContract(bookRules, "en"),
         protagonistContract(bookRules, "en"),
         authorityBlock("Book rules", bookRulesBody),
         authorityBlock("Style guide", styleGuide),
-        fanficAuthority(fanficContext, "en"),
       ]
     : [
-        `按已激活的专业 Skill 为当前${genreProfile.name}作品写一章。平台：${book.platform}。`,
+        `按已激活的专业 Skill 为当前${book.genre}作品写一章。平台：${book.platform}。`,
         governedContract("zh"),
         lengthContract(resolvedLength, "zh"),
         narrativePersonContract(bookRules, "zh"),
         protagonistContract(bookRules, "zh"),
         authorityBlock("本书规则", bookRulesBody),
         authorityBlock("文风指南", styleGuide),
-        fanficAuthority(fanficContext, "zh"),
       ];
   return sections.filter(Boolean).join("\n\n");
 }
@@ -82,16 +71,6 @@ function protagonistContract(bookRules: BookRules | null, language: "zh" | "en")
 
 function authorityBlock(title: string, body: string | undefined): string {
   const trimmed = body?.trim();
-  if (!trimmed || trimmed === "(文件尚未创建)") return "";
+  if (!trimmed) return "";
   return `## ${title}\n${trimmed}`;
-}
-
-function fanficAuthority(context: FanficContext | undefined, language: "zh" | "en"): string {
-  if (!context) return "";
-  const deviations = context.allowedDeviations.length > 0
-    ? context.allowedDeviations.map((item) => `- ${item}`).join("\n")
-    : (language === "en" ? "- none" : "- 无");
-  return language === "en"
-    ? `## Fanfic authority\nMode: ${context.fanficMode}\nAllowed deviations:\n${deviations}\n\n## Source canon\n${context.fanficCanon}`
-    : `## 同人权威\n模式：${context.fanficMode}\n允许偏离：\n${deviations}\n\n## 原作正典\n${context.fanficCanon}`;
 }

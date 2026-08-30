@@ -98,7 +98,8 @@ function isLikelySemanticDecision(path, line, windowText) {
   // Explicit slash-command grammar and Pi tool namespaces are protocols, not
   // natural-language intent inference.
   if (path.endsWith("agent-input.ts") && line.includes("/^\\/")) return false;
-  if (path.endsWith("agent-session.ts") && line.includes("toolName.includes(\"__\")")) return false;
+  if ((path.endsWith("agent-session.ts") || path.endsWith("session-transcript-restore.ts"))
+    && line.includes("includes(\"__\")")) return false;
   if (line.includes("endsWith(") && !hasAny(windowText, ["instruction", "intent"])) return false;
   return true;
 }

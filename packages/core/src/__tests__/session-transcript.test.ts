@@ -87,7 +87,7 @@ describe("session transcript codec", () => {
     });
   });
 
-  it("跳过坏行并保留合法 event", async () => {
+  it("拒绝包含坏行的 transcript", async () => {
     const dir = join(projectRoot, ".inkos", "sessions");
     await mkdir(dir, { recursive: true });
     await writeFile(
@@ -114,8 +114,7 @@ describe("session transcript codec", () => {
       ].join("\n"),
     );
 
-    const events = await readTranscriptEvents(projectRoot, "s1");
-    expect(events.map((event) => event.type)).toEqual(["request_started", "request_committed"]);
+    await expect(readTranscriptEvents(projectRoot, "s1")).rejects.toThrow("Invalid transcript event");
   });
 
   it("按已有 transcript 分配单调递增 seq", async () => {
@@ -205,7 +204,7 @@ describe("session transcript codec", () => {
       timestamp: 10,
     }], "start play", {
       sessionKind: "play",
-      legacyDisplay: {
+      display: {
         toolExecutions: [{
           id: "play-1",
           tool: "play_start",

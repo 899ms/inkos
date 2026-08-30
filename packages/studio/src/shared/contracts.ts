@@ -78,50 +78,6 @@ export interface TruthFileDetail extends TruthFileSummary {
   readonly content: string | null;
 }
 
-// --- Runs ---
-
-export type RunAction = "draft" | "audit" | "revise" | "write-next";
-
-export type RunStatus = "queued" | "running" | "succeeded" | "failed";
-
-export interface RunLogEntry {
-  readonly timestamp: string;
-  readonly level: "info" | "warn" | "error";
-  readonly message: string;
-}
-
-export interface RunActionPayload {
-  readonly chapterNumber?: number;
-}
-
-export interface StudioRun {
-  readonly id: string;
-  readonly bookId: string;
-  readonly chapter: number | null;
-  readonly chapterNumber: number | null;
-  readonly action: RunAction;
-  readonly status: RunStatus;
-  readonly stage: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly startedAt: string | null;
-  readonly finishedAt: string | null;
-  readonly logs: ReadonlyArray<RunLogEntry>;
-  readonly result?: unknown;
-  readonly error?: string;
-}
-
-export interface RunStreamEvent {
-  readonly type: "snapshot" | "status" | "stage" | "log";
-  readonly runId: string;
-  readonly run?: StudioRun;
-  readonly status?: RunStatus;
-  readonly stage?: string;
-  readonly log?: RunLogEntry;
-  readonly result?: unknown;
-  readonly error?: string;
-}
-
 // --- API Error Response ---
 
 export interface ApiErrorResponse {

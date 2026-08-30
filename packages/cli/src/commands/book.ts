@@ -3,10 +3,10 @@ import { access, readFile, rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
 import {
-  createSubAgentTool,
+  createBookFoundationTool,
   deriveBookIdFromTitle,
   executeExplicitCapabilityTool,
-  normalizePlatformOrOther,
+  PlatformSchema,
   PipelineRunner,
   StateManager,
   workDirectory,
@@ -56,8 +56,7 @@ bookCommand
         }
         await rm(workDir, { recursive: true, force: true });
       } catch (e) {
-        if (e instanceof Error && e.message.includes("already exists")) throw e;
-        // Directory doesn't exist, good
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
       }
 
       const config = await loadConfig();
@@ -65,12 +64,12 @@ bookCommand
       const book: BookConfig = {
         id: bookId,
         title: opts.title,
-        platform: normalizePlatformOrOther(opts.platform),
+        platform: PlatformSchema.parse(opts.platform ?? "other"),
         genre: opts.genre,
         status: "outlining",
         targetChapters: parseInt(opts.targetChapters, 10),
         chapterWordCount: parseInt(opts.chapterWords, 10),
-        language: opts.lang ?? config.language,
+        language: resolveCliLanguage(opts.lang ?? config.language),
         createdAt: now,
         updatedAt: now,
       };
@@ -87,9 +86,9 @@ bookCommand
 
       await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "longform", actionId: "sub_agent", profileId: "longform-novel" },
-        tool: createSubAgentTool(pipeline, null, root, {
-          architectCreateOnly: true,
+        binding: { capabilityId: "longform", actionId: "create_book", profileId: "longform-novel" },
+        tool: createBookFoundationTool(pipeline, {
+          language: book.language,
           actionPayload: {
             createBook: {
               title: book.title,
@@ -103,7 +102,6 @@ bookCommand
           workerSkills: () => activatedSkills,
         }),
         parameters: {
-          agent: "architect",
           instruction: brief?.trim() || `Create ${book.title}`,
           title: book.title,
           genre: book.genre,

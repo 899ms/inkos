@@ -10,6 +10,7 @@ import { StateManager } from "../state/manager.js";
 import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
+import { createInitialRuntimeState } from "../state/runtime-state-store.js";
 
 describe("long-form harness mini-flow", () => {
   const roots: string[] = [];
@@ -39,15 +40,9 @@ describe("long-form harness mini-flow", () => {
         }],
       },
       finalWordCount: output.wordCount,
-      lengthWarnings: [],
       loadChapterIndex: () => state.loadChapterIndex("novel"),
-      saveChapter: () => writer.saveChapter(bookDir, output, "en"),
-      saveTruthFiles: async () => undefined,
-      saveChapterIndex: (index) => state.saveChapterIndex("novel", index),
+      saveChapter: (index) => writer.saveChapter(bookDir, output, "en", index),
       markBookActiveIfNeeded: async () => undefined,
-      snapshotState: async () => undefined,
-      syncCurrentStateFactHistory: async () => undefined,
-      logSnapshotStage: () => undefined,
     });
 
     const [chapter] = await state.loadChapterIndex("novel");
@@ -69,6 +64,7 @@ describe("long-form harness mini-flow", () => {
     const root = await tempRoot();
     const bookDir = join(root, "works", "novel", "source");
     await mkdir(join(bookDir, "story"), { recursive: true });
+    await createInitialRuntimeState({ bookDir, language: "en" });
     const output = chapterOutput(2);
 
     const result = await validateChapterTruthPersistence({
@@ -91,7 +87,11 @@ describe("long-form harness mini-flow", () => {
       title: output.title,
       content: output.content,
       persistenceOutput: output,
-      previousTruth: { oldState: "state-v1", oldHooks: "hooks-v1", oldLedger: "" },
+      previousTruth: { oldState: "state-v1", oldHooks: "hooks-v1" },
+      reducedControlInput: {
+        chapterIntent: "Review chapter 2 state.",
+        contextPackage: { chapter: 2, selectedContext: [] },
+      },
       language: "en",
       logWarn: () => undefined,
     });
@@ -100,10 +100,12 @@ describe("long-form harness mini-flow", () => {
       content: result.persistenceOutput.content,
       category: result.validation.warnings[0]?.category,
       needsReconciliation: result.validation.reconciliationRequired,
+      stateApplied: result.persistenceOutput.runtimeStateApplied,
     }).toEqual({
       content: output.content,
       category: "state-validation-unavailable",
       needsReconciliation: true,
+      stateApplied: false,
     });
   });
 
@@ -114,6 +116,7 @@ describe("long-form harness mini-flow", () => {
       bookDir: "/tmp/unused",
       chapterNumber: 3,
       output,
+      controlInput: { contextPackage: { chapter: 3, selectedContext: [] } },
       lengthSpec: buildLengthSpec(9, "en"),
       initialUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       auditor: { auditChapter: async () => { throw new Error("review stream idle"); } },
@@ -153,7 +156,7 @@ describe("long-form harness mini-flow", () => {
     expect({
       current: acceptedArtifact.currentRevisionId,
       status: acceptedArtifact.revisions.find((revision) => revision.id === acceptedArtifact.currentRevisionId)?.status,
-    }).toEqual({ current: acceptedArtifact.revisions[0]?.id, status: "accepted" });
+    }).toEqual({ current: acceptedArtifact.revisions[0]?.id, status: "current" });
   });
 
   async function tempRoot(): Promise<string> {
@@ -164,18 +167,56 @@ describe("long-form harness mini-flow", () => {
 });
 
 function chapterOutput(chapterNumber: number): WriteChapterOutput {
+  const chapterSummary = {
+    chapter: chapterNumber,
+    title: `Chapter ${chapterNumber}`,
+    characters: "witness",
+    events: "The witness leaves.",
+    stateChanges: "The witness is outside.",
+    hookActivity: "",
+    mood: "tense",
+    chapterType: "investigation",
+  };
   return {
     chapterNumber,
     title: `Chapter ${chapterNumber}`,
     content: "The witness closes the ledger and leaves the room.",
     wordCount: 9,
     postSettlement: "",
+    runtimeStateDelta: {
+      chapter: chapterNumber,
+      factOps: {
+        upsert: [{ subject: "witness", predicate: "location", object: "outside" }],
+        expire: [],
+      },
+      hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+      newHookCandidates: [],
+      chapterSummary,
+    },
+    runtimeStateSnapshot: {
+      manifest: {
+        schemaVersion: 2,
+        language: "en",
+        lastAppliedChapter: chapterNumber,
+        projectionVersion: 1,
+      },
+      currentState: {
+        chapter: chapterNumber,
+        facts: [{
+          subject: "witness",
+          predicate: "location",
+          object: "outside",
+          validFromChapter: chapterNumber,
+          validUntilChapter: null,
+          sourceChapter: chapterNumber,
+        }],
+      },
+      hooks: { hooks: [] },
+      chapterSummaries: { rows: [chapterSummary] },
+    },
     updatedState: "# Current State\n\nThe witness has left.\n",
-    updatedLedger: "",
     updatedHooks: "# Pending Hooks\n",
-    chapterSummary: `| ${chapterNumber} | witness leaves |`,
-    updatedSubplots: "",
-    updatedEmotionalArcs: "",
-    updatedCharacterMatrix: "",
+    updatedChapterSummaries: `| ${chapterNumber} | witness leaves |`,
+    runtimeStateApplied: true,
   };
 }

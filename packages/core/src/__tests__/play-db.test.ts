@@ -48,8 +48,8 @@ describe("PlayDB", () => {
     const db = new PlayDB(root);
 
     try {
-      db.upsertEntity({ id: "evidence_stats", type: "evidence", label: "地址统计" });
-      db.upsertEntity({ id: "claim_cohabit", type: "claim", label: "婚外同居" });
+      db.upsertEntity({ id: "evidence_stats", type: "evidence", label: "地址统计", summary: "地址证据" });
+      db.upsertEntity({ id: "claim_cohabit", type: "claim", label: "婚外同居", summary: "待证主张" });
       db.upsertEdge({
         id: "edge-supports",
         fromId: "evidence_stats",
@@ -76,9 +76,9 @@ describe("PlayDB", () => {
     const db = new PlayDB(root);
 
     try {
-      db.upsertEntity({ id: "evidence_stats", type: "evidence", label: "地址统计" });
-      db.upsertEntity({ id: "claim_cohabit", type: "claim", label: "婚外同居" });
-      db.upsertEntity({ id: "evidence_recording", type: "evidence", label: "录音" });
+      db.upsertEntity({ id: "evidence_stats", type: "evidence", label: "地址统计", summary: "地址证据" });
+      db.upsertEntity({ id: "claim_cohabit", type: "claim", label: "婚外同居", summary: "待证主张" });
+      db.upsertEntity({ id: "evidence_recording", type: "evidence", label: "录音", summary: "录音证据" });
       db.upsertEdge({
         id: "edge-supports-1",
         fromId: "evidence_stats",
@@ -111,7 +111,7 @@ describe("PlayDB", () => {
     const db = new PlayDB(root);
 
     try {
-      db.upsertEntity({ id: "actor_husband", type: "actor", label: "徐晋安" });
+      db.upsertEntity({ id: "actor_husband", type: "actor", label: "徐晋安", summary: "丈夫" });
       db.upsertStateSlot({
         id: "slot_husband_suspicion",
         ownerEntityId: "actor_husband",

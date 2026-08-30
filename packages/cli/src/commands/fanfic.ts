@@ -5,7 +5,7 @@ import {
   createFanficBookTool,
   deriveBookIdFromTitle,
   executeExplicitCapabilityTool,
-  normalizePlatformOrOther,
+  PlatformSchema,
   PipelineRunner,
   type BookConfig,
   type FanficMode,
@@ -15,7 +15,7 @@ import {
   formatFanficCanonMissingError,
   formatFanficInvalidModeError,
   formatFanficSourceDirEmptyError,
-  formatFanficSourceTooShortError,
+  resolveCliLanguage,
 } from "../localization.js";
 
 export const fanficCommand = new Command("fanfic")
@@ -31,7 +31,7 @@ fanficCommand
   .option("--platform <platform>", "Target platform", "other")
   .option("--target-chapters <n>", "Target chapter count", "100")
   .option("--chapter-words <n>", "Words per chapter", "3000")
-  .option("--lang <language>", "Writing language: zh or en. Defaults from genre.")
+  .option("--lang <language>", "Writing language: zh or en. Defaults from the project.")
   .option("--json", "Output JSON")
   .action(async (opts) => {
     try {
@@ -48,9 +48,7 @@ fanficCommand
       const sourceText = await readSourceMaterial(sourcePath);
       const sourceName = basename(sourcePath);
 
-      if (!sourceText || sourceText.length < 100) {
-        throw new Error(formatFanficSourceTooShortError(sourceText.length));
-      }
+      if (!sourceText.trim()) throw new Error("Fanfic source material is empty.");
 
       const bookId = deriveBookIdFromTitle(opts.title) || `book-${Date.now().toString(36)}`;
 
@@ -58,12 +56,12 @@ fanficCommand
       const book: BookConfig = {
         id: bookId,
         title: opts.title,
-        platform: normalizePlatformOrOther(opts.platform),
+        platform: PlatformSchema.parse(opts.platform ?? "other"),
         genre: opts.genre,
         status: "outlining",
         targetChapters: parseInt(opts.targetChapters, 10),
         chapterWordCount: parseInt(opts.chapterWords, 10),
-        language: opts.lang ?? config.language,
+        language: resolveCliLanguage(opts.lang ?? config.language),
         createdAt: now,
         updatedAt: now,
         fanficMode: mode,

@@ -127,50 +127,48 @@ export function guardAssistantMessageStream<TApi extends PiApi>(
   deadlineOptions?: StreamDeadlineOptions,
 ): AssistantMessageEventStream {
   const guarded = createAssistantMessageEventStream();
-  const deadline = createStreamActivityDeadline(callerSignal, undefined, deadlineOptions);
 
   void (async () => {
-    let terminalSeen = false;
-    try {
-      const upstream = start(deadline.signal);
-      const iterator = upstream[Symbol.asyncIterator]();
-      while (true) {
-        const next = await nextWithAbort(iterator, deadline.signal);
-        if (next.done) break;
-        const event = next.value;
-        deadline.activity();
-        terminalSeen ||= event.type === "done" || event.type === "error";
-        guarded.push(event);
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= TRANSIENT_LLM_RETRIES; attempt += 1) {
+      const deadline = createStreamActivityDeadline(callerSignal, undefined, deadlineOptions);
+      let terminalSeen = false;
+      let externallyVisibleEvents = 0;
+      try {
+        const upstream = start(deadline.signal);
+        const iterator = upstream[Symbol.asyncIterator]();
+        while (true) {
+          const next = await nextWithAbort(iterator, deadline.signal);
+          if (next.done) break;
+          const event = next.value;
+          deadline.activity();
+          if (["text_delta", "toolcall_start", "toolcall_delta", "toolcall_end"].includes(event.type)) {
+            externallyVisibleEvents += 1;
+          }
+          terminalSeen ||= event.type === "done" || event.type === "error";
+          guarded.push(event);
+        }
+        if (!terminalSeen) throw new Error("LLM stream ended without a terminal event");
+        return;
+      } catch (error) {
+        lastError = deadline.timeoutError() ?? error;
+        const retryableZeroEventTimeout = externallyVisibleEvents === 0
+          && lastError instanceof LLMStreamInactivityError
+          && !callerSignal?.aborted
+          && attempt < TRANSIENT_LLM_RETRIES;
+        if (!retryableZeroEventTimeout) break;
+      } finally {
+        deadline.stop();
       }
-      if (!terminalSeen) throw new Error("LLM stream ended without a terminal event");
-    } catch (error) {
-      const resolved = deadline.timeoutError() ?? error;
-      const message: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: callerSignal?.aborted ? "aborted" : "error",
-        errorMessage: resolved instanceof Error ? resolved.message : String(resolved),
-        timestamp: Date.now(),
-      };
-      guarded.push({
-        type: "error",
-        reason: message.stopReason === "aborted" ? "aborted" : "error",
-        error: message,
-      });
-    } finally {
-      deadline.stop();
     }
+    const message: AssistantMessage = {
+      role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: callerSignal?.aborted ? "aborted" : "error",
+      errorMessage: lastError instanceof Error ? lastError.message : String(lastError),
+      timestamp: Date.now(),
+    };
+    guarded.push({ type: "error", reason: message.stopReason === "aborted" ? "aborted" : "error", error: message });
   })();
 
   return guarded;
@@ -288,12 +286,6 @@ export interface LLMClient {
      * 命中模型卡时来自 providers bank 的 modelCard.maxOutput；未知模型走写作兜底预算。
      */
     readonly maxTokens: number;
-    /**
-     * Legacy mock compatibility only. v2 provider resolution no longer caps
-     * per-call maxTokens from project config; model max output comes from the
-     * provider bank.
-     */
-    readonly maxTokensCap?: number | null;
     readonly thinkingBudget: number;
     readonly extra: Record<string, unknown>;
   };
@@ -302,7 +294,6 @@ export interface LLMClient {
 // === Factory ===
 
 export function createLLMClient(config: LLMConfig): LLMClient {
-  // C1 (v2.0.0)：config.maxTokens / maxTokensCap 已删除；defaults.maxTokens 完全从 modelCard 推导。
   const _earlyCard = lookupModel(config.service ?? "custom", config.model);
   const defaults = {
     temperature: config.temperature ?? 0.7,
@@ -1452,7 +1443,6 @@ export async function chatCompletion(
   },
 ): Promise<LLMResponse> {
   if (isLlmStubEnabled()) return Promise.resolve(stubChatCompletion(messages, model));
-  // C1 (v2.0.0)：删除 maxTokensCap 机制。per-call 显式传的 maxTokens 永远不被裁剪。
   const resolved = {
     temperature: clampTemperatureForModel(
       client.service,

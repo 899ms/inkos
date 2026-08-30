@@ -74,12 +74,8 @@ export async function listWorkManifests(
   const works: WorkManifest[] = [];
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     if (!entry.isDirectory()) continue;
-    try {
-      const manifest = await loadWorkManifest(projectRoot, entry.name);
-      if (!profileId || manifest.profileId === profileId) works.push(manifest);
-    } catch {
-      // Invalid/incomplete work directories are not listed as usable works.
-    }
+    const manifest = await loadWorkManifest(projectRoot, entry.name);
+    if (!profileId || manifest.profileId === profileId) works.push(manifest);
   }
   return works.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
 }

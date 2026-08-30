@@ -800,7 +800,7 @@ describe("chat message actions", () => {
     fakeEventSources[1]?.emit("tool:start", {
       sessionId,
       id: "chat-tool-1",
-      tool: "sub_agent",
+      tool: "write_chapters",
       args: { agent: "auditor" },
     });
 
@@ -855,8 +855,8 @@ describe("chat message actions", () => {
     fakeEventSources[0]?.emit("tool:start", {
       sessionId,
       id: "direct-write_next-1",
-      tool: "sub_agent",
-      args: { agent: "writer", bookId: "demo-book" },
+      tool: "write_chapters",
+      args: { bookId: "demo-book" },
       background: true,
       sourceRequestId,
     });
@@ -873,7 +873,7 @@ describe("chat message actions", () => {
     fakeEventSources[0]?.emit("tool:end", {
       sessionId,
       id: "direct-write_next-1",
-      tool: "sub_agent",
+      tool: "write_chapters",
       result: { content: [{ type: "text", text: "第 3 章已完成" }] },
     });
     resolveAgent({ response: "", session: { sessionId, sessionKind: "book" } });
@@ -1103,8 +1103,8 @@ describe("chat message actions", () => {
       sourceRequestId,
       execution: {
         id: "direct-write_next-replayed",
-        tool: "sub_agent",
-        agent: "writer",
+        tool: "write_chapters",
+
         status: "running",
         startedAt: Date.now(),
       },
@@ -1177,7 +1177,7 @@ describe("chat message actions", () => {
     fakeEventSources[1]?.emit("tool:start", {
       sessionId,
       id: "chat-tool-1",
-      tool: "sub_agent",
+      tool: "write_chapters",
       args: { agent: "auditor" },
       stages: ["审稿"],
     });
@@ -1250,7 +1250,7 @@ describe("chat message actions", () => {
     fakeEventSources[1]?.emit("tool:start", {
       sessionId,
       id: "chat-tool-1",
-      tool: "sub_agent",
+      tool: "write_chapters",
       args: { agent: "auditor" },
     });
     fakeEventSources[1]?.emit("log", {

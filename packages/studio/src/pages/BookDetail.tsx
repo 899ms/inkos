@@ -12,7 +12,6 @@ import {
   FileText,
   BarChart2,
   Download,
-  Wand2,
   Database,
   ShieldCheck,
   RotateCcw,
@@ -75,7 +74,6 @@ export function BookDetail({
   const c = useColors(theme);
   const { data, loading, error, refetch } = useApi<BookData>(`/books/${bookId}`);
   const [writeRequestPending, setWriteRequestPending] = useState(false);
-  const [draftRequestPending, setDraftRequestPending] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [rewritingChapters, setRewritingChapters] = useState<ReadonlyArray<number>>([]);
@@ -89,7 +87,6 @@ export function BookDetail({
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
-  const drafting = draftRequestPending || activity.drafting;
   const latestPersistedChapter = data ? data.nextChapter - 1 : 0;
 
   useEffect(() => {
@@ -104,14 +101,8 @@ export function BookDetail({
       return;
     }
 
-    if (recent.event === "draft:start") {
-      setDraftRequestPending(false);
-      return;
-    }
-
     if (shouldRefetchBookView(recent, bookId)) {
       setWriteRequestPending(false);
-      setDraftRequestPending(false);
       refetch();
     }
   }, [bookId, refetch, sse.messages]);
@@ -122,16 +113,6 @@ export function BookDetail({
       await postApi(`/books/${bookId}/write-next`);
     } catch (e) {
       setWriteRequestPending(false);
-      alert(e instanceof Error ? e.message : "Failed");
-    }
-  };
-
-  const handleDraft = async () => {
-    setDraftRequestPending(true);
-    try {
-      await postApi(`/books/${bookId}/draft`);
-    } catch (e) {
-      setDraftRequestPending(false);
       alert(e instanceof Error ? e.message : "Failed");
     }
   };
@@ -255,17 +236,6 @@ export function BookDetail({
     }
   };
 
-  const handleConsolidate = async () => {
-    await runBookAction("consolidate", async () => {
-      const result = await fetchJson<{ archivedVolumes?: number; retainedChapters?: number }>(`/books/${bookId}/consolidate`, {
-        method: "POST",
-      });
-      return data?.book.language === "en"
-        ? `Consolidated ${result.archivedVolumes ?? 0} volume(s). Retained ${result.retainedChapters ?? 0} recent chapter summaries.`
-        : `已归并 ${result.archivedVolumes ?? 0} 个卷摘要，保留最近 ${result.retainedChapters ?? 0} 条章节摘要。`;
-    });
-  };
-
   const handleReviseFoundation = async () => {
     const feedback = window.prompt(
       data?.book.language === "en"
@@ -281,46 +251,6 @@ export function BookDetail({
         body: JSON.stringify({ feedback }),
       });
       return data?.book.language === "en" ? "Foundation revised." : "基础设定已重修。";
-    });
-  };
-
-  const handlePlan = async () => {
-    const context = window.prompt(
-      data?.book.language === "en"
-        ? "Optional planning context for the next chapter."
-        : "可选：下一章规划补充说明。",
-      "",
-    );
-    if (context === null) return;
-    await runBookAction("plan", async () => {
-      const result = await fetchJson<{ chapterNumber?: number; title?: string }>(`/books/${bookId}/plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ context: context.trim() || undefined }),
-      });
-      return data?.book.language === "en"
-        ? `Planned chapter ${result.chapterNumber ?? "?"}: ${result.title ?? ""}`
-        : `已计划第 ${result.chapterNumber ?? "?"} 章：${result.title ?? ""}`;
-    });
-  };
-
-  const handleCompose = async () => {
-    const context = window.prompt(
-      data?.book.language === "en"
-        ? "Optional compose context for the next chapter."
-        : "可选：下一章组装补充说明。",
-      "",
-    );
-    if (context === null) return;
-    await runBookAction("compose", async () => {
-      const result = await fetchJson<{ chapterNumber?: number; title?: string }>(`/books/${bookId}/compose`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ context: context.trim() || undefined }),
-      });
-      return data?.book.language === "en"
-        ? `Composed chapter ${result.chapterNumber ?? "?"}: ${result.title ?? ""}`
-        : `已组装第 ${result.chapterNumber ?? "?"} 章：${result.title ?? ""}`;
     });
   };
 
@@ -389,19 +319,11 @@ export function BookDetail({
         <div className="flex flex-wrap gap-2">
           <button
             onClick={handleWriteNext}
-            disabled={writing || drafting}
+            disabled={writing}
             className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-primary text-primary-foreground rounded-xl hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20 disabled:opacity-50"
           >
             {writing ? <div className="w-4 h-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full animate-spin" /> : <Zap size={16} />}
             {writing ? t("dash.writing") : t("book.writeNext")}
-          </button>
-          <button
-            onClick={handleDraft}
-            disabled={writing || drafting}
-            className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-secondary text-foreground rounded-xl hover:bg-secondary/80 transition-all border border-border/50 disabled:opacity-50"
-          >
-            {drafting ? <div className="w-4 h-4 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" /> : <Wand2 size={16} />}
-            {drafting ? t("book.drafting") : t("book.draftOnly")}
           </button>
           <button
             onClick={() => setConfirmDeleteOpen(true)}
@@ -414,7 +336,7 @@ export function BookDetail({
         </div>
       </div>
 
-      {(writing || drafting || activity.lastError) && (
+      {(writing || activity.lastError) && (
         <div
           className={`rounded-2xl border px-4 py-3 text-sm ${
             activity.lastError
@@ -426,11 +348,7 @@ export function BookDetail({
             <span>
               {t("book.pipelineFailed")}: {activity.lastError}
             </span>
-          ) : writing ? (
-            <span>{t("book.pipelineWriting")}</span>
-          ) : (
-            <span>{t("book.pipelineDrafting")}</span>
-          )}
+          ) : <span>{t("book.pipelineWriting")}</span>}
         </div>
       )}
 
@@ -451,36 +369,12 @@ export function BookDetail({
             {t("book.analytics")}
           </button>
           <button
-            onClick={handleConsolidate}
-            disabled={bookActionPending === "consolidate"}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50 disabled:opacity-50"
-          >
-            <Database size={14} />
-            {bookActionPending === "consolidate" ? t("common.loading") : t("book.consolidate")}
-          </button>
-          <button
             onClick={handleReviseFoundation}
             disabled={bookActionPending === "revise-foundation"}
             className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50 disabled:opacity-50"
           >
             <Sparkles size={14} />
             {bookActionPending === "revise-foundation" ? t("common.loading") : t("book.reviseFoundation")}
-          </button>
-          <button
-            onClick={handlePlan}
-            disabled={bookActionPending === "plan"}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50 disabled:opacity-50"
-          >
-            <FileText size={14} />
-            {bookActionPending === "plan" ? t("common.loading") : t("book.planNext")}
-          </button>
-          <button
-            onClick={handleCompose}
-            disabled={bookActionPending === "compose"}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50 disabled:opacity-50"
-          >
-            <Wand2 size={14} />
-            {bookActionPending === "compose" ? t("common.loading") : t("book.composeNext")}
           </button>
           <div className="flex items-center gap-2">
             <select

@@ -51,11 +51,7 @@ export function applyRuntimeStateDelta(params: {
   }
 
   const hooks = applyHookOps(snapshot.hooks, delta);
-  const currentState = applyCurrentStatePatch(
-    snapshot.currentState,
-    snapshot.manifest.language,
-    delta,
-  );
+  const currentState = applyFactOps(snapshot.currentState, delta);
   const chapterSummaries = applySummaryDelta(snapshot.chapterSummaries, delta, allowReapply);
 
   const next: RuntimeStateSnapshot = {
@@ -92,8 +88,7 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
   for (const hookId of delta.hookOps.resolve) {
     const existing = hooksById.get(hookId);
     if (!existing) {
-      // Hook may have been cleared by a previous settlement or not yet created — skip gracefully
-      continue;
+      throw new Error(`cannot resolve unknown hook ${hookId}`);
     }
     hooksById.set(hookId, {
       ...existing,
@@ -105,7 +100,7 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
   for (const hookId of delta.hookOps.defer) {
     const existing = hooksById.get(hookId);
     if (!existing) {
-      continue;
+      throw new Error(`cannot defer unknown hook ${hookId}`);
     }
     hooksById.set(hookId, {
       ...existing,
@@ -137,55 +132,42 @@ function mergeHookRecord(existing: HookRecord, incoming: HookRecord): HookRecord
   };
 }
 
-function applyCurrentStatePatch(
+function applyFactOps(
   currentState: CurrentStateState,
-  language: "zh" | "en",
   delta: RuntimeStateDelta,
 ): CurrentStateState {
-  if (!delta.currentStatePatch) {
-    return {
-      chapter: delta.chapter,
-      facts: [...currentState.facts],
-    };
+  const nextFacts = currentState.facts.map((fact) => ({ ...fact }));
+  const active = (fact: CurrentStateState["facts"][number]) => (
+    fact.validUntilChapter === null || fact.validUntilChapter >= delta.chapter
+  );
+  const sameKey = (
+    fact: CurrentStateState["facts"][number],
+    selector: { readonly subject: string; readonly predicate: string; readonly object?: string },
+  ) => fact.subject === selector.subject.trim()
+    && fact.predicate === selector.predicate.trim()
+    && (selector.object === undefined || fact.object === selector.object.trim());
+
+  for (const selector of delta.factOps.expire) {
+    for (const fact of nextFacts) {
+      if (active(fact) && sameKey(fact, selector)) fact.validUntilChapter = Math.max(0, delta.chapter - 1);
+    }
   }
 
-  const nextFacts = [...currentState.facts];
-  const labels = language === "en"
-    ? {
-      currentLocation: ["Current Location", "当前位置"],
-      protagonistState: ["Protagonist State", "主角状态"],
-      currentGoal: ["Current Goal", "当前目标"],
-      currentConstraint: ["Current Constraint", "当前限制"],
-      currentAlliances: ["Current Alliances", "Current Relationships", "当前敌我"],
-      currentConflict: ["Current Conflict", "当前冲突"],
-    }
-    : {
-      currentLocation: ["当前位置", "Current Location"],
-      protagonistState: ["主角状态", "Protagonist State"],
-      currentGoal: ["当前目标", "Current Goal"],
-      currentConstraint: ["当前限制", "Current Constraint"],
-      currentAlliances: ["当前敌我", "Current Alliances", "Current Relationships"],
-      currentConflict: ["当前冲突", "Current Conflict"],
+  for (const input of delta.factOps.upsert) {
+    const fact = {
+      subject: input.subject.trim(),
+      predicate: input.predicate.trim(),
+      object: input.object.trim(),
     };
-
-  for (const [patchKey, aliases] of Object.entries(labels) as Array<[
-    keyof typeof labels,
-    string[],
-  ]>) {
-    const value = delta.currentStatePatch[patchKey];
-    if (value === undefined) continue;
-
-    for (let index = nextFacts.length - 1; index >= 0; index -= 1) {
-      const predicate = nextFacts[index]?.predicate ?? "";
-      if (aliases.some((alias) => alias.toLowerCase() === predicate.toLowerCase())) {
-        nextFacts.splice(index, 1);
+    const exact = nextFacts.some((candidate) => active(candidate) && sameKey(candidate, fact));
+    if (exact) continue;
+    for (const candidate of nextFacts) {
+      if (active(candidate) && candidate.subject === fact.subject && candidate.predicate === fact.predicate) {
+        candidate.validUntilChapter = Math.max(0, delta.chapter - 1);
       }
     }
-
     nextFacts.push({
-      subject: "protagonist",
-      predicate: aliases[0]!,
-      object: value,
+      ...fact,
       validFromChapter: delta.chapter,
       validUntilChapter: null,
       sourceChapter: delta.chapter,

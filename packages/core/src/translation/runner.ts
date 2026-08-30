@@ -35,10 +35,13 @@ export async function runTranslationProject(
 
   for (const chapterInfo of manifest.chapters) {
     const source = await loadTranslationChapter(projectRoot, chapterInfo.sourcePath);
-    const translated = await loadTranslationChapter(projectRoot, chapterInfo.translatedPath).catch(() => ({
-      ...source,
-      segments: [],
-    } satisfies TranslationChapterFile));
+    let translated: TranslationChapterFile;
+    try {
+      translated = await loadTranslationChapter(projectRoot, chapterInfo.translatedPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      translated = { ...source, segments: [] };
+    }
     const translatedByIndex = new Map(translated.segments.map((segment) => [segment.index, segment]));
     let translatedTitle = translated.title;
     const pending = source.segments.filter((segment) => !translatedByIndex.get(segment.index)?.target?.trim());
@@ -53,15 +56,28 @@ export async function runTranslationProject(
         glossary,
       });
       if (result.chapterTitle?.trim()) translatedTitle = result.chapterTitle.trim();
+      const expected = new Set(batch.map((segment) => segment.index));
+      const returned = new Set<number>();
       for (const item of result.segments) {
+        if (!expected.has(item.index)) {
+          throw new Error(`Translation returned unknown segment ${item.index}.`);
+        }
+        if (returned.has(item.index)) {
+          throw new Error(`Translation returned duplicate segment ${item.index}.`);
+        }
+        returned.add(item.index);
         const original = source.segments.find((segment) => segment.index === item.index);
-        if (!original) continue;
+        if (!original) throw new Error(`Translation source segment ${item.index} is missing.`);
         translatedByIndex.set(item.index, {
           ...original,
           target: item.target,
           ...(item.notes?.trim() ? { notes: item.notes.trim() } : {}),
         });
         translatedSegments++;
+      }
+      const missing = [...expected].filter((index) => !returned.has(index));
+      if (missing.length > 0) {
+        throw new Error(`Translation omitted segment(s): ${missing.join(", ")}.`);
       }
       if (result.glossary?.length) {
         glossary = [...mergeGlossaryTerms([...glossary, ...result.glossary])];
@@ -120,7 +136,11 @@ export async function runTranslationProject(
       reportPath,
     };
   } catch (error) {
-    await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: false }).catch(() => undefined);
+    try {
+      await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: false });
+    } catch (syncError) {
+      throw new AggregateError([error, syncError], `Translation failed and candidate artifacts could not be recorded for ${projectId}`);
+    }
     throw error;
   }
 }

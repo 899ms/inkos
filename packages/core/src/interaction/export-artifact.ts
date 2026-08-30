@@ -73,8 +73,7 @@ export async function buildExportArtifact(
 
   const bookDir = state.bookDir(bookId);
   const chaptersDir = join(bookDir, "chapters");
-  const projectRoot = dirname(dirname(bookDir));
-  const outputPath = options.outputPath ?? join(projectRoot, `${bookId}_export.${format}`);
+  const outputPath = options.outputPath ?? join(bookDir, "exports", `${bookId}.${format}`);
   const chapterFiles = buildChapterFileLookup(await readdir(chaptersDir));
   const totalWords = chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0);
 

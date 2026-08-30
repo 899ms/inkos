@@ -3,31 +3,19 @@ import { join } from "node:path";
 import {
   ChapterSummariesStateSchema,
   HooksStateSchema,
+  type ChapterSummaryRow,
+  type HookRecord,
 } from "../models/runtime-state.js";
-import { MemoryDB, type StoredHook, type StoredSummary } from "../state/memory-db.js";
-import { bootstrapStructuredStateFromMarkdown } from "../state/state-bootstrap.js";
-import {
-  parseChapterSummariesMarkdown,
-  parsePendingHooksMarkdown,
-  renderHookSnapshot,
-  renderSummarySnapshot,
-} from "./story-markdown.js";
 import {
   LocalSearchIndex,
   type SearchDocument,
   type SearchHit,
 } from "../retrieval/local-search.js";
-export {
-  parseChapterSummariesMarkdown,
-  parsePendingHooksMarkdown,
-  renderHookSnapshot,
-  renderSummarySnapshot,
-} from "./story-markdown.js";
-
 export interface MemorySelection {
-  readonly summaries: ReadonlyArray<StoredSummary>;
-  readonly hooks: ReadonlyArray<StoredHook>;
-  readonly lookupHooks: ReadonlyArray<StoredHook>;
+  readonly summaries: ReadonlyArray<ChapterSummaryRow>;
+  readonly lookupSummaries: ReadonlyArray<ChapterSummaryRow>;
+  readonly hooks: ReadonlyArray<HookRecord>;
+  readonly lookupHooks: ReadonlyArray<HookRecord>;
   readonly volumeSummaries: ReadonlyArray<VolumeSummarySelection>;
   readonly dbPath: string;
   readonly retrievalTrace: MemoryRetrievalTrace;
@@ -36,13 +24,14 @@ export interface MemorySelection {
 export interface MemoryRetrievalTrace {
   readonly engine: "sqlite-fts5-bm25";
   readonly query: string;
+  readonly selectionMode: "semantic";
   readonly candidates: ReadonlyArray<{
     readonly id: string;
     readonly kind: string;
     readonly source: string;
     readonly score: number;
   }>;
-  readonly semanticSelectedIds?: ReadonlyArray<string>;
+  readonly semanticSelectedIds: ReadonlyArray<string>;
 }
 
 export interface MemorySemanticSelectionRequest {
@@ -75,21 +64,12 @@ export async function retrieveMemorySelection(params: {
 }): Promise<MemorySelection> {
   const storyDir = join(params.bookDir, "story");
   const stateDir = join(storyDir, "state");
-  const fallbackChapter = Math.max(0, params.chapterNumber - 1);
-
-  await bootstrapStructuredStateFromMarkdown({
-    bookDir: params.bookDir,
-    fallbackChapter,
-  }).catch(() => undefined);
-
   const [
-    hooksMarkdown,
     volumeSummariesMarkdown,
     structuredHooks,
     structuredSummaries,
   ] = await Promise.all([
-    readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => ""),
-    readFile(join(storyDir, "volume_summaries.md"), "utf-8").catch(() => ""),
+    readOptionalText(join(storyDir, "volume_summaries.md")),
     readStructuredState(join(stateDir, "hooks.json"), HooksStateSchema),
     readStructuredState(join(stateDir, "chapter_summaries.json"), ChapterSummariesStateSchema),
   ]);
@@ -97,61 +77,58 @@ export async function retrieveMemorySelection(params: {
   const parsedVolumeSummaries = parseVolumeSummariesMarkdown(volumeSummariesMarkdown);
   // Structured hook state is authoritative; SQLite remains a rebuildable
   // retrieval projection.
-  const hooks = structuredHooks?.hooks ?? parsePendingHooksMarkdown(hooksMarkdown);
+  const hooks = structuredHooks.hooks;
   // Every unresolved hook remains searchable canon. The semantic selector
   // decides relevance for the current task; status does not imply urgency.
   const searchableHooks = hooks.filter((hook) => hook.status !== "resolved");
 
-  const summaries = structuredSummaries?.rows ?? parseChapterSummariesMarkdown(
-    await readFile(join(storyDir, "chapter_summaries.md"), "utf-8").catch(() => ""),
-  );
-  const memoryDb = new MemoryDB(params.bookDir);
+  const summaries = structuredSummaries.rows;
+  const dbPath = join(storyDir, "memory.db");
+  const searchIndex = new LocalSearchIndex(dbPath);
   try {
-    memoryDb.replaceSummaries(summaries);
+    const documents = buildMemorySearchDocuments({
+      summaries,
+      hooks: searchableHooks,
+      volumeSummaries: parsedVolumeSummaries,
+    });
+    searchIndex.replaceScope(STORY_MEMORY_SCOPE, documents);
+    const hits = searchIndex.search(retrievalQuery, {
+      scope: STORY_MEMORY_SCOPE,
+      limit: 200,
+    });
+    const hitIds = new Set(hits.map((hit) => hit.id));
+    const allCandidates: SearchHit[] = [
+      ...hits,
+      ...documents.filter((document) => !hitIds.has(document.id)).map((document) => ({
+        ...document,
+        score: -1_000_000,
+      })),
+    ];
+    const semanticSelection = await selectSemanticCandidateIds({
+      selector: params.semanticSelector,
+      chapterNumber: params.chapterNumber,
+      query: retrievalQuery,
+      hits: allCandidates,
+    });
+    const selectedIds = new Set(semanticSelection.selectedIds);
 
-    // Markdown/structured hook state is authoritative. SQLite is a rebuildable
-    // search projection and is never allowed to resurrect removed hook rows.
-    const dbPath = join(storyDir, "memory.db");
-    const searchIndex = new LocalSearchIndex(dbPath);
-    try {
-      searchIndex.replaceScope(
-        STORY_MEMORY_SCOPE,
-        buildMemorySearchDocuments({
-          summaries,
-          hooks: searchableHooks,
-          volumeSummaries: parsedVolumeSummaries,
-        }),
-      );
-      const hits = searchIndex.search(retrievalQuery, {
-        scope: STORY_MEMORY_SCOPE,
-        limit: 32,
-      });
-      const semanticSelectedIds = await selectSemanticCandidateIds({
-        selector: params.semanticSelector,
-        chapterNumber: params.chapterNumber,
+    return {
+      summaries: selectSummariesById(summaries, params.chapterNumber, selectedIds),
+      lookupSummaries: summaries,
+      hooks: searchableHooks.filter((hook) => selectedIds.has(hookDocumentId(hook.hookId))),
+      lookupHooks: searchableHooks,
+      volumeSummaries: parsedVolumeSummaries.filter((_, index) => selectedIds.has(volumeSummaryDocumentId(index))),
+      dbPath,
+      retrievalTrace: {
+        engine: "sqlite-fts5-bm25",
         query: retrievalQuery,
-        hits,
-      });
-      const selectedIds = new Set(semanticSelectedIds ?? hits.map((hit) => hit.id));
-
-      return {
-        summaries: selectSummariesById(summaries, params.chapterNumber, selectedIds),
-        hooks: searchableHooks.filter((hook) => selectedIds.has(hookDocumentId(hook.hookId))),
-        lookupHooks: searchableHooks,
-        volumeSummaries: parsedVolumeSummaries.filter((_, index) => selectedIds.has(volumeSummaryDocumentId(index))),
-        dbPath,
-        retrievalTrace: {
-          engine: "sqlite-fts5-bm25",
-          query: retrievalQuery,
-          candidates: hits.map(({ id, kind, source, score }) => ({ id, kind, source, score })),
-          ...(semanticSelectedIds ? { semanticSelectedIds } : {}),
-        },
-      };
-    } finally {
-      searchIndex.close();
-    }
+        selectionMode: "semantic",
+        candidates: allCandidates.map(({ id, kind, source, score }) => ({ id, kind, source, score })),
+        semanticSelectedIds: semanticSelection.selectedIds,
+      },
+    };
   } finally {
-    memoryDb.close();
+    searchIndex.close();
   }
 }
 
@@ -162,44 +139,47 @@ async function selectSemanticCandidateIds(params: {
   readonly chapterNumber: number;
   readonly query: string;
   readonly hits: ReadonlyArray<SearchHit>;
-}): Promise<ReadonlyArray<string> | undefined> {
-  if (!params.selector || params.hits.length <= 1) return undefined;
-  try {
-    const allowed = new Set(params.hits.map((hit) => hit.id));
-    const selected = await params.selector({
-      chapterNumber: params.chapterNumber,
-      query: params.query,
-      candidates: params.hits.map((hit) => ({
-        id: hit.id,
-        kind: hit.kind,
-        source: hit.source,
-        title: hit.title,
-        excerpt: hit.body,
-      })),
-    });
-    return [...new Set(selected)].filter((id) => allowed.has(id));
-  } catch {
-    // Retrieval remains available if the semantic selector is temporarily
-    // unavailable; BM25 and deterministic story-state priorities still apply.
-    return undefined;
-  }
+}): Promise<{ readonly selectedIds: ReadonlyArray<string> }> {
+  if (params.hits.length === 0) return { selectedIds: [] };
+  if (!params.selector) throw new Error("Story-memory semantic selector is required.");
+  const allowed = new Set(params.hits.map((hit) => hit.id));
+  const selected = await params.selector({
+    chapterNumber: params.chapterNumber,
+    query: params.query,
+    candidates: params.hits.map((hit) => ({
+      id: hit.id,
+      kind: hit.kind,
+      source: hit.source,
+      title: hit.title,
+      excerpt: hit.body,
+    })),
+  });
+  const selectedIds = [...new Set(selected)];
+  const unknown = selectedIds.filter((id) => !allowed.has(id));
+  if (unknown.length > 0) throw new Error(`Semantic memory selector returned unknown ids: ${unknown.join(", ")}`);
+  return { selectedIds };
 }
 
 async function readStructuredState<T>(
   path: string,
   schema: { parse(value: unknown): T },
-): Promise<T | null> {
+): Promise<T> {
+  const raw = await readFile(path, "utf-8");
+  return schema.parse(JSON.parse(raw));
+}
+
+async function readOptionalText(path: string): Promise<string> {
   try {
-    const raw = await readFile(path, "utf-8");
-    return schema.parse(JSON.parse(raw));
-  } catch {
-    return null;
+    return await readFile(path, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
   }
 }
 
 function buildMemorySearchDocuments(input: {
-  readonly summaries: ReadonlyArray<StoredSummary>;
-  readonly hooks: ReadonlyArray<StoredHook>;
+  readonly summaries: ReadonlyArray<ChapterSummaryRow>;
+  readonly hooks: ReadonlyArray<HookRecord>;
   readonly volumeSummaries: ReadonlyArray<VolumeSummarySelection>;
 }): SearchDocument[] {
   return [
@@ -274,13 +254,14 @@ function parseVolumeSummariesMarkdown(markdown: string): VolumeSummarySelection[
 }
 
 function selectSummariesById(
-  summaries: ReadonlyArray<StoredSummary>,
+  summaries: ReadonlyArray<ChapterSummaryRow>,
   chapterNumber: number,
   selectedIds: ReadonlySet<string>,
-): StoredSummary[] {
+): ChapterSummaryRow[] {
   return summaries
     .filter((summary) => summary.chapter < chapterNumber)
-    .filter((summary) => summary.chapter === chapterNumber - 1 || selectedIds.has(summaryDocumentId(summary.chapter)))
+    .filter((summary) => summary.chapter === chapterNumber - 1
+      || selectedIds.has(summaryDocumentId(summary.chapter)))
     .sort((left, right) => left.chapter - right.chapter);
 }
 

@@ -23,9 +23,13 @@ describe("guardAssistantMessageStream", () => {
   });
 
   it("ends a stream that never produces its first event", async () => {
+    let attempts = 0;
     const guarded = guardAssistantMessageStream(
       MODEL,
-      () => createAssistantMessageEventStream(),
+      () => {
+        attempts += 1;
+        return createAssistantMessageEventStream();
+      },
       undefined,
       { firstEventTimeoutMs: 10 },
     );
@@ -34,6 +38,7 @@ describe("guardAssistantMessageStream", () => {
     for await (const event of guarded) events.push(event);
 
     expect(events).toHaveLength(1);
+    expect(attempts).toBe(3);
     expect(events[0]).toMatchObject({
       type: "error",
       reason: "error",

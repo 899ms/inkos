@@ -57,7 +57,7 @@ InkOS 1.8.0 把“Chat Agent 调工具”和“各类作品管线”收敛成一
 
 - **模型配置**：Studio 内置多服务配置、模型路由和封面服务配置；支持 [kkaiapi](https://kkaiapi.com/) / OpenRouter 等全球主流模型聚合入口，以及自定义 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 服务。
 - **单一生产 Harness**：Studio Chat、TUI、`inkos interact` 与生产 worker 共用 pi-agent 工具循环和结构化 action/result；既有 pipeline 降为可直接调用、可中断、可观测的确定性能力，不再维护平行的自然语言决策内核。
-- **15 个内置专业 Skills**：长篇写作 / 审稿、商业短篇、Play、剧本、分镜、互动影游、翻译、拆稿、市场研究、导入、封面与去 AI 味都拥有独立 `SKILL.md`；各作品类型复用 Skill 架构，不复用不适合自己的长篇提示词。
+- **19 个内置专业 Skills**：长篇写作 / 审稿、商业短篇、Play、剧本、分镜、互动影游、翻译、拆稿、市场研究、导入、封面与去 AI 味都拥有独立 `SKILL.md`；各作品类型复用 Skill 架构，不复用不适合自己的长篇提示词。
 - **统一本地检索**：故事记忆、材料库和 Skill 参考资料共用 SQLite FTS5 / BM25 检索投影；原始文件仍是权威来源，索引可重建，检索结果保留来源与位置。
 - **书籍参考资料绑定**：导入材料可以显式绑定到某本书并声明用途，写作时按当前任务检索相关段落，而不是把所有文件全文塞进上下文。
 - **安全章节工作区**：正文、状态、伏笔和运行快照先在章节工作区内校验，再原子提交；失败不会出现“状态已推进、正文未落盘”。Studio 可查看改写工作区和真实审稿问题。
@@ -122,7 +122,7 @@ inkos interact --json --message "继续当前书，但把节奏再收紧一点"
 
 这条入口直接走和项目 TUI 相同的交互执行内核，因此 OpenClaw、TUI、Studio 共用同一套控制脑。当前 JSON 输出包含 assistant 文本回复和 interaction session 信息；真正的执行结果以工具结果和落盘文件为准，不从模型口头声明推断完成。
 
-`plan chapter` / `compose chapter` / `draft` / `audit` / `revise` / `write next` 这些原子命令仍然保留，但更适合作为底层工具，而不是 OpenClaw 的首选入口。也可以在 [ClawHub](https://clawhub.ai) 搜索 `inkos` 在线查看。
+底层规划、上下文组装、写作和审稿由同一 Harness action 调度，不再作为平行入口暴露。也可以在 [ClawHub](https://clawhub.ai) 搜索 `inkos` 在线查看。
 
 ### Agent Skills
 
@@ -136,7 +136,7 @@ InkOS 直接使用标准 `SKILL.md` 作为专业能力扩展，不再维护一�
 - 不写 `@skill-id` 时，Chat Agent 根据用户当前意图决定是否调用 `use_skill`；不再通过 session 类型、关键词或字符串包含匹配机械启用。
 - 外部 Skill 只提供指令和静态参考资料，InkOS 不会自动执行其中的脚本；它也不会绕过现有工具权限与确认闸门。
 
-提示词配置不是 Skill。Studio 的 **项目设置 → 提示词** 单独管理 prompt packs，项目级覆盖文件写入 `prompt/<pack>/<prompt>.md`，例如 `prompt/play/renderer.md`、`prompt/longform/writer.md`。
+专业创作方法统一由 Skill 提供。要调整内置方法，可在 Studio 导入同 ID 的项目 Skill 作为覆盖；Agent 文件只保留动态任务、上下文和工具协议。
 
 最小 `SKILL.md` 示例：
 
@@ -260,7 +260,7 @@ inkos doctor
 | ---------------- | ----------------------------------------- |
 | `studio-project` | Studio 运行时：只使用 Studio/project 配置和 secrets |
 | `cli-project`    | CLI 运行时：以 Studio 配置为基础，再叠加 env 和 CLI 参数   |
-| `legacy-env`     | 旧 env 模式：兼容老项目的纯 `.env` 配置                |
+| `environment`    | CLI / daemon 直接使用当前环境配置                         |
 
 
 如果服务测试失败，优先检查服务商、模型和协议是否匹配。Google Gemini 的 AI Studio API Key 可用于 Gemini OpenAI-compatible endpoint；InkOS 会自动禁用 Google 不支持的 OpenAI `store` 参数。MiniMax 默认走官方 OpenAI-compatible `/v1/chat/completions`，并优先使用可工作的非流式 transport，避免流式返回 usage 但无正文的问题；`MiniMax-M3*` 会默认关闭 thinking 返回，M2.x thinking 由上游限制无法关闭。
@@ -272,7 +272,7 @@ inkos doctor
 - **模型归属校验**：`--service google --model kimi-k2.5` 这类错配会直接报错，避免把请求发到错误服务商。
 - **Google Gemini 兼容修复**：AI Studio API Key 可直接用于 Gemini OpenAI-compatible endpoint，InkOS 会自动禁用 Google 不支持的 OpenAI `store` 参数。
 - **MiniMax transport 探测**：MiniMax / MiniMax CodingPlan 使用官方 OpenAI-compatible `/v1` 入口，并自动使用可工作的非流式 transport，规避流式 usage 正常但正文为空的问题。
-- **旧 env 兼容**：老的 `INKOS_LLM_BASE_URL + INKOS_LLM_MODEL + INKOS_LLM_API_KEY` 仍可用于 CLI；没有 `INKOS_LLM_SERVICE` 时会尝试从 baseUrl 反推服务商。
+- **环境配置**：CLI 可使用 `INKOS_LLM_BASE_URL + INKOS_LLM_MODEL + INKOS_LLM_API_KEY`；没有 `INKOS_LLM_SERVICE` 时从当前 baseUrl 识别服务。
 
 ### 当前交互入口
 
@@ -282,16 +282,15 @@ inkos doctor
 - **开始创作入口**：长篇小说、短篇小说、同人创作、番外创作、仿写创作、续写创作、分支互动、开放世界都可以从 Studio 顶部入口进入。
 - **TUI 仪表盘**：`inkos tui` 进入终端全屏交互；支持 `/new`、`/short`、`/play`、`/cover`、`/write`、`/confirm`、`/cancel` 和会话级 `/model <模型名>`。
 - **外部 Agent 入口**：`inkos interact --json --message "..."` 仍是 OpenClaw / 其他 agent 的结构化入口。
-- **原子命令保留**：`plan` / `compose` / `draft` / `audit` / `revise` / `write next` 仍适合脚本和高级用户。
+- **明确命令**：`write next`、`revise`、`review`、导入和导出仍可直接调用；内部规划与上下文阶段由 Harness 统一编排。
 
 ### 写第一本书
 
 ```bash
 inkos book create --title "吞天魔帝" --genre xuanhuan  # 创建新书
-inkos write next 吞天魔帝      # 写下一章（草稿 → 审计 → 按配置修订）
+inkos write next 吞天魔帝      # 写下一章并记录审稿 observation
 inkos status                   # 查看状态
-inkos review list 吞天魔帝     # 审阅草稿
-inkos review approve-all 吞天魔帝  # 批量通过
+inkos review 吞天魔帝          # 查看已记录的审稿 observation
 inkos export 吞天魔帝          # 导出全书
 inkos export 吞天魔帝 --format epub  # 导出 EPUB（手机/Kindle 阅读）
 ```
@@ -351,7 +350,7 @@ Studio Chat 不再只是问答框。它可以创建长篇、跑短篇、生成�
 
 Play 维护一个可持续推进的世界状态：角色、地点、物品、证据、关系、时间、场景和 HUD。它不是固定 RPG 模板，你可以用自然语言定义世界契约：修仙装备可以有稀有感，恋爱本可以有心动层级，侦探本可以有证据生命周期。系统把这些规则写进世界状态，再用于后续叙事和配图。
 
-### 多维度审计 + 去 AI 味
+### 定性审稿 + 去 AI 味
 
 连续性审查会从角色记忆、物资连续性、伏笔回收、大纲偏离、叙事节奏和情感弧线等维度记录具体 observation。内置 AI 痕迹检测会标出高频词、句式单调和过度总结等可修订位置。observation 是可追溯的创作反馈，不会把章节改写成“通过/失败”状态；用户或 Agent 可据此显式发起修订。
 
@@ -359,11 +358,11 @@ Play 维护一个可持续推进的世界状态：角色、地点、物品、证
 
 ### 文风仿写
 
-`inkos style analyze` 分析参考文本，提取统计指纹（句长分布、词频特征、节奏模式）和 LLM 风格指南。`inkos style import` 将指纹注入指定书籍，后续所有章节自动采用该风格，修订者也会用风格标准做审计。
+`inkos style analyze` 按激活的分析与仿写 Skill，把参考文本编译为有证据的可执行文风指南；`inkos style import` 将指南绑定到指定作品，供后续写作与修订按需使用。
 
 ### 创作简报
 
-`inkos book create --brief my-ideas.md` 传入你的脑洞、世界观设定、人设文档。建筑师 agent 会基于简报生成故事设定（`story_bible.md`）和创作规则（`book_rules.md`），而非凭空创作；同时把简报落盘到 `story/author_intent.md`，让这本书的长期创作意图不会只在建书时生效一次。
+`inkos book create --brief my-ideas.md` 传入你的脑洞、世界观设定或人设文档。Architect 基于简报生成 `outline/story_frame.md`、`outline/volume_map.md`、角色卡和 `book_rules.md/json`，并把长期方向保存到 `story/author_intent.md`。
 
 ### 输入治理控制面
 
@@ -372,23 +371,16 @@ Play 维护一个可持续推进的世界状态：角色、地点、物品、证
 - `story/author_intent.md`：这本书长期想成为什么
 - `story/current_focus.md`：最近 1-3 章要把注意力拉回哪里
 
-写作前可以先跑：
-
-```bash
-inkos plan chapter 吞天魔帝 --context "本章先把注意力拉回师徒矛盾"
-inkos compose chapter 吞天魔帝
-```
-
-这会生成 `story/runtime/chapter-XXXX.intent.md`、`context.json`、`rule-stack.yaml`、`trace.json`。其中 `intent.md` 给人看，其他文件给系统执行和调试。`plan` 会调用 LLM 生成章节意图；`compose` 只编译本地文档和状态，可在没配好 API Key 前先验证控制输入。
+用户可直接在 Studio Chat、TUI 或 `inkos agent` 中调整方向。Planner 先通过语义选择得到本章工作集，再生成 `story/runtime/chapter-XXXX.intent.md`；Composer 持久化 `context.json` 与 `trace.json`，记录真正进入模型的来源、保护层级、检索结果和压缩情况。
 
 ### 字数治理
 
-`draft`、`write next`、`revise` 现在共享同一套保守型字数治理：
+`write next` 与 `revise` 共享同一套字数遥测：
 
 - `--words` 指定的是目标字数，系统会自动推导一个允许区间，不承诺逐字精确命中
 - 中文默认按 `zh_chars` 计数，英文默认按 `en_words` 计数
-- 如果正文超出允许区间，InkOS 最多只会追加 1 次纠偏归一化（压缩或补足），不会直接硬截断正文
-- 如果 1 次纠偏后仍然超出 hard range，章节照常保存，但会在结果和 chapter index 里留下长度 warning / telemetry
+- 系统不会截断正文，也不会因长度偏差把章节标成失败
+- 超出 hard range 时仍保存正文，并在 chapter index 与 ActionResult 中记录结构化遥测和 observation
 
 ### 续写已有作品
 
@@ -408,11 +400,11 @@ inkos compose chapter 吞天魔帝
 
 ### 本地模型兼容
 
-支持任何 OpenAI 兼容接口（Studio 里新增自定义服务，或 CLI 使用 `--provider custom` / `INKOS_LLM_PROVIDER=custom`）。服务测试会尝试不同协议和流式开关组合，并保存或提示可用 transport。Fallback 解析器处理小模型不规范输出，流中断时自动恢复部分内容。
+支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和自定义兼容端点。服务测试会验证协议与流式能力；结构化输出缺失、流中断或输出上限都会明确报错或触发完整续写，不会把残缺文本当成功结果。
 
 ### 可靠性保障
 
-每章自动创建状态快照，`inkos write rewrite` 可回滚任意章节。写手动笔前输出自检表（上下文、资源、伏笔、风险），写完输出结算表，审计员交叉验证。文件锁防止并发写入。写后验证器含跨章重复检测和十余条硬规则自动 spot-fix。
+每章自动创建状态快照，正文、索引和结构化状态以原子文件集提交。文件锁与 Action 队列防止并发写入；中断会留下 Episode 事件和可恢复状态。审稿只记录有证据的 observation，修订由用户或 Agent 显式发起。
 
 伏笔系统使用 Zod schema 校验——`lastAdvancedChapter` 必须是整数，`status` 只能是 open/progressing/deferred/resolved。LLM 输出的 JSON delta 在写入前经过 `applyRuntimeStateDelta` 做 immutable 更新 + `validateRuntimeState` 结构校验。坏数据直接拒绝，不会滚雪球。
 
@@ -428,7 +420,7 @@ InkOS 以 pi-agent harness 作为统一认知与工具调用内核：Agent 理�
   <img src="assets/arch-system.svg" width="900" alt="InkOS 整体系统架构">
 </p>
 
-长篇每一章默认按“规划 → 编排 → 写作 → 审计 → 必要修订 → 状态同步”运行：
+长篇每一章按“语义工作集 → 规划 → 写作 → 状态投影 → observation → 原子提交”运行；修订是独立 Action：
 
 <p align="center">
   <img src="assets/arch-pipeline.svg" width="900" alt="InkOS 章节生产管线">
@@ -439,11 +431,10 @@ InkOS 以 pi-agent harness 作为统一认知与工具调用内核：Agent 理�
 | ------------------- | ----------------------------------------------------------------- |
 | **雷达 Radar**        | 扫描平台趋势和读者偏好，指导故事方向（可插拔，可跳过）                                       |
 | **规划师 Planner**     | 读取作者意图 + 当前焦点 + 记忆检索结果，产出本章意图（must-keep / must-avoid）             |
-| **编排师 Composer**    | 从结构化状态、控制文档和 Markdown 投影中按任务选择上下文，编译规则栈和运行时产物                     |
+| **编排师 Composer**    | 从结构化状态、控制文档和材料中按任务选择上下文，记录保护层级、检索和语义压缩 trace                    |
 | **建筑师 Architect**   | 建书、导入或番外初始化时生成基础设定：故事框架、规则、角色与长期控制文件                              |
 | **写手 Writer**       | 基于编排后的精简上下文生成正文（字数治理 + 对话引导）                                      |
-| **观察者 Observer**    | 从正文中过度提取 9 类事实（角色、位置、资源、关系、情感、信息、伏笔、时间、物理状态）                      |
-| **反射器 Reflector**   | 输出 JSON delta（而非全量 markdown），由代码层做 Zod schema 校验后 immutable 写入    |
+| **状态结算 Settler**    | 通过 typed tool 提交正文有证据的增量 state delta，由宿主校验并应用                                 |
 | **审稿 Agent**  | 对照用户意图、正典、状态、章节计划和审稿 Skill，返回有证据的定性观察                                 |
 | **修订者 Reviser**     | 接受用户、Agent 或审查 observation 给出的明确修改目标，生成并原子落盘新版本                         |
 
@@ -452,21 +443,19 @@ InkOS 以 pi-agent harness 作为统一认知与工具调用内核：Agent 理�
 
 ### 长期记忆
 
-每本书的权威记忆由三层组成：
+每本书的权威记忆与检索投影分开：
 
 
 | 层                    | 用途                                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------------- |
 | `story/state/*.json` | 权威结构化状态：当前状态、伏笔、章节摘要等，经过 Zod schema 校验                                                      |
 | `story/*.md`         | 人类可读投影：`current_state.md`、`pending_hooks.md`、`chapter_summaries.md`、`character_matrix.md` 等 |
-| `story/memory.db`    | Node 22+ 自动启用的 SQLite 时序记忆库，用于相关事实、伏笔和摘要检索                                                  |
+| `story/memory.db`    | 可重建的 SQLite FTS5/BM25 检索投影；不作为故事事实权威                                                        |
 
 
 连续性审计员对照这些状态检查每一章草稿。如果角色"记起"了从未亲眼见过的事，或者拿出了两章前已经丢失的武器，审计员会捕捉到。
 
-Settler 不再要求模型输出完整 markdown 文件，而是输出 JSON delta，由代码层做 immutable apply + 结构校验后写入。Markdown 文件保留为人类可读投影。旧书首次运行时会从 legacy Markdown 自动迁移到结构化 JSON。
-
-Node 22+ 环境下自动启用 SQLite 时序记忆数据库（`story/memory.db`），支持按相关性检索历史事实、伏笔和章节摘要，避免全量注入导致的上下文膨胀。
+Settler 通过 typed tool 输出完整增量 delta，代码层做 immutable apply 和结构校验。Markdown 只是人类可读投影；检索时从 canonical JSON 重建索引，再由 LLM 对 BM25 候选做语义选择。
 
 <p align="center">
   <img src="assets/arch-memory.svg" width="900" alt="InkOS 长期记忆与状态">
@@ -480,20 +469,17 @@ Node 22+ 环境下自动启用 SQLite 时序记忆数据库（`story/memory.db`�
 - `story/current_focus.md`：当前阶段的关注点
 - `story/runtime/chapter-XXXX.intent.md`：本章目标、保留项、避免项、冲突处理
 - `story/runtime/chapter-XXXX.context.json`：本章实际选入的上下文
-- `story/runtime/chapter-XXXX.rule-stack.yaml`：本章的优先级层和覆盖关系
 - `story/runtime/chapter-XXXX.trace.json`：本章输入编译轨迹
 
 这样 `brief`、卷纲、书级规则、当前任务不再混成一坨 prompt，而是先编译，再写作。
 
 ### 创作规则体系
 
-写手 agent 内置 ~25 条通用创作规则（人物塑造、叙事技法、逻辑自洽、语言约束、去 AI 味），适用于所有题材。
-
-在此基础上，每个题材有专属规则（禁忌、语言约束、节奏、审计维度），每本书有独立的 `book_rules.md`（主角人设、数值上限、自定义禁令）、`story_bible.md`（世界观设定）、`author_intent.md`（长期方向）和 `current_focus.md`（近期关注点）。`volume_outline.md` 仍然是默认规划，但在 v2 输入治理模式下不再天然压过当前任务意图。
+专业创作方法由 Work Profile 绑定的 Skill 提供，可由项目中同 ID 的 `SKILL.md` 覆盖。Agent 代码只保留任务、输入权威和 typed tool 协议；每本作品仍有独立的 `book_rules.md/json`、`outline/story_frame.md`、`outline/volume_map.md`、`author_intent.md` 和 `current_focus.md`。
 
 ## 使用模式
 
-InkOS 提供四种交互方式，底层共享同一组原子操作：
+InkOS 提供 Studio Chat、TUI、CLI Agent 和明确命令，底层共享同一 Harness：
 
 ### 1. 完整管线（一键式）
 
@@ -504,17 +490,16 @@ inkos write next 吞天魔帝 --count 5 # 连续写 5 章
 
 `write next` 使用唯一的 `plan -> compose -> write -> review -> commit` 创作链路。审查产生 observation；技术校验决定能否原子落盘，语义反馈不会被转换成章节失败状态。
 
-### 2. 原子命令（可组合，适合外部 Agent 调用）
+### 2. 明确能力命令
 
 ```bash
-inkos plan chapter 吞天魔帝 --context "本章重点写师徒矛盾" --json
-inkos compose chapter 吞天魔帝 --json
-inkos draft 吞天魔帝 --context "本章重点写师徒矛盾" --json
-inkos audit 吞天魔帝 31 --json
+inkos write next 吞天魔帝 --count 3
 inkos revise 吞天魔帝 31 --json
+inkos review 吞天魔帝 --json
+inkos export 吞天魔帝 --format epub
 ```
 
-每个命令独立执行单一操作，`--json` 输出结构化数据。`plan` / `compose` 负责控制输入，`draft` / `audit` / `revise` 负责正文与质量链路。可被外部 AI Agent 通过 `exec` 调用，也可用于脚本编排。
+这些命令表达已经确定的用户动作；自然语言意图仍进入 pi-agent Harness，由当前 Work Profile 的 capability surface 决策。
 
 ### 3. 自然语言 Agent 模式
 
@@ -524,7 +509,7 @@ inkos agent "写下一章，重点写师徒矛盾"
 inkos agent "先扫描市场趋势，然后根据结果创建一本新书"
 ```
 
-Agent 模式暴露的是按场景收窄后的工具集：建书、读写控制面、规划、编排、写作、审稿、修订、短篇、封面、Play 等能力会按当前 session 类型开放。推荐的 Agent 工作流是：先调整控制面，再 `plan` / `compose`，最后决定写草稿还是跑完整管线。
+Agent 模式只暴露当前 Work Profile 允许的 capability。模型可按意图加载 Skill、读取 Work、提出新作品确认、写作、审稿或修订；完成态只来自 ActionResult 和真实 artifact revision。
 
 ### 4. Studio Play 模式
 
@@ -569,23 +554,16 @@ Studio 里的「开放世界」和「分支互动」是交互式创作入口。�
 | `inkos book list`                           | 列出所有书籍                                                                                     |
 | `inkos book delete <id>`                    | 删除书籍及全部数据（`--force` 跳过确认）                                                                  |
 | `inkos genre list/show/copy/create`         | 查看、复制、创建题材                                                                                 |
-| `inkos plan chapter [id]`                   | 生成下一章的 `intent.md`（`--context` / `--context-file` 传入当前指令）                                  |
-| `inkos compose chapter [id]`                | 生成下一章的 `context.json`、`rule-stack.yaml`、`trace.json`                                       |
 | `inkos write next [id]`                     | 完整管线写下一章（`--words` 覆盖字数，`--count` 连写，`-q` 静默模式）                                            |
 | `inkos write rewrite [id] <n>`              | 重写第 N 章（恢复状态快照，`--force` 跳过确认，`--words` 覆盖字数）                                              |
-| `inkos draft [id]`                          | 只写草稿（`--words` 覆盖字数，`-q` 静默模式）                                                             |
-| `inkos audit [id] [n]`                      | 审计指定章节                                                                                     |
 | `inkos revise [id] [n]`                     | 修订指定章节                                                                                     |
 | `inkos agent <instruction>`                 | 自然语言 Agent 模式                                                                              |
-| `inkos review list [id]`                    | 审阅草稿                                                                                       |
-| `inkos review approve-all [id]`             | 批量通过                                                                                       |
+| `inkos review [id]`                         | 查看已持久化的审稿 observation                                                                     |
 | `inkos status [id]`                         | 项目状态                                                                                       |
 | `inkos export [id]`                         | 导出书籍（`--format txt/md/epub`、`--output <path>`）                                               |
 | `inkos radar scan`                          | 扫描平台趋势                                                                                     |
 | `inkos fanfic init`                         | 从原作素材创建同人书（`--from`、`--mode canon/au/ooc/cp`）                                              |
 | `inkos short run`                           | 生成独立短篇包（正文、简介卖点、封面提示词、可选封面图）                                                               |
-| `inkos audit [id] [chapter]`                | 生成有证据的定性审稿观察                                                                                   |
-| `inkos consolidate [id]`                    | 归并长篇章节摘要，降低长书上下文压力                                                                         |
 | `inkos forecast create/show/select`          | 生成、核验并选择长篇的非正史剧情分支；选择只保存候选计划，不修改正史                                                        |
 | `inkos interact`                            | 外部 agent / CLI 自然语言入口（`--json`、`--message`、`--book`）                                       |
 | `inkos config set-global`                   | 设置 CLI / daemon / 部署环境的全局 LLM env（`~/.inkos/.env`）                                         |
@@ -600,14 +578,14 @@ Studio 里的「开放世界」和「分支互动」是交互式创作入口。�
 | `inkos style import <file> [id]`            | 导入文风指纹到指定书                                                                                 |
 | `inkos import canon [id] --from <parent>`   | 导入正传正典到番外书                                                                                 |
 | `inkos import chapters [id] --from <path>`  | 导入已有章节续写（`--split`、`--resume-from`）                                                        |
-| `inkos analytics [id]` / `inkos stats [id]` | 书籍数据分析（审计通过率、高频问题、章节排名、token 用量）                                                           |
+| `inkos analytics [id]` / `inkos stats [id]` | 书籍数据分析（observation、章节长度、token 用量）                                                           |
 | `inkos update`                              | 更新到最新版本                                                                                    |
 | `inkos studio` / `inkos`                    | 启动 Web 工作台（`-p` 指定端口，默认 4567；Studio 使用服务页配置，不使用 env 覆盖）                                    |
 | `inkos tui`                                 | 启动终端全屏 TUI                                                                                 |
 | `inkos up / down`                           | 启动/停止守护进程（`-q` 静默模式，自动写入 `inkos.log`）                                                      |
 
 
-`[id]` 参数在项目只有一本书时可省略，自动检测。所有命令支持 `--json` 输出结构化数据。`draft` / `write next` / `plan chapter` / `compose chapter` 支持 `--context` 传入创作指导，`--words` 覆盖每章目标字数。`book create` 支持 `--brief <file>` 传入创作简报（你的脑洞/设定文档），Architect 会基于此生成设定而非凭空创作。`plan chapter` 会调用 LLM 生成章节意图；`compose chapter` 不要求在线 LLM，可在配置 API Key 之前先检查输入治理结果。
+`[id]` 参数在项目只有一本书时可省略。`write next` 支持 `--context` 传入创作指导，`--words` 覆盖每章目标字数；`book create` 支持 `--brief <file>` 传入创作简报。内部 Planner/Composer 产生的 intent、context 和 trace 可在 Studio 中查看。
 
 CLI 运行时还支持一次性 LLM 覆盖参数：`--service`、`--model`、`--api-key-env`、`--base-url`、`--api-format <chat|responses|anthropic>`、`--stream`、`--no-stream`。`anthropic` 对应 Anthropic Messages 协议。例如：
 

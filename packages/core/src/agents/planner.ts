@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { BaseAgent } from "./base.js";
 import type { BookConfig } from "../models/book.js";
@@ -9,6 +9,7 @@ import {
   ChapterMemoSchema,
   type ChapterIntent,
   type ChapterMemo,
+  type ContextPackage,
 } from "../models/input-governance.js";
 import { loadPlanningSeedMaterials } from "../utils/planning-materials.js";
 import { ChapterMemoToolSchema } from "./planner-tool.js";
@@ -16,12 +17,7 @@ import {
   buildPlannerUserMessage,
   getPlannerMemoSystemPrompt,
 } from "./planner-prompts.js";
-import {
-  readBookRules,
-  readCharacterMatrix,
-  readEmotionalArcs,
-  readSubplotBoard,
-} from "./planner-context.js";
+import { ComposerAgent } from "./composer.js";
 
 export interface PlanChapterInput {
   readonly book: BookConfig;
@@ -56,37 +52,46 @@ export class PlannerAgent extends BaseAgent {
       bookDir: input.bookDir,
       chapterNumber: input.chapterNumber,
     });
-    const plannerInputs = [
-      join(storyDir, "author_intent.md"),
-      join(storyDir, "current_focus.md"),
-      join(storyDir, "outline", "story_frame.md"),
-      join(storyDir, "outline", "volume_map.md"),
-      join(storyDir, "chapter_summaries.md"),
-      join(storyDir, "book_rules.md"),
-      join(storyDir, "current_state.md"),
-      join(storyDir, "pending_hooks.md"),
-    ];
+    const taskGoal = [
+      input.externalContext,
+      seedMaterials.currentFocus,
+      seedMaterials.authorIntent,
+      seedMaterials.brief,
+    ].map((value) => value?.trim()).filter(Boolean).join("\n\n")
+      || (input.book.language === "en"
+        ? `Continue chapter ${input.chapterNumber} from the current Work state.`
+        : `根据当前作品状态续写第${input.chapterNumber}章。`);
+    const selected = await new ComposerAgent(this.ctx).selectTaskContext({
+      bookDir: input.bookDir,
+      chapterNumber: input.chapterNumber,
+      goal: taskGoal,
+      language: input.book.language,
+    });
+    const contextPackage: ContextPackage = seedMaterials.previousEndingExcerpt
+      ? {
+          ...selected,
+          selectedContext: [
+            ...selected.selectedContext,
+            {
+              source: `runtime/previous_chapter#${input.chapterNumber - 1}`,
+              reason: "Previous chapter text required for chapter transition planning.",
+              excerpt: seedMaterials.previousEndingExcerpt,
+              protection: "protected",
+            },
+          ],
+        }
+      : selected;
+    const plannerInputs = contextPackage.selectedContext.map((entry) => entry.source);
 
     const lengthSpec = buildLengthSpec(
       input.book.chapterWordCount,
-      input.book.language ?? "zh",
+      input.book.language,
     );
     const memo = await this.planChapterMemo({
-      storyDir,
-      bookDir: input.bookDir,
       chapterNumber: input.chapterNumber,
-      authorIntent: seedMaterials.authorIntent,
-      currentFocus: seedMaterials.currentFocus,
-      chapterSummariesRaw: seedMaterials.chapterSummariesRaw,
-      previousEndingExcerpt: seedMaterials.previousEndingExcerpt,
-      brief: seedMaterials.brief,
-      chapterContext: [
-        seedMaterials.storyBible,
-        seedMaterials.volumeOutline,
-        seedMaterials.currentState,
-        input.externalContext,
-      ].filter(Boolean).join("\n\n"),
-      language: input.book.language ?? "zh",
+      contextPackage,
+      currentInstruction: input.externalContext,
+      language: input.book.language,
       lengthSpec,
     });
 
@@ -113,44 +118,18 @@ export class PlannerAgent extends BaseAgent {
 
   /** Compile the governed context into a typed semantic chapter memo. */
   async planChapterMemo(input: {
-    readonly storyDir: string;
-    readonly bookDir: string;
     readonly chapterNumber: number;
-    readonly authorIntent: string;
-    readonly currentFocus: string;
-    readonly chapterSummariesRaw: string;
-    readonly previousEndingExcerpt?: string;
-    readonly brief?: string;
-    readonly chapterContext?: string;
+    readonly contextPackage: ContextPackage;
+    readonly currentInstruction?: string;
     readonly language?: "zh" | "en";
     readonly lengthSpec: LengthSpec;
   }): Promise<ChapterMemo> {
-    const [characterMatrix, subplotBoard, emotionalArcs, bookRulesRaw, pendingHooks] = await Promise.all([
-      readCharacterMatrix(input.storyDir),
-      readSubplotBoard(input.storyDir),
-      readEmotionalArcs(input.storyDir),
-      readBookRules(input.storyDir),
-      this.readFileOrDefault(join(input.storyDir, "pending_hooks.md")),
-    ]);
-
     const language = input.language ?? "zh";
-    const noPriorChapter = language === "en"
-      ? "(this is the opening chapter — no prior chapter)"
-      : "（本章为起始章，无前章）";
-    const noBookRules = language === "en"
-      ? "(no book_rules entries)"
-      : "（暂无 book_rules 条目）";
 
     const userMessage = buildPlannerUserMessage({
       chapterNumber: input.chapterNumber,
-      previousChapterEndingExcerpt: input.previousEndingExcerpt?.trim()
-        ? input.previousEndingExcerpt.trim()
-        : noPriorChapter,
-      recentSummaries: input.chapterSummariesRaw,
-      currentArcProse: [subplotBoard, emotionalArcs].filter(Boolean).join("\n\n"),
-      characterContext: characterMatrix,
-      relevantThreads: [pendingHooks, subplotBoard].filter(Boolean).join("\n\n"),
-      bookRulesRelevant: bookRulesRaw.trim().length > 0 ? bookRulesRaw.trim() : noBookRules,
+      contextPackage: input.contextPackage,
+      currentInstruction: input.currentInstruction,
       lengthBudget: {
         target: input.lengthSpec.target,
         softMin: input.lengthSpec.softMin,
@@ -159,10 +138,6 @@ export class PlannerAgent extends BaseAgent {
         hardMax: input.lengthSpec.hardMax,
         unit: input.lengthSpec.countingMode === "en_words" ? "words" : "字",
       },
-      brief: input.brief ?? "",
-      chapterContext: input.chapterContext ?? "",
-      authorIntent: input.authorIntent,
-      currentFocus: input.currentFocus,
       language,
     });
 
@@ -211,14 +186,5 @@ export class PlannerAgent extends BaseAgent {
       "### Body",
       memoBody,
     ].join("\n");
-  }
-
-  // Kept for potential subclasses reading seed files directly.
-  protected async readFileOrDefault(path: string): Promise<string> {
-    try {
-      return await readFile(path, "utf-8");
-    } catch {
-      return "(文件尚未创建)";
-    }
   }
 }

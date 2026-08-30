@@ -78,7 +78,7 @@ describe("state projections", () => {
     ].join("\n"));
   });
 
-  it("renders current state projection with placeholders and additional notes", () => {
+  it("renders current state as generic typed facts without semantic slots", () => {
     const markdown = renderCurrentStateProjection({
       chapter: 12,
       facts: [
@@ -112,18 +112,13 @@ describe("state projections", () => {
     expect(markdown).toBe([
       "# Current State",
       "",
-      "| Field | Value |",
-      "| --- | --- |",
-      "| Current Chapter | 12 |",
-      "| Current Location | (not set) |",
-      "| Protagonist State | (not set) |",
-      "| Current Goal | Track the mentor debt through the river-port ledger. |",
-      "| Current Constraint | (not set) |",
-      "| Current Alliances | (not set) |",
-      "| Current Conflict | Guild pressure keeps pulling against the debt trail. |",
+      "> Current chapter: 12",
       "",
-      "## Additional State",
-      "- Lin Yue still hides the broken oath token.",
+      "| Subject | Predicate | Object | Valid from | Source chapter |",
+      "| --- | --- | --- | --- | --- |",
+      "| current_state | note_1 | Lin Yue still hides the broken oath token. | 12 | 12 |",
+      "| protagonist | Current Conflict | Guild pressure keeps pulling against the debt trail. | 12 | 12 |",
+      "| protagonist | Current Goal | Track the mentor debt through the river-port ledger. | 12 | 12 |",
       "",
     ].join("\n"));
   });

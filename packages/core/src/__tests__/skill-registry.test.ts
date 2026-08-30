@@ -69,8 +69,17 @@ describe("AgentSkills registry", () => {
       version: 2,
       id: "script",
       title: "Script",
+      description: "Script creation",
       capabilityIds: ["script"],
       requiredSkillIds: ["inkos-script-writing"],
+      recommendedSkillIds: [],
+      contextRecipes: {},
+      artifactKinds: ["script"],
+      confirmation: {
+        inferredMutation: "execute",
+        explicitRecoverableMutation: "execute",
+        destructiveMutation: "confirm",
+      },
     });
 
     expect(() => resolveProfileSkillActivations([], profile)).toThrow(

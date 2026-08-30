@@ -11,7 +11,7 @@ function textFromContentParts(content: unknown): string {
     .join("\n");
 }
 
-export function summarizeToolResult(result: unknown, maxLength = 2000): string {
+export function summarizeToolResult(result: unknown): string {
   let text = "";
 
   if (typeof result === "string") {
@@ -33,5 +33,5 @@ export function summarizeToolResult(result: unknown, maxLength = 2000): string {
     }
   }
 
-  return text.slice(0, maxLength);
+  return text;
 }

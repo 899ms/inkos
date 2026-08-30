@@ -8,7 +8,7 @@ import type { WriteChapterOutput } from "../agents/writer.js";
 import type { WriterAgent } from "../agents/writer.js";
 import type { Logger } from "../utils/logger.js";
 import type { BookConfig } from "../models/book.js";
-import type { ContextPackage, RuleStack } from "../models/input-governance.js";
+import type { ContextPackage } from "../models/input-governance.js";
 import type { LengthLanguage } from "../utils/length-metrics.js";
 
 export interface SettlementRetryParams {
@@ -21,10 +21,9 @@ export interface SettlementRetryParams {
   readonly allowNewHooks?: boolean;
   readonly title: string;
   readonly content: string;
-  readonly reducedControlInput?: {
+  readonly reducedControlInput: {
     chapterIntent: string;
     contextPackage: ContextPackage;
-    ruleStack: RuleStack;
   };
   readonly oldState: string;
   readonly oldHooks: string;
@@ -64,9 +63,8 @@ export async function reconcileChapterStateAfterReview(
     allowReapply: true,
     baselineChapter: params.baselineChapter,
     allowNewHooks: params.allowNewHooks,
-    chapterIntent: params.reducedControlInput?.chapterIntent,
-    contextPackage: params.reducedControlInput?.contextPackage,
-    ruleStack: params.reducedControlInput?.ruleStack,
+    chapterIntent: params.reducedControlInput.chapterIntent,
+    contextPackage: params.reducedControlInput.contextPackage,
     validationFeedback: buildStateReconciliationFeedback(
       params.originalValidation.warnings,
       params.language,

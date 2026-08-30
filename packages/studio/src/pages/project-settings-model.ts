@@ -21,7 +21,6 @@ export interface DetectionDraft {
   provider: string;
   apiUrl: string;
   apiKeyEnv: string;
-  threshold: number;
   rest?: Record<string, unknown>;
 }
 
@@ -30,7 +29,6 @@ export const DEFAULT_DETECTION: DetectionDraft = {
   provider: "custom",
   apiUrl: "",
   apiKeyEnv: "",
-  threshold: 0.5,
 };
 
 export const NOTIFY_TYPES: ReadonlyArray<{ value: NotifyType; label: string }> = [
@@ -54,10 +52,6 @@ function omitKeys(source: Record<string, unknown>, keys: ReadonlyArray<string>):
 
 function stringField(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-function numberField(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function booleanField(value: unknown, fallback: boolean): boolean {
@@ -105,8 +99,7 @@ export function detectionDraftFromConfig(value: unknown): DetectionDraft {
     provider: stringField(raw.provider) ?? DEFAULT_DETECTION.provider,
     apiUrl: stringField(raw.apiUrl) ?? DEFAULT_DETECTION.apiUrl,
     apiKeyEnv: stringField(raw.apiKeyEnv) ?? DEFAULT_DETECTION.apiKeyEnv,
-    threshold: numberField(raw.threshold, DEFAULT_DETECTION.threshold),
-    rest: omitKeys(raw, ["enabled", "provider", "apiUrl", "apiKeyEnv", "threshold"]),
+    rest: omitKeys(raw, ["enabled", "provider", "apiUrl", "apiKeyEnv"]),
   };
 }
 
@@ -117,7 +110,6 @@ export function buildDetectionConfig(det: DetectionDraft): Record<string, unknow
     provider: det.provider,
     apiUrl: det.apiUrl,
     apiKeyEnv: det.apiKeyEnv,
-    threshold: det.threshold,
     enabled: true,
   };
 }

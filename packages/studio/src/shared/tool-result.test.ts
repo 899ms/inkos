@@ -11,8 +11,4 @@ describe("summarizeToolResult", () => {
     expect(summarizeToolResult({ status: "cancelled", resumeCursor: "2" }))
       .toBe('{"status":"cancelled","resumeCursor":"2"}');
   });
-
-  it("respects the caller's display limit", () => {
-    expect(summarizeToolResult("abcdef", 3)).toBe("abc");
-  });
 });

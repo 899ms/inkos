@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { InteractionSessionSchema, type InteractionSession, GlobalSessionSchema, type GlobalSession } from "./session.js";
+import { InteractionSessionSchema, type InteractionSession } from "./session.js";
 import { listWorkManifests } from "../harness/work-store.js";
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 
 const SESSION_DIR = ".inkos";
 const SESSION_FILE = "session.json";
@@ -14,7 +15,6 @@ export function createProjectSession(projectRoot: string): InteractionSession {
   return InteractionSessionSchema.parse({
     sessionId: `${Date.now()}`,
     projectRoot,
-    automationMode: "semi",
     messages: [],
   });
 }
@@ -23,8 +23,9 @@ export async function loadProjectSession(projectRoot: string): Promise<Interacti
   try {
     const raw = await readFile(resolveProjectSessionPath(projectRoot), "utf-8");
     return InteractionSessionSchema.parse(JSON.parse(raw));
-  } catch {
-    return createProjectSession(projectRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return createProjectSession(projectRoot);
+    throw error;
   }
 }
 
@@ -32,31 +33,11 @@ export async function persistProjectSession(
   projectRoot: string,
   session: InteractionSession,
 ): Promise<void> {
-  const dir = join(projectRoot, SESSION_DIR);
-  await mkdir(dir, { recursive: true });
-  await writeFile(resolveProjectSessionPath(projectRoot), JSON.stringify(session, null, 2), "utf-8");
-}
-
-export async function loadGlobalSession(projectRoot: string): Promise<GlobalSession> {
-  try {
-    const raw = await readFile(join(projectRoot, SESSION_DIR, SESSION_FILE), "utf-8");
-    const data = JSON.parse(raw);
-    return GlobalSessionSchema.parse({
-      activeBookId: data.activeBookId,
-      automationMode: data.automationMode ?? "semi",
-    });
-  } catch {
-    return { automationMode: "semi" };
-  }
-}
-
-export async function persistGlobalSession(
-  projectRoot: string,
-  global: GlobalSession,
-): Promise<void> {
-  const dir = join(projectRoot, SESSION_DIR);
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, SESSION_FILE), JSON.stringify(global, null, 2));
+  const parsed = InteractionSessionSchema.parse(session);
+  await commitAtomicFileSet({
+    rootDir: projectRoot,
+    writes: [{ relativePath: join(SESSION_DIR, SESSION_FILE), content: `${JSON.stringify(parsed, null, 2)}\n` }],
+  });
 }
 
 export async function resolveSessionActiveBook(

@@ -11,7 +11,6 @@ export interface TuiCopy {
     readonly session: string;
     readonly messageCount: (count: number) => string;
     readonly stage: string;
-    readonly mode: string;
     readonly model: string;
     readonly error: string;
     readonly recent: string;
@@ -22,7 +21,6 @@ export interface TuiCopy {
     readonly notConfigured: string;
     readonly unknown: string;
   };
-  readonly modeLabels: Record<string, string>;
   readonly composer: {
     readonly placeholder: string;
     readonly emptyConversation: string;
@@ -33,7 +31,7 @@ export interface TuiCopy {
   };
   readonly notes: {
     readonly help: string;
-    readonly status: (stage: string, mode: string) => string;
+    readonly status: (stage: string) => string;
     readonly config: string;
     readonly depthSet: (depthLabel: string) => string;
     readonly modelCurrent: (modelLabel: string) => string;
@@ -68,7 +66,6 @@ const ZH_CN: TuiCopy = {
     session: "会话",
     messageCount: (count) => `${count} 条消息`,
     stage: "阶段",
-    mode: "模式",
     model: "模型",
     error: "错误",
     recent: "最近",
@@ -78,11 +75,6 @@ const ZH_CN: TuiCopy = {
     none: "无",
     notConfigured: "未配置",
     unknown: "未知",
-  },
-  modeLabels: {
-    auto: "自动",
-    semi: "半自动",
-    manual: "手动",
   },
   composer: {
     placeholder: "告诉 InkOS 要写什么、修改什么，或解释什么…",
@@ -94,7 +86,7 @@ const ZH_CN: TuiCopy = {
   },
   notes: {
     help: "可用命令：/new（建书）、/short（短篇）、/play（互动世界）、/cover（封面）、/write（写下一章）、/confirm、/cancel、/model [模型名]、/status、/clear、/depth、/quit。其他讨论和创作要求直接使用自然语言。",
-    status: (stage, mode) => `当前状态：${stage}（${mode}）。`,
+    status: (stage) => `当前状态：${stage}。`,
     config: "当前 Ink 仪表盘里还不支持交互式 /config。请使用 inkos config set-global。",
     depthSet: (depthLabel) => `思考深度已切换为 ${depthLabel}。`,
     modelCurrent: (modelLabel) => `当前模型：${modelLabel}。`,
@@ -139,7 +131,6 @@ const EN: TuiCopy = {
     session: "Session",
     messageCount: (count) => `${count} msgs`,
     stage: "Stage",
-    mode: "Mode",
     model: "Model",
     error: "Error",
     recent: "Recent",
@@ -149,11 +140,6 @@ const EN: TuiCopy = {
     none: "none",
     notConfigured: "not configured",
     unknown: "unknown",
-  },
-  modeLabels: {
-    auto: "auto",
-    semi: "semi",
-    manual: "manual",
   },
   composer: {
     placeholder: "Ask InkOS to write, revise, or explain…",
@@ -165,7 +151,7 @@ const EN: TuiCopy = {
   },
   notes: {
     help: "Commands: /new (book), /short, /play, /cover, /write, /confirm, /cancel, /model [model], /status, /clear, /depth, /quit. Use natural language for other discussion and creation requests.",
-    status: (stage, mode) => `Status: ${stage} (${mode}).`,
+    status: (stage) => `Status: ${stage}.`,
     config: "Interactive /config is not available inside the Ink dashboard yet. Use inkos config set-global.",
     depthSet: (depthLabel) => `Thinking depth set to ${depthLabel}.`,
     modelCurrent: (modelLabel) => `Current model: ${modelLabel}.`,
@@ -256,10 +242,6 @@ export function normalizeStageLabel(label: string, copy: TuiCopy): string {
   }
 
   return label;
-}
-
-export function formatModeLabel(mode: string, copy: TuiCopy): string {
-  return copy.modeLabels[mode] ?? mode;
 }
 
 function normalizeLocale(value: string | undefined): TuiLocale | undefined {

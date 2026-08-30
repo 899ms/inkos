@@ -21,7 +21,7 @@ export class CreativeEpisodeStore {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
-    this.migrate();
+    this.initializeSchema();
   }
 
   create(input: CreativeEpisode): CreativeEpisode {
@@ -285,7 +285,7 @@ export class CreativeEpisodeStore {
     this.db.close();
   }
 
-  private migrate(): void {
+  private initializeSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS creative_episodes (
         episode_id TEXT PRIMARY KEY,

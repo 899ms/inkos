@@ -10,10 +10,8 @@ function createSession(): InteractionSession {
     sessionId: "session-1",
     projectRoot: "/tmp/inkos-demo",
     activeBookId: "harbor",
-    automationMode: "semi",
     messages: [],
     events: [],
-    draftRounds: [],
   };
 }
 

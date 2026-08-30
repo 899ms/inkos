@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
@@ -18,7 +18,6 @@ import {
   defineCapabilityAction,
   executeExplicitCapabilityTool,
   loadWorkManifest,
-  migrateLegacyProject,
 } from "../harness/index.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { loadTranslationManifest } from "../translation/run-store.js";
@@ -143,7 +142,13 @@ describe("creative harness mini-flows", () => {
         requiresConfirmation: true,
         parameters: Type.Object({}),
         async execute() {
-          return ActionResultSchema.parse({ status: "success", summary: "committed" });
+          return ActionResultSchema.parse({
+            status: "success",
+            summary: "committed",
+            nextActions: [],
+            artifacts: [],
+            observations: [],
+          });
         },
       })],
     });
@@ -194,93 +199,6 @@ describe("creative harness mini-flows", () => {
       interruptedEpisode: "failed",
     });
     episodes.close();
-  });
-
-  it("moves every legacy creation root into canonical Works once", async () => {
-    const root = await tempProject("migration");
-    const fixtures = [
-      ["books", "book.json", { id: "same", title: "Novel", language: "en" }],
-      ["shorts", "status.json", { id: "same", status: "complete" }],
-      ["dramas", "status.json", { id: "same", status: "complete" }],
-      ["storyboards", "status.json", { id: "same", status: "complete" }],
-      ["interactive-films", "story-graph.json", { id: "same", title: "Film" }],
-      ["translations", "manifest.json", { id: "same", sourceTitle: "Translation", targetLanguage: "en" }],
-      ["worlds", "world.json", { id: "same", title: "World", language: "en" }],
-      ["covers", "cover-prompt.md", null],
-    ] as const;
-    for (const [directory, file, value] of fixtures) {
-      await mkdir(join(root, directory, "same"), { recursive: true });
-      await writeFile(join(root, directory, "same", file), value === null ? "# Cover\n" : JSON.stringify(value));
-    }
-    await mkdir(join(root, "books", "spinoff"), { recursive: true });
-    await writeFile(join(root, "books", "spinoff", "book.json"), JSON.stringify({
-      id: "spinoff",
-      title: "Spinoff",
-      language: "en",
-      parentBookId: "same",
-    }));
-
-    const first = await migrateLegacyProject({ projectRoot: root, now: "2026-08-26T00:00:00.000Z" });
-    const second = await migrateLegacyProject({ projectRoot: root });
-    const workDirectories = (await readdir(join(root, "works"), { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory());
-    const remainingRoots: string[] = [];
-    for (const [directory] of fixtures) {
-      if (await access(join(root, directory)).then(() => true).catch(() => false)) remainingRoots.push(directory);
-    }
-
-    expect({
-      status: first.status,
-      idempotent: second,
-      workCount: workDirectories.length,
-      remainingRoots,
-      lineage: (await loadWorkManifest(root, "spinoff")).lineage,
-    }).toEqual({
-      status: "completed",
-      idempotent: first,
-      workCount: 9,
-      remainingRoots: [],
-      lineage: [{ relation: "derived-from", sourceWorkId: "same" }],
-    });
-  });
-
-  it("rewrites a legacy translation manifest into the canonical progress model", async () => {
-    const root = await tempProject("translation-manifest-migration");
-    const sourceDir = join(root, "works", "legacy-translation", "source");
-    await mkdir(sourceDir, { recursive: true });
-    const manifestPath = join(sourceDir, "manifest.json");
-    await writeFile(manifestPath, JSON.stringify({
-      id: "legacy-translation",
-      title: "Legacy Translation",
-      sourceLanguage: "English",
-      targetLanguage: "Chinese (Simplified)",
-      createdAt: "2026-08-26T00:00:00.000Z",
-      updatedAt: "2026-08-26T00:00:00.000Z",
-      source: { kind: "markdown", path: "source.md", charCount: 12 },
-      chapters: [{
-        number: 1,
-        title: "Arrival",
-        sourcePath: "source/chapter-0001.json",
-        translatedPath: "translated/chapter-0001.json",
-        segmentCount: 2,
-        charCount: 12,
-        status: "translated",
-      }],
-    }));
-
-    const manifest = await loadTranslationManifest(root, "legacy-translation");
-    const persisted = JSON.parse(await readFile(manifestPath, "utf-8")) as {
-      chapters: Array<Record<string, unknown>>;
-    };
-    expect({
-      translatedSegments: manifest.chapters[0]?.translatedSegments,
-      persistedStatus: persisted.chapters[0]?.status,
-      persistedSegments: persisted.chapters[0]?.translatedSegments,
-    }).toEqual({
-      translatedSegments: 2,
-      persistedStatus: undefined,
-      persistedSegments: 2,
-    });
   });
 
   async function tempProject(name: string): Promise<string> {

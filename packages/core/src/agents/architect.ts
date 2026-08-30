@@ -1,12 +1,12 @@
 import { BaseAgent } from "./base.js";
 import type { BookConfig, FanficMode } from "../models/book.js";
-import type { GenreProfile } from "../models/genre-profile.js";
-import { readGenreProfile } from "./rules-reader.js";
-import { writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { renderHookSnapshot } from "../utils/memory-retrieval.js";
+import { renderHooksProjection } from "../state/state-projections.js";
 import { BookRulesSchema, type BookRules } from "../models/book-rules.js";
 import { FoundationDetailsToolSchema, FoundationOutlineToolSchema } from "./architect-tool.js";
+import type { HookRecord } from "../models/runtime-state.js";
+import { createInitialRuntimeState } from "../state/runtime-state-store.js";
+import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 
 // Architect owns the five-section persistence protocol. Foundation craft is
 // supplied by the active long-writing and derivative-work Skills.
@@ -24,6 +24,7 @@ export interface ArchitectOutput {
   readonly bookRules: string;
   readonly bookRulesData: BookRules;
   readonly pendingHooks: string;
+  readonly initialHooks: ReadonlyArray<HookRecord>;
 }
 
 export class ArchitectAgent extends BaseAgent {
@@ -37,17 +38,15 @@ export class ArchitectAgent extends BaseAgent {
     reviewFeedback?: string,
     options?: {
       reviseFrom?: {
-        storyBible: string;
-        volumeOutline: string;
+        storyFrame: string;
+        volumeMap: string;
         bookRules: string;
-        characterMatrix: string;
+        roles: string;
         userFeedback: string;
       };
     },
   ): Promise<ArchitectOutput> {
-    const { profile: gp } =
-      await readGenreProfile(this.ctx.projectRoot, book.genre);
-    const resolvedLanguage = book.language ?? gp.language;
+    const resolvedLanguage = book.language;
 
     const contextBlock = externalContext
       ? `\n\n## 外部指令\n以下是来自外部系统的创作指令，请将其融入设定中：\n\n${externalContext}\n`
@@ -58,15 +57,15 @@ export class ArchitectAgent extends BaseAgent {
       : "";
 
     const systemPrompt = resolvedLanguage === "en"
-      ? this.buildEnglishFoundationPrompt(book, gp, contextBlock, reviewFeedbackBlock)
-      : this.buildChineseFoundationPrompt(book, gp, contextBlock, reviewFeedbackBlock);
+      ? this.buildEnglishFoundationPrompt(book, contextBlock, reviewFeedbackBlock)
+      : this.buildChineseFoundationPrompt(book, contextBlock, reviewFeedbackBlock);
 
     const langPrefix = resolvedLanguage === "en"
       ? "【LANGUAGE OVERRIDE】All submitted foundation content, character names, place names, and prose must be in English.\n\n"
       : "";
     const userMessage = resolvedLanguage === "en"
-      ? `Generate the complete foundation for a ${gp.name} novel titled "${book.title}". Write everything in English.`
-      : `请为标题为"${book.title}"的${gp.name}小说生成完整基础设定。`;
+      ? `Generate the complete foundation for the ${book.genre} Work titled "${book.title}". Write everything in English.`
+      : `请为标题为"${book.title}"的${book.genre}作品生成完整基础设定。`;
 
     return this.generateFoundationInStages({
       systemPrompt: langPrefix + systemPrompt + revisePrompt,
@@ -77,26 +76,26 @@ export class ArchitectAgent extends BaseAgent {
   }
 
   private buildRevisePrompt(reviseFrom: {
-    storyBible: string;
-    volumeOutline: string;
+    storyFrame: string;
+    volumeMap: string;
     bookRules: string;
-    characterMatrix: string;
+    roles: string;
     userFeedback: string;
   }): string {
     return `\n\n## 既有架构稿修订
 按已激活 Skill 使用以下权威原稿和用户要求，返回当前五块 foundation 协议。
 
-【story_bible / story_frame 全文】
-${reviseFrom.storyBible || "（无）"}
+【story_frame 全文】
+${reviseFrom.storyFrame}
 
-【volume_outline / volume_map 全文】
-${reviseFrom.volumeOutline || "（无）"}
+【volume_map 全文】
+${reviseFrom.volumeMap}
 
 【book_rules 全文】
-${reviseFrom.bookRules || "（无）"}
+${reviseFrom.bookRules}
 
-【character_matrix / roles 全文】
-${reviseFrom.characterMatrix || "（无）"}
+【roles 全文】
+${reviseFrom.roles}
 
 用户额外要求：
 ${reviseFrom.userFeedback || "（无）"}
@@ -109,33 +108,30 @@ ${reviseFrom.userFeedback || "（无）"}
   // -------------------------------------------------------------------------
   private buildChineseFoundationPrompt(
     book: BookConfig,
-    gp: GenreProfile,
     contextBlock: string,
     reviewFeedbackBlock: string,
   ): string {
-    return this.buildFoundationProtocol({ book, gp, contextBlock, reviewFeedbackBlock, language: "zh" });
+    return this.buildFoundationProtocol({ book, contextBlock, reviewFeedbackBlock, language: "zh" });
   }
 
   private buildEnglishFoundationPrompt(
     book: BookConfig,
-    gp: GenreProfile,
     contextBlock: string,
     reviewFeedbackBlock: string,
   ): string {
-    return this.buildFoundationProtocol({ book, gp, contextBlock, reviewFeedbackBlock, language: "en" });
+    return this.buildFoundationProtocol({ book, contextBlock, reviewFeedbackBlock, language: "en" });
   }
 
   private buildFoundationProtocol(params: {
     readonly book: BookConfig;
-    readonly gp: GenreProfile;
     readonly contextBlock: string;
     readonly reviewFeedbackBlock: string;
     readonly language: "zh" | "en";
   }): string {
-    const { book, gp, contextBlock, reviewFeedbackBlock, language } = params;
+    const { book, contextBlock, reviewFeedbackBlock, language } = params;
     const metadata = language === "en"
-      ? `Platform: ${book.platform}\nGenre: ${gp.name} (${book.genre})\nTarget chapters: ${book.targetChapters}\nChapter length: ${book.chapterWordCount}\nTitle: ${book.title}`
-      : `平台：${book.platform}\n题材：${gp.name}（${book.genre}）\n目标章数：${book.targetChapters}\n每章字数：${book.chapterWordCount}\n标题：${book.title}`;
+      ? `Platform: ${book.platform}\nGenre: ${book.genre}\nTarget chapters: ${book.targetChapters}\nChapter length: ${book.chapterWordCount}\nTitle: ${book.title}`
+      : `平台：${book.platform}\n题材：${book.genre}\n目标章数：${book.targetChapters}\n每章字数：${book.chapterWordCount}\n标题：${book.title}`;
     return language === "en"
       ? `Create the Work foundation using the activated professional Skills and supplied authority.${contextBlock}${reviewFeedbackBlock}\n\n## Work metadata\n${metadata}\n\nSubmit readable foundation artifacts and the small structured rules surface through the required tools.`
       : `按已激活的专业 Skill 和输入权威生成作品基础设定。${contextBlock}${reviewFeedbackBlock}\n\n## 作品元信息\n${metadata}\n\n通过指定工具提交可读基础资产和少量结构化规则。`;
@@ -143,56 +139,33 @@ ${reviseFrom.userFeedback || "（无）"}
   async writeFoundationFiles(
     bookDir: string,
     output: ArchitectOutput,
-    language: "zh" | "en" = "zh",
+    language: "zh" | "en",
     mode: "init" | "revise" = "init",
   ): Promise<void> {
-    const storyDir = join(bookDir, "story");
-    const outlineDir = join(storyDir, "outline");
-    const rolesMajorDir = join(storyDir, "roles", "主要角色");
-    const rolesMinorDir = join(storyDir, "roles", "次要角色");
-
-    await Promise.all([
-      mkdir(outlineDir, { recursive: true }),
-      mkdir(rolesMajorDir, { recursive: true }),
-      mkdir(rolesMinorDir, { recursive: true }),
-    ]);
-    if (mode === "revise") {
-      await rm(rolesMajorDir, { recursive: true, force: true });
-      await rm(rolesMinorDir, { recursive: true, force: true });
-      await mkdir(rolesMajorDir, { recursive: true });
-      await mkdir(rolesMinorDir, { recursive: true });
-    }
-
-    const writes: Array<Promise<void>> = [
-      writeFile(join(outlineDir, "story_frame.md"), output.storyFrame.trim(), "utf-8"),
-      writeFile(join(outlineDir, "volume_map.md"), output.volumeMap.trim(), "utf-8"),
-      writeFile(join(storyDir, "book_rules.md"), `${output.bookRules.trim()}\n`, "utf-8"),
-      writeFile(join(storyDir, "book_rules.json"), `${JSON.stringify(output.bookRulesData, null, 2)}\n`, "utf-8"),
+    const writes: AtomicFileWrite[] = [
+      { relativePath: join("story", "outline", "story_frame.md"), content: `${output.storyFrame.trim()}\n` },
+      { relativePath: join("story", "outline", "volume_map.md"), content: `${output.volumeMap.trim()}\n` },
+      { relativePath: join("story", "book_rules.md"), content: `${output.bookRules.trim()}\n` },
+      { relativePath: join("story", "book_rules.json"), content: `${JSON.stringify(output.bookRulesData, null, 2)}\n` },
     ];
     for (const role of output.roles) {
-      const targetDir = role.tier === "major" ? rolesMajorDir : rolesMinorDir;
       const safeName = role.name.replace(/[/\\:*?"<>|]/g, "_").trim();
-      if (safeName) writes.push(writeFile(join(targetDir, `${safeName}.md`), role.content, "utf-8"));
+      if (!safeName) throw new Error("Foundation role name cannot be represented as a safe file name.");
+      writes.push({
+        relativePath: join("story", "roles", role.tier === "major" ? "主要角色" : "次要角色", `${safeName}.md`),
+        content: `${role.content.trim()}\n`,
+      });
     }
-
+    await commitAtomicFileSet({
+      rootDir: bookDir,
+      writes,
+      ...(mode === "revise"
+        ? { deletes: [join("story", "roles", "主要角色"), join("story", "roles", "次要角色")] }
+        : {}),
+    });
     if (mode === "init") {
-      const currentStateSeed = language === "en"
-        ? "# Current State\n\n> Chapter settlement projects explicit story state here.\n"
-        : "# 当前状态\n\n> 章节结算会把正文明确状态投影到这里。\n";
-      writes.push(
-        writeFile(join(storyDir, "current_state.md"), currentStateSeed, "utf-8"),
-        writeFile(join(storyDir, "pending_hooks.md"), output.pendingHooks, "utf-8"),
-        writeFile(
-          join(storyDir, "emotional_arcs.md"),
-          language === "en"
-            ? "# Emotional Arcs\n\n| Character | Chapter | Emotional State | Trigger Event | Arc Direction |\n| --- | --- | --- | --- | --- |\n"
-            : "# 情感弧线\n\n| 角色 | 章节 | 情绪状态 | 触发事件 | 弧线方向 |\n| --- | --- | --- | --- | --- |\n",
-          "utf-8",
-        ),
-      );
+      await createInitialRuntimeState({ bookDir, language, hooks: output.initialHooks });
     }
-
-    await Promise.all(writes);
   }
   /**
    * Reverse-engineer foundation from existing chapters.
@@ -204,9 +177,7 @@ ${reviseFrom.userFeedback || "（无）"}
     reviewFeedback?: string,
     options?: { readonly importMode?: "continuation" | "series" },
   ): Promise<ArchitectOutput> {
-    const { profile: gp } =
-      await readGenreProfile(this.ctx.projectRoot, book.genre);
-    const resolvedLanguage = book.language ?? gp.language;
+    const resolvedLanguage = book.language;
     const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, resolvedLanguage);
 
     const contextBlock = externalContext
@@ -223,7 +194,6 @@ ${reviseFrom.userFeedback || "（无）"}
 
     const systemPrompt = this.buildFoundationProtocol({
       book,
-      gp,
       contextBlock,
       reviewFeedbackBlock,
       language: resolvedLanguage,
@@ -232,7 +202,7 @@ ${reviseFrom.userFeedback || "（无）"}
       : `\n\n${continuationDirective}\n所有事实必须从资料包推导；压缩资料包是证据，不是臆造缺失正典的许可。`);
 
     const userMessage = resolvedLanguage === "en"
-      ? `Generate the complete foundation for an imported ${gp.name} novel titled "${book.title}". Write everything in English.\n\n${chaptersText}`
+      ? `Generate the complete foundation for the imported ${book.genre} Work titled "${book.title}". Write everything in English.\n\n${chaptersText}`
       : `以下是《${book.title}》的已有正文资料包，请从中反向推导完整基础设定：\n\n${chaptersText}`;
 
     return this.generateFoundationInStages({
@@ -249,9 +219,7 @@ ${reviseFrom.userFeedback || "（无）"}
     fanficMode: FanficMode,
     reviewFeedback?: string,
   ): Promise<ArchitectOutput> {
-    const { profile: gp } =
-      await readGenreProfile(this.ctx.projectRoot, book.genre);
-    const resolvedLanguage = book.language ?? gp.language;
+    const resolvedLanguage = book.language;
     const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, resolvedLanguage);
 
     const canonBlock = resolvedLanguage === "en"
@@ -259,7 +227,6 @@ ${reviseFrom.userFeedback || "（无）"}
       : `\n\n## 同人模式：${fanficMode}\n\n## 原作正典\n${fanficCanon}`;
     const systemPrompt = this.buildFoundationProtocol({
       book,
-      gp,
       contextBlock: canonBlock,
       reviewFeedbackBlock,
       language: resolvedLanguage,
@@ -295,8 +262,8 @@ ${reviseFrom.userFeedback || "（无）"}
       { temperature: input.temperature },
     );
     const detailsPrompt = input.language === "en"
-      ? `${input.userMessage}\n\n<accepted_story_frame>\n${outline.storyFrame}\n</accepted_story_frame>\n\n<accepted_volume_map>\n${outline.volumeMap}\n</accepted_volume_map>\n\nComplete the roles, readable book rules, structured rule data, and initial unresolved hooks.`
-      : `${input.userMessage}\n\n<accepted_story_frame>\n${outline.storyFrame}\n</accepted_story_frame>\n\n<accepted_volume_map>\n${outline.volumeMap}\n</accepted_volume_map>\n\n继续完成角色卡、可读本书规则、结构化规则数据和初始未解伏笔。`;
+      ? `${input.userMessage}\n\n<story_frame>\n${outline.storyFrame}\n</story_frame>\n\n<volume_map>\n${outline.volumeMap}\n</volume_map>\n\nComplete the roles, readable book rules, structured rule data, and initial unresolved hooks.`
+      : `${input.userMessage}\n\n<story_frame>\n${outline.storyFrame}\n</story_frame>\n\n<volume_map>\n${outline.volumeMap}\n</volume_map>\n\n继续完成角色卡、可读本书规则、结构化规则数据和初始未解伏笔。`;
     const { result: details } = await this.submitStructured(
       [
         { role: "system", content: input.systemPrompt },
@@ -306,22 +273,23 @@ ${reviseFrom.userFeedback || "（无）"}
         name: "submit_foundation_details",
         label: input.language === "en" ? "Submit foundation details" : "提交基础详情",
         description: input.language === "en"
-          ? "Submit role cards, book rules, and initial unresolved hooks grounded in the accepted outline."
-          : "提交服从已接受框架的角色卡、本书规则和初始未解伏笔。",
+          ? "Submit role cards, book rules, and initial unresolved hooks grounded in the submitted outline."
+          : "提交服从已提交框架的角色卡、本书规则和初始未解伏笔。",
         parameters: FoundationDetailsToolSchema,
       },
       { temperature: input.temperature },
     );
-    const bookRulesData = BookRulesSchema.parse(details.bookRulesData);
-    const pendingHooks = renderHookSnapshot(details.pendingHooks.map((hook) => ({
+    const bookRulesData = BookRulesSchema.parse({ version: "2", ...details.bookRulesData });
+    const initialHooks: HookRecord[] = details.pendingHooks.map((hook) => ({
       hookId: hook.hookId.trim(),
       startChapter: 0,
       type: hook.type.trim(),
       status: "deferred",
       lastAdvancedChapter: 0,
-      expectedPayoff: hook.expectedPayoff?.trim() ?? "",
-      notes: hook.notes?.trim() ?? "",
-    })), input.language);
+      expectedPayoff: hook.expectedPayoff.trim(),
+      notes: hook.notes.trim(),
+    }));
+    const pendingHooks = renderHooksProjection({ hooks: initialHooks }, input.language);
 
     return {
       storyFrame: outline.storyFrame.trim(),
@@ -334,6 +302,7 @@ ${reviseFrom.userFeedback || "（无）"}
       bookRules: details.bookRules.trim(),
       bookRulesData,
       pendingHooks,
+      initialHooks,
     };
   }
   private buildReviewFeedbackBlock(

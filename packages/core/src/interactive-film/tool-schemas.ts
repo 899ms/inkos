@@ -26,7 +26,7 @@ const ChoiceToolSchema = Type.Object({
   text: Type.String(),
   targetNodeId: Type.String({ minLength: 1 }),
   condition: Type.Optional(ConditionToolSchema),
-  effects: Type.Optional(Type.Array(EffectToolSchema)),
+  effects: Type.Array(EffectToolSchema),
   weight: Type.Optional(Type.Union([
     Type.Literal("light"),
     Type.Literal("heavy"),
@@ -37,11 +37,11 @@ const ChoiceToolSchema = Type.Object({
 const DialogueLineToolSchema = Type.Object({
   speaker: Type.String(),
   text: Type.String(),
-  emotion: Type.Optional(Type.String()),
+  emotion: Type.String(),
 }, { additionalProperties: false });
 
 const ImageSlotToolSchema = Type.Object({
-  prompt: Type.Optional(Type.String()),
+  prompt: Type.String(),
   assetRef: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
@@ -57,13 +57,13 @@ const NodeTypeToolSchema = Type.Union([
 });
 
 const StoryNodeFields = {
-  title: Type.Optional(Type.String()),
+  title: Type.String(),
   type: NodeTypeToolSchema,
-  sceneDesc: Type.Optional(Type.String()),
-  dialogue: Type.Optional(Type.Array(DialogueLineToolSchema)),
-  choices: Type.Optional(Type.Array(ChoiceToolSchema)),
+  sceneDesc: Type.String(),
+  dialogue: Type.Array(DialogueLineToolSchema),
+  choices: Type.Array(ChoiceToolSchema),
   imageSlot: Type.Optional(ImageSlotToolSchema),
-  act: Type.Optional(Type.String()),
+  act: Type.String(),
   position: Type.Optional(Type.Object({
     x: Type.Number(),
     y: Type.Number(),
@@ -80,27 +80,27 @@ export const StoryNodeToolSchema = Type.Object({
 }, { additionalProperties: false });
 
 const WorldAnchorToolSchema = Type.Object({
-  storyCore: Type.Optional(Type.String()),
-  theme: Type.Optional(Type.String()),
-  genre: Type.Optional(Type.String()),
-  worldRules: Type.Optional(Type.String()),
-  durationMinutes: Type.Optional(Type.Number({ minimum: 0 })),
+  storyCore: Type.String(),
+  theme: Type.String(),
+  genre: Type.String(),
+  worldRules: Type.String(),
+  durationMinutes: Type.Number({ minimum: 0 }),
 }, { additionalProperties: false });
 
 const CharacterToolSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
   name: Type.String(),
-  role: Type.Optional(Type.Union([
+  role: Type.Union([
     Type.Literal("protagonist"),
     Type.Literal("antagonist"),
     Type.Literal("support"),
     Type.Literal("other"),
-  ])),
-  motivation: Type.Optional(Type.String()),
+  ]),
+  motivation: Type.String(),
   voiceProfile: Type.Optional(Type.Object({
-    speakingRhythm: Type.Optional(Type.String()),
-    vocabulary: Type.Optional(Type.String()),
-    sampleLines: Type.Optional(Type.Array(Type.String())),
+    speakingRhythm: Type.String(),
+    vocabulary: Type.String(),
+    sampleLines: Type.Array(Type.String()),
   }, { additionalProperties: false })),
 }, { additionalProperties: false });
 
@@ -113,7 +113,7 @@ const VariableToolSchema = Type.Object({
     Type.Literal("item"),
   ]),
   default: VarValueToolSchema,
-  desc: Type.Optional(Type.String()),
+  desc: Type.String(),
 }, { additionalProperties: false });
 
 const EndingToolSchema = Type.Object({
@@ -126,13 +126,13 @@ const EndingToolSchema = Type.Object({
     Type.Literal("neutral"),
     Type.Literal("secret"),
   ]),
-  description: Type.Optional(Type.String()),
+  description: Type.String(),
 }, { additionalProperties: false });
 
 export const StoryGraphContentToolSchema = Type.Object({
-  worldAnchor: Type.Optional(WorldAnchorToolSchema),
-  characters: Type.Optional(Type.Array(CharacterToolSchema)),
-  variables: Type.Optional(Type.Array(VariableToolSchema)),
+  worldAnchor: WorldAnchorToolSchema,
+  characters: Type.Array(CharacterToolSchema),
+  variables: Type.Array(VariableToolSchema),
   nodes: Type.Array(StoryNodeToolSchema, { minItems: 3 }),
   endings: Type.Array(EndingToolSchema, { minItems: 1 }),
 }, { additionalProperties: false });

@@ -11,7 +11,7 @@ import {
 } from "./contracts.js";
 import { loadWorkManifest, saveWorkManifest, workDirectory } from "./work-store.js";
 import { createWorkManifest } from "./work-store.js";
-import { createAcceptedArtifact } from "./artifact-revisions.js";
+import { createCurrentArtifact } from "./artifact-revisions.js";
 import type { AtomicFileWrite } from "../utils/atomic-file-set.js";
 
 export function createInitialWorkManifestWrite(input: {
@@ -38,7 +38,7 @@ export function createInitialWorkManifestWrite(input: {
     if (workPath === ".." || workPath.startsWith("../")) {
       throw new Error(`Initial work artifact is outside ${workRoot}: ${write.relativePath}`);
     }
-    return createAcceptedArtifact({
+    return createCurrentArtifact({
       artifactId: artifactIdFor(workPath),
       artifactKind: artifactKindFor(workPath),
       path: workPath,
@@ -87,7 +87,7 @@ export async function syncWorkSourceArtifacts(input: {
         parentRevisionId: null,
         path: workPath,
         contentType: contentTypeFor(file),
-        status: input.accept ? "accepted" : "candidate",
+        status: input.accept ? "current" : "candidate",
         checksum,
         byteLength: bytes.byteLength,
         episodeId: input.episodeId,
@@ -112,7 +112,7 @@ export async function syncWorkSourceArtifacts(input: {
       parentRevisionId: existing.currentRevisionId,
       path: workPath,
       contentType: contentTypeFor(file),
-      status: input.accept ? "accepted" : "candidate",
+      status: input.accept ? "current" : "candidate",
       checksum,
       byteLength: bytes.byteLength,
       episodeId: input.episodeId,
@@ -122,10 +122,17 @@ export async function syncWorkSourceArtifacts(input: {
       ...existing,
       currentRevisionId: input.accept ? revision.id : existing.currentRevisionId,
       revisions: prior
-        ? existing.revisions.map((item) => item.id === prior.id
-            ? { ...item, status: input.accept ? "accepted" as const : item.status }
-            : item)
-        : [...existing.revisions, revision],
+        ? existing.revisions.map((item) => {
+            if (item.id === prior.id && input.accept) return { ...item, status: "current" as const };
+            if (input.accept && item.status === "current") return { ...item, status: "superseded" as const };
+            return item;
+          })
+        : [
+            ...existing.revisions.map((item) => (
+              input.accept && item.status === "current" ? { ...item, status: "superseded" as const } : item
+            )),
+            revision,
+          ],
     });
   }
 
@@ -136,6 +143,11 @@ export async function syncWorkSourceArtifacts(input: {
     artifacts[index] = ArtifactManifestSchema.parse({
       ...artifact,
       currentRevisionId: null,
+      revisions: artifact.revisions.map((revision) => (
+        revision.id === artifact.currentRevisionId && revision.status === "current"
+          ? { ...revision, status: "superseded" as const }
+          : revision
+      )),
       metadata: { ...artifact.metadata, removedAt: updatedAt, removedPath: current.path },
     });
   }

@@ -20,7 +20,6 @@ import { MemoryDB } from "../state/memory-db.js";
 import { join } from "node:path";
 import { workDirectory } from "../harness/work-store.js";
 import { generateNodeImage, defaultNodeImageDeps, type NodeImageDeps } from "../interactive-film/node-image.js";
-import { appendPromptPackGuidance } from "../prompts/prompt-pack.js";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "./skill-tool.js";
 
@@ -237,11 +236,10 @@ function nodeSystemPrompt(language: FilmAuthoringLanguage): string {
   return language === "en" ? NODE_SYSTEM_EN : NODE_SYSTEM_ZH;
 }
 
-function graphUpdatedDetails(rev: number, promptId: string, extra: Record<string, unknown> = {}) {
+function graphUpdatedDetails(rev: number, extra: Record<string, unknown> = {}) {
   return {
     kind: "graph_updated" as const,
     rev,
-    promptPacks: [promptId],
     ...extra,
   };
 }
@@ -260,10 +258,7 @@ export function createFillNodeTool(
     async execute(_id, params: Static<typeof FillNodeParams>, signal) {
       const graph = await loadStoryGraph(projectRoot, projectId);
       const context = graph ? buildFilmAuthoringContext(graph) : "(empty graph)";
-      const systemPrompt = await appendPromptPackGuidance(nodeSystemPrompt(language), {
-        promptId: "interactive-film.script",
-        projectRoot,
-      });
+      const systemPrompt = nodeSystemPrompt(language);
       const userPrompt = language === "en"
         ? `${context}\n\nNode id to fill: ${params.nodeId}\nInstruction: ${params.instruction}`
         : `${context}\n\n要填的节点 id：${params.nodeId}\n指令：${params.instruction}`;
@@ -274,7 +269,7 @@ export function createFillNodeTool(
         delta: { nodes: { upsert: [node], remove: [] }, notes: [] },
         phase: "workshop",
       });
-      return textResult(`Node ${params.nodeId} filled (rev ${rev}).`, graphUpdatedDetails(rev, "interactive-film.script", {
+      return textResult(`Node ${params.nodeId} filled (rev ${rev}).`, graphUpdatedDetails(rev, {
         skillIds: deps.skillIds?.() ?? [],
       }));
     },
@@ -296,10 +291,7 @@ export function createReviseNodeTool(
       const graph = await loadStoryGraph(projectRoot, projectId);
       const context = graph ? buildFilmAuthoringContext(graph) : "(empty graph)";
       const current = graph?.nodes.find((n) => n.id === params.nodeId);
-      const systemPrompt = await appendPromptPackGuidance(nodeSystemPrompt(language), {
-        promptId: "interactive-film.script",
-        projectRoot,
-      });
+      const systemPrompt = nodeSystemPrompt(language);
       const userPrompt = language === "en"
         ? `${context}\n\nNode id to revise: ${params.nodeId}\nCurrent content: ${JSON.stringify(current ?? {})}\nRevision instruction: ${params.instruction}`
         : `${context}\n\n要修改的节点 id：${params.nodeId}\n现有内容：${JSON.stringify(current ?? {})}\n修改指令：${params.instruction}`;
@@ -310,7 +302,7 @@ export function createReviseNodeTool(
         delta: { nodes: { upsert: [node], remove: [] }, notes: [] },
         phase: "workshop",
       });
-      return textResult(`Node ${params.nodeId} revised (rev ${rev}).`, graphUpdatedDetails(rev, "interactive-film.script", {
+      return textResult(`Node ${params.nodeId} revised (rev ${rev}).`, graphUpdatedDetails(rev, {
         skillIds: deps.skillIds?.() ?? [],
       }));
     },
@@ -354,10 +346,7 @@ export function createDraftStructureTool(
     async execute(_id, params: Static<typeof DraftStructureParams>, signal) {
       const graph = await loadStoryGraph(projectRoot, projectId);
       const context = graph ? buildFilmAuthoringContext(graph) : "(empty graph)";
-      const systemPrompt = await appendPromptPackGuidance(language === "en" ? STRUCT_SYSTEM_EN : STRUCT_SYSTEM_ZH, {
-        promptId: "interactive-film.story-graph",
-        projectRoot,
-      });
+      const systemPrompt = language === "en" ? STRUCT_SYSTEM_EN : STRUCT_SYSTEM_ZH;
       const userPrompt = language === "en"
         ? `${context}\n\nSkeleton instruction: ${params.instruction}`
         : `${context}\n\n骨架指令：${params.instruction}`;
@@ -368,7 +357,7 @@ export function createDraftStructureTool(
         delta: { nodes: { upsert: [...nodes], remove: [] }, notes: [] },
         phase: "structure",
       });
-      return textResult(`Structure drafted: ${next.nodes.length} nodes (rev ${rev}).`, graphUpdatedDetails(rev, "interactive-film.story-graph", {
+      return textResult(`Structure drafted: ${next.nodes.length} nodes (rev ${rev}).`, graphUpdatedDetails(rev, {
         skillIds: deps.skillIds?.() ?? [],
       }));
     },

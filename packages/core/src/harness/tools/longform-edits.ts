@@ -14,8 +14,6 @@ const SAFE_TRUTH_FLAT_FILE_NAMES = new Set([
   "author_intent.md",
   "current_focus.md",
   "book_rules.md",
-  "subplot_board.md",
-  "emotional_arcs.md",
   "style_guide.md",
   "parent_canon.md",
   "fanfic_canon.md",
@@ -111,7 +109,7 @@ export function createWriteTruthFileTool(
           if (!params.bookRulesData) {
             throw new Error("write_truth_file requires bookRulesData when replacing book_rules.md");
           }
-          const data = BookRulesSchema.parse(params.bookRulesData);
+          const data = BookRulesSchema.parse({ version: "2", ...params.bookRulesData });
           await commitAtomicFileSet({
             rootDir: state.bookDir(bookId),
             writes: [
@@ -163,7 +161,7 @@ export function createRenameEntityTool(
 const PatchChapterTextParams = Type.Object({
   bookId: Type.Optional(Type.String({ description: "Work ID. Omit to use the active Work." })),
   chapterNumber: Type.Number({ description: "Chapter number to patch." }),
-  targetText: Type.String({ description: "Exact or high-confidence paragraph text to replace." }),
+  targetText: Type.String({ description: "Exact, unique paragraph text to replace." }),
   replacementText: Type.String({ description: "Replacement text." }),
 });
 
@@ -174,7 +172,7 @@ export function createPatchChapterTextTool(
   return editTool({
     name: "patch_chapter_text",
     label: "Patch Chapter",
-    description: "Apply a deterministic local text patch and mark the chapter for review.",
+    description: "Apply one exact, unique local text replacement.",
     parameters: PatchChapterTextParams,
     projectRoot,
     activeBookId,
@@ -202,7 +200,7 @@ export function createReplaceChapterTextTool(
   return editTool({
     name: "replace_chapter_text",
     label: "Replace Chapter",
-    description: "Replace a whole chapter with user-supplied text and mark it for review.",
+    description: "Replace a whole chapter with user-supplied text.",
     parameters: ReplaceChapterTextParams,
     projectRoot,
     activeBookId,

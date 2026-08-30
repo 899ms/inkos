@@ -11,7 +11,7 @@ const BaseEventSchema = z.object({
   sessionId: z.string().min(1),
   seq: z.number().int().nonnegative(),
   timestamp: z.number().int().nonnegative(),
-});
+}).strict();
 
 export const SessionCreatedEventSchema = BaseEventSchema.extend({
   type: z.literal("session_created"),
@@ -67,10 +67,10 @@ export const MessageEventSchema = BaseEventSchema.extend({
   piTurnIndex: z.number().int().nonnegative().optional(),
   toolCallId: z.string().min(1).optional(),
   sourceToolAssistantUuid: z.string().min(1).optional(),
-  legacyDisplay: z.object({
+  display: z.object({
     thinking: z.string().optional(),
     toolExecutions: z.array(z.unknown()).optional(),
-  }).optional(),
+  }).strict().optional(),
   message: z.unknown(),
 });
 

@@ -16,6 +16,7 @@ Use this skill when the user wants a complete standalone commercial short story,
 - Keep mobile prose dense but breathable. Stage major reversals, confrontations, reveals, and payoffs beat by beat through action, dialogue, evidence, and sensory detail.
 - During revision, preserve the causal events and ending transition. Shorten by merging repeated reaction, explanation, and transition; lengthen with missing dramatic action rather than padding.
 - Packaging must describe the manuscript that actually exists. A cover direction serves a mobile portrait book cover with a readable title zone, strong emotion, recognizable story props, and the story's real conflict.
+- For a commercial mobile short-fiction cover, use a 3:4 portrait composition, a large two-to-four-line title zone, a close or half-body character with a charged expression, and only a few immediately recognizable conflict props. Favor high-contrast thumbnail readability over cinematic, corporate, magazine, or landscape-video aesthetics. When image-model lettering is unreliable, reserve a clean deterministic typography zone instead of asking for long generated text.
 - Report partial failures honestly; a cover failure must not erase a successful manuscript.
 - Respond in the user's language.
 

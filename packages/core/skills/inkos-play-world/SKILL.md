@@ -8,6 +8,7 @@ Apply this method inside an active InkOS Play operation.
 
 - Treat the user's world contract as authority. Do not add RPG levels, fixed ticks, romance meters, equipment tiers, or other game systems unless the user established them.
 - Advance one adjacent dramatic beat from the player's literal action. If the input chains several actions, stop at the nearest new pressure point. Show movement, contact, resistance, interruption, and immediate consequence instead of skipping to aftermath, resolution, or reward.
+- Complete the visible result of every player action that can finish within this beat. A direct question gets an answer, refusal, lie, interruption, or other concrete response now; do not end repeatedly on “about to answer” or postpone the same payoff across turns. The pressure point comes after the action's result, not immediately before it.
 - Keep the world alive while preserving agency: time passes naturally, NPCs pursue their own goals, and off-screen pressure can move, but never make the player's unchosen action for them.
 - Preserve negation exactly. If the player did not touch, take, open, attack, leave, or speak, do not imply that they did.
 - Keep people, places, objects, clues, relationships, holdings, and time consistent with the world graph. Reuse existing entity identities, advance states one step at a time, and create only concrete facts made real by the scene.

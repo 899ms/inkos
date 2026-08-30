@@ -48,9 +48,6 @@ export function createCapabilityPiTools(
           onUpdate ? (partialResult) => onUpdate(partialResult as AgentToolResult<ActionResult>) : undefined,
         );
         await options.onResult?.(capability.id, action.id, result);
-        if (result.status === "error") {
-          throw new CapabilityActionError(capability.id, action.id, result);
-        }
         return {
           content: [{ type: "text", text: renderActionResultForAgent(result) }],
           // Studio renders domain-owned result cards (proposed_action, play
@@ -62,17 +59,6 @@ export function createCapabilityPiTools(
       },
       }))
   ));
-}
-
-export class CapabilityActionError extends Error {
-  constructor(
-    readonly capabilityId: string,
-    readonly actionId: string,
-    readonly result: ActionResult,
-  ) {
-    super(result.summary);
-    this.name = "CapabilityActionError";
-  }
 }
 
 export function capabilityToolName(capabilityId: string, actionId: string): string {

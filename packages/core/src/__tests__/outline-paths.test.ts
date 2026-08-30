@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   readCharacterContext,
-  readRhythmPrinciples,
   readRoleCards,
   readStoryFrame,
   readVolumeMap,
@@ -22,34 +21,26 @@ afterEach(async () => {
 });
 
 describe("outline-paths", () => {
-  it("prefers outline/story_frame.md over legacy story_bible.md", async () => {
+  it("reads the canonical story frame", async () => {
     await mkdir(join(bookDir, "story", "outline"), { recursive: true });
-    await writeFile(join(bookDir, "story", "outline", "story_frame.md"), "NEW frame prose", "utf-8");
-    await writeFile(join(bookDir, "story", "story_bible.md"), "OLD bible table", "utf-8");
+    await writeFile(join(bookDir, "story", "outline", "story_frame.md"), "Frame prose", "utf-8");
 
-    const content = await readStoryFrame(bookDir, "(missing)");
-    expect(content).toBe("NEW frame prose");
+    const content = await readStoryFrame(bookDir);
+    expect(content).toBe("Frame prose");
   });
 
-  it("falls back to legacy story_bible.md when outline/story_frame.md absent", async () => {
-    await writeFile(join(bookDir, "story", "story_bible.md"), "legacy bible", "utf-8");
-
-    const content = await readStoryFrame(bookDir, "(missing)");
-    expect(content).toBe("legacy bible");
+  it("fails when a canonical foundation asset is missing", async () => {
+    await expect(readStoryFrame(bookDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readVolumeMap(bookDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readCharacterContext(bookDir)).rejects.toThrow("Canonical role cards are missing");
   });
 
-  it("returns placeholder when no story-frame source exists", async () => {
-    const content = await readStoryFrame(bookDir, "(missing)");
-    expect(content).toBe("(missing)");
-  });
-
-  it("prefers outline/volume_map.md over legacy volume_outline.md", async () => {
+  it("reads the canonical volume map", async () => {
     await mkdir(join(bookDir, "story", "outline"), { recursive: true });
-    await writeFile(join(bookDir, "story", "outline", "volume_map.md"), "NEW map prose", "utf-8");
-    await writeFile(join(bookDir, "story", "volume_outline.md"), "OLD outline", "utf-8");
+    await writeFile(join(bookDir, "story", "outline", "volume_map.md"), "Map prose", "utf-8");
 
-    const content = await readVolumeMap(bookDir, "(missing)");
-    expect(content).toBe("NEW map prose");
+    const content = await readVolumeMap(bookDir);
+    expect(content).toBe("Map prose");
   });
 
   it("reads role cards one-file-per-character from both tiers", async () => {
@@ -74,24 +65,10 @@ describe("outline-paths", () => {
     await mkdir(majorDir, { recursive: true });
     await writeFile(join(majorDir, "林辞.md"), "## 核心标签\n沉静的观察者\n", "utf-8");
 
-    const context = await readCharacterContext(bookDir, "(empty)");
+    const context = await readCharacterContext(bookDir);
     expect(context).toContain("林辞");
     expect(context).toContain("主要角色");
     expect(context).toContain("沉静的观察者");
   });
 
-  it("falls back to legacy character_matrix.md when no role cards exist", async () => {
-    await writeFile(join(bookDir, "story", "character_matrix.md"), "legacy matrix table", "utf-8");
-
-    const context = await readCharacterContext(bookDir, "(empty)");
-    expect(context).toBe("legacy matrix table");
-  });
-
-  it("reads 节奏原则.md and falls back to rhythm_principles.md", async () => {
-    await mkdir(join(bookDir, "story", "outline"), { recursive: true });
-    await writeFile(join(bookDir, "story", "outline", "节奏原则.md"), "六条原则", "utf-8");
-
-    const content = await readRhythmPrinciples(bookDir);
-    expect(content).toBe("六条原则");
-  });
 });

@@ -11,48 +11,50 @@ const HookRecordToolSchema = Type.Object({
     Type.Literal("resolved"),
   ]),
   lastAdvancedChapter: Type.Integer({ minimum: 0 }),
-  expectedPayoff: Type.Optional(Type.String()),
-  notes: Type.Optional(Type.String()),
+  expectedPayoff: Type.String(),
+  notes: Type.String(),
   dependsOn: Type.Optional(Type.Array(Type.String())),
   paysOffInArc: Type.Optional(Type.String()),
 });
 
 const ChapterSummaryToolSchema = Type.Object({
   title: Type.String(),
-  characters: Type.Optional(Type.String()),
-  events: Type.Optional(Type.String()),
-  stateChanges: Type.Optional(Type.String()),
-  hookActivity: Type.Optional(Type.String()),
-  mood: Type.Optional(Type.String()),
-  chapterType: Type.Optional(Type.String()),
+  characters: Type.String(),
+  events: Type.String(),
+  stateChanges: Type.String(),
+  hookActivity: Type.String(),
+  mood: Type.String(),
+  chapterType: Type.String(),
 });
 
-const LooseOpToolSchema = Type.Record(Type.String(), Type.Unknown());
+const StateFactToolSchema = Type.Object({
+  subject: Type.String({ minLength: 1, description: "Stable entity or scope the fact describes." }),
+  predicate: Type.String({ minLength: 1, description: "Natural-language relation or state name." }),
+  object: Type.String({ minLength: 1, description: "Value explicitly established by the chapter." }),
+});
+
+const StateFactSelectorToolSchema = Type.Object({
+  subject: Type.String({ minLength: 1 }),
+  predicate: Type.String({ minLength: 1 }),
+  object: Type.Optional(Type.String({ minLength: 1 })),
+});
 
 export const SettlementToolSchema = Type.Object({
   postSettlement: Type.String({ description: "Concise account of the state changes grounded in this chapter." }),
-  currentStatePatch: Type.Optional(Type.Object({
-    currentLocation: Type.Optional(Type.String()),
-    protagonistState: Type.Optional(Type.String()),
-    currentGoal: Type.Optional(Type.String()),
-    currentConstraint: Type.Optional(Type.String()),
-    currentAlliances: Type.Optional(Type.String()),
-    currentConflict: Type.Optional(Type.String()),
+  factOps: Type.Object({
+    upsert: Type.Array(StateFactToolSchema, { description: "Facts made current by this chapter." }),
+    expire: Type.Array(StateFactSelectorToolSchema, { description: "Previously active facts explicitly ended or superseded by this chapter." }),
+  }),
+  hookOps: Type.Object({
+    upsert: Type.Array(HookRecordToolSchema),
+    mention: Type.Array(Type.String()),
+    resolve: Type.Array(Type.String()),
+    defer: Type.Array(Type.String()),
+  }),
+  newHookCandidates: Type.Array(Type.Object({
+    type: Type.String({ minLength: 1 }),
+    expectedPayoff: Type.String({ minLength: 1 }),
+    notes: Type.String(),
   })),
-  hookOps: Type.Optional(Type.Object({
-    upsert: Type.Optional(Type.Array(HookRecordToolSchema)),
-    mention: Type.Optional(Type.Array(Type.String())),
-    resolve: Type.Optional(Type.Array(Type.String())),
-    defer: Type.Optional(Type.Array(Type.String())),
-  })),
-  newHookCandidates: Type.Optional(Type.Array(Type.Object({
-    type: Type.String(),
-    expectedPayoff: Type.Optional(Type.String()),
-    notes: Type.Optional(Type.String()),
-  }))),
-  chapterSummary: Type.Optional(ChapterSummaryToolSchema),
-  subplotOps: Type.Optional(Type.Array(LooseOpToolSchema)),
-  emotionalArcOps: Type.Optional(Type.Array(LooseOpToolSchema)),
-  characterMatrixOps: Type.Optional(Type.Array(LooseOpToolSchema)),
-  notes: Type.Optional(Type.Array(Type.String())),
+  chapterSummary: ChapterSummaryToolSchema,
 });

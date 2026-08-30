@@ -280,7 +280,7 @@ describe("session transcript restore", () => {
       toolCallId: "tool-1",
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", id: "tool-1", name: "sub_agent", arguments: { agent: "writer" } }],
+        content: [{ type: "toolCall", id: "tool-1", name: "write_chapters", arguments: { } }],
         api: "openai-completions",
         provider: "openai",
         model: "deepseek-v4-pro",
@@ -304,7 +304,7 @@ describe("session transcript restore", () => {
       message: {
         role: "toolResult",
         toolCallId: "tool-1",
-        toolName: "sub_agent",
+        toolName: "write_chapters",
         content: [{ type: "text", text: "Chapter 12 written." }],
         isError: false,
         timestamp: 4,
@@ -374,7 +374,7 @@ describe("session transcript restore", () => {
     const body = JSON.stringify(restored);
 
     expect(restored.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user", "assistant"]);
-    expect(body).toContain("sub_agent");
+    expect(body).toContain("write_chapters");
     expect(body).toContain("Chapter 12 written.");
     expect(body).toContain("哪里节奏慢");
     expect(body).toContain("第 7 章后半段节奏慢");
@@ -418,7 +418,7 @@ describe("session transcript restore", () => {
       toolCallId: "tool-1",
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", id: "tool-1", name: "sub_agent", arguments: { agent: "writer" } }],
+        content: [{ type: "toolCall", id: "tool-1", name: "write_chapters", arguments: { } }],
         api: "openai-completions",
         provider: "openai",
         model: "deepseek-v4-pro",
@@ -442,7 +442,7 @@ describe("session transcript restore", () => {
       message: {
         role: "toolResult",
         toolCallId: "tool-1",
-        toolName: "sub_agent",
+        toolName: "write_chapters",
         content: [{ type: "text", text: "legacy chapter result should not return" }],
         isError: false,
         timestamp: 4,
@@ -541,7 +541,7 @@ describe("session transcript restore", () => {
         toolCallId,
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", id: toolCallId, name: "sub_agent", arguments: { agent: "writer" } }],
+          content: [{ type: "toolCall", id: toolCallId, name: "write_chapters", arguments: { } }],
           api: "openai-completions",
           provider: "openai",
           model: "deepseek-v4-pro",
@@ -565,7 +565,7 @@ describe("session transcript restore", () => {
         message: {
           role: "toolResult",
           toolCallId,
-          toolName: "sub_agent",
+          toolName: "write_chapters",
           content: [{ type: "text", text: `工具结果 ${i}` }],
           isError: false,
           timestamp: seq,
@@ -1123,7 +1123,7 @@ describe("session transcript restore", () => {
       { role: "user", content: "写下一章", timestamp: 1 },
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "tool-1", name: "sub_agent", arguments: { agent: "writer" } }],
+        content: [{ type: "toolCall", id: "tool-1", name: "write_chapters", arguments: { } }],
         api: "openai-completions",
         provider: "openai",
         model: "deepseek-v4-pro",
@@ -1134,7 +1134,7 @@ describe("session transcript restore", () => {
       {
         role: "toolResult",
         toolCallId: "tool-1",
-        toolName: "sub_agent",
+        toolName: "write_chapters",
         content: [{ type: "text", text: "Chapter written." }],
         isError: false,
         timestamp: 3,

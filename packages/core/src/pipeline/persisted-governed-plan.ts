@@ -52,23 +52,21 @@ export async function loadPersistedPlan(
   let raw: string;
   try {
     raw = await readFile(planPath(bookDir, chapterNumber), "utf-8");
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 
-  let persisted: z.infer<typeof PersistedPlanSchema>;
-  try {
-    persisted = PersistedPlanSchema.parse(JSON.parse(raw));
-  } catch {
-    return null;
+  const persisted: z.infer<typeof PersistedPlanSchema> = PersistedPlanSchema.parse(JSON.parse(raw));
+  if (persisted.memo.chapter !== chapterNumber || persisted.intent.chapter !== chapterNumber) {
+    throw new Error(`Persisted plan chapter identity does not match chapter ${chapterNumber}.`);
   }
-  if (persisted.memo.chapter !== chapterNumber || persisted.intent.chapter !== chapterNumber) return null;
 
   let intentMarkdown = persisted.memo.body;
   try {
     intentMarkdown = await readFile(intentPath(bookDir, chapterNumber), "utf-8");
-  } catch {
-    // fall through — memo body is a safe default.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
   return {

@@ -66,6 +66,61 @@ export interface TranslationGlossaryTerm {
   readonly note?: string;
 }
 
+export const TranslationSourceManifestSchema = z.object({
+  kind: z.enum(["text", "markdown", "pdf", "epub"]),
+  path: z.string().min(1),
+  charCount: z.number().int().nonnegative(),
+  totalPages: z.number().int().positive().optional(),
+}).strict();
+
+export const TranslationChapterManifestSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string().min(1),
+  sourcePath: z.string().min(1),
+  translatedPath: z.string().min(1),
+  segmentCount: z.number().int().nonnegative(),
+  charCount: z.number().int().nonnegative(),
+  translatedSegments: z.number().int().nonnegative(),
+  reviewSummary: z.string().optional(),
+  reviewIssues: z.array(z.string()).optional(),
+}).strict();
+
+export const TranslationProjectManifestSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  sourceLanguage: z.string().min(1),
+  targetLanguage: z.string().min(1),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+  source: TranslationSourceManifestSchema,
+  chapters: z.array(TranslationChapterManifestSchema),
+}).strict();
+
+export const TranslationSegmentSchema = z.object({
+  index: z.number().int().nonnegative(),
+  source: z.string(),
+  target: z.string().optional(),
+  notes: z.string().optional(),
+}).strict();
+
+export const TranslationChapterFileSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string().min(1),
+  sourceLanguage: z.string().min(1),
+  targetLanguage: z.string().min(1),
+  segments: z.array(TranslationSegmentSchema),
+}).strict();
+
+export const TranslationGlossaryTermSchema = z.object({
+  source: z.string().min(1),
+  target: z.string().min(1),
+  note: z.string().optional(),
+}).strict();
+
+export const TranslationGlossarySchema = z.object({
+  terms: z.array(TranslationGlossaryTermSchema).default([]),
+}).strict();
+
 export interface TranslationModelPort {
   readonly translateSegments: (input: {
     readonly sourceLanguage: string;
@@ -106,3 +161,4 @@ export interface TranslationExportResult {
   readonly format: TranslationExportFormat;
   readonly chaptersExported: number;
 }
+import { z } from "zod";

@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { PipelineRunner, StateManager } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, getLegacyMigrationHint, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatAutoWriteAlreadyComplete,
   formatAutoWriteStart,
@@ -50,10 +50,6 @@ export const autoCommand = new Command("auto")
       const language = resolveCliLanguage(book.language);
       notifyLanguage = language;
       notifyBookName = book.title ?? bookId;
-      const migrationHint = await getLegacyMigrationHint(root, bookId);
-      if (migrationHint && !opts.json) {
-        log(`[migration] ${migrationHint}`);
-      }
 
       const startChapter = await state.getNextChapterNumber(bookId);
       if (startChapter > targetChapter) {

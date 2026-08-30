@@ -17,9 +17,7 @@ export async function executeExplicitCapabilityTool(input: {
   readonly signal?: AbortSignal;
   readonly onUpdate?: (partialResult: unknown) => void;
 }): Promise<ActionResult> {
-  const work = input.workId
-    ? await loadWorkManifest(input.projectRoot, input.workId).catch(() => null)
-    : null;
+  const work = input.workId ? await loadWorkManifest(input.projectRoot, input.workId) : null;
   const profiles = createBuiltInWorkProfileRegistry();
   const workProfile = work ? profiles.require(work.profileId) : null;
   const profile = workProfile?.capabilityIds.includes(input.binding.capabilityId)
@@ -45,7 +43,7 @@ export async function executeExplicitCapabilityTool(input: {
       signal: input.signal,
       onUpdate: input.onUpdate,
     });
-    runtime.finishEpisode(handle, result.status === "error" ? "failed" : "completed");
+    runtime.finishEpisode(handle, "completed");
     return result;
   } catch (error) {
     try {

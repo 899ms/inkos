@@ -456,7 +456,7 @@ function firstUserMessageTitle(messages: InteractionMessage[]): string | null {
     if (message.role !== "user") continue;
     const oneLine = message.content.trim().replace(/\s+/g, " ");
     if (!oneLine) return null;
-    return oneLine.length > 20 ? `${oneLine.slice(0, 20)}…` : oneLine;
+    return oneLine;
   }
   return null;
 }
@@ -484,12 +484,12 @@ function messageEventToInteractionMessage(
       : joinThinking([
           ...(restoredThinking ?? []),
           thinkingFromContent(raw.content),
-          event.legacyDisplay?.thinking,
+          event.display?.thinking,
           options.suppressAssistantText ? rawText : undefined,
         ]);
     const toolExecutions = restoredToolExecutions?.length
       ? restoredToolExecutions
-      : event.legacyDisplay?.toolExecutions as ToolExecution[] | undefined;
+      : event.display?.toolExecutions as ToolExecution[] | undefined;
     if (!content && !thinking && !toolExecutions?.length) return null;
     if (!content && !toolExecutions?.length) return null;
     return {
@@ -517,13 +517,6 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     timestamp: number;
   };
 
-  const agentLabels: Record<string, string> = {
-    architect: "建书",
-    writer: "写作",
-    auditor: "审计",
-    reviser: "修订",
-    exporter: "导出",
-  };
   const toolLabels: Record<string, string> = {
     read: "读取文件",
     edit: "编辑文件",
@@ -539,6 +532,12 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     create_narrative_forecast: "剧情多线推演",
     get_narrative_forecast: "核验剧情推演",
     select_narrative_branch: "采用候选分支",
+    create_book: "创建长篇",
+    revise_foundation: "重建设定",
+    write_chapters: "写作章节",
+    review_chapter: "审查章节",
+    revise_chapter: "修订章节",
+    export_book: "导出作品",
   };
 
   const messages: InteractionMessage[] = [];
@@ -593,9 +592,9 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     }
   };
 
-  const resolveToolLabel = (tool: string, agent?: string): string => {
-    if (tool === "sub_agent" && agent) return agentLabels[agent] ?? agent;
-    return toolLabels[tool] ?? tool;
+  const resolveToolLabel = (tool: string): string => {
+    const action = tool.includes("__") ? tool.slice(tool.indexOf("__") + 2) : tool;
+    return toolLabels[action] ?? action;
   };
 
   const hasCompletedPlayTool = (executions: ReadonlyArray<ToolExecution>): boolean =>
@@ -633,20 +632,17 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     const tool = typeof raw.toolName === "string" && raw.toolName
       ? raw.toolName
       : call?.tool ?? "tool";
+    const action = tool.includes("__") ? tool.slice(tool.indexOf("__") + 2) : tool;
     const args = call?.args;
-    const agent = tool === "sub_agent" && typeof args?.agent === "string"
-      ? args.agent
-      : undefined;
     const text = textFromContent(raw.content).trim();
     const isError = raw.isError === true;
     const details = raw.details;
-    const expiredSkill = tool === "use_skill";
+    const expiredSkill = action === "use_skill";
 
     return {
       id: toolCallId,
-      tool,
-      ...(agent ? { agent } : {}),
-      label: resolveToolLabel(tool, agent),
+      tool: action,
+      label: resolveToolLabel(action),
       status: isError ? "error" : "completed",
       ...(args ? { args } : {}),
       ...(isError
@@ -679,17 +675,17 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
       const isSkillRequest = skillRequestIds.has(event.requestId);
       const currentThinking = isSkillRequest ? undefined : thinkingFromContent(raw.content);
       const currentText = textFromContent(raw.content).trim();
-      const legacyToolExecutions = event.legacyDisplay?.toolExecutions as ToolExecution[] | undefined;
-      const hasLegacyDisplay = !!currentThinking
-        || (!isSkillRequest && !!event.legacyDisplay?.thinking)
-        || !!legacyToolExecutions?.length;
+      const displayedToolExecutions = event.display?.toolExecutions as ToolExecution[] | undefined;
+      const hasDisplay = !!currentThinking
+        || (!isSkillRequest && !!event.display?.thinking)
+        || !!displayedToolExecutions?.length;
       if (
         pendingToolExecutions.length > 0
         && !hasCompletedPlayTool(pendingToolExecutions)
         && !currentText
         && !currentThinking
         && !hasToolCallContent(raw)
-        && !hasLegacyDisplay
+        && !hasDisplay
       ) {
         // Empty terminal assistant messages only close the model turn. Keep
         // non-play tool results pending so they attach to the previous prose
@@ -786,7 +782,6 @@ export async function deriveBookSessionFromTranscript(
     playMode,
     title,
     messages,
-    draftRounds: [],
     events: [],
     createdAt,
     updatedAt,

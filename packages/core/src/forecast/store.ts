@@ -112,8 +112,9 @@ export class ForecastStore {
     let entries: string[];
     try {
       entries = await readdir(this.forecastsDir);
-    } catch {
-      return [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
     }
     const ids: string[] = [];
     for (const entry of entries) {
@@ -150,7 +151,8 @@ async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }

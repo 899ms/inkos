@@ -724,7 +724,7 @@ function getSessionLabel(session: { sessionId: string; title: string | null; mes
   const firstUserMsg = session.messages.find((m) => m.role === "user")?.content?.trim();
   if (firstUserMsg) {
     const oneLine = firstUserMsg.replace(/\s+/g, " ");
-    return oneLine.length > 20 ? `${oneLine.slice(0, 20)}…` : oneLine;
+    return oneLine;
   }
   return tr("新会话", "New session");
 }

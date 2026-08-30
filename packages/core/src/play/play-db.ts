@@ -15,7 +15,13 @@ import {
   type PlayStateSlot,
   type PlayStateSlotInput,
 } from "../models/play.js";
-import type { PlayGraphSnapshot } from "./play-file-db.js";
+
+export interface PlayGraphSnapshot {
+  readonly entities: PlayEntity[];
+  readonly edges: PlayEdge[];
+  readonly stateSlots: PlayStateSlot[];
+  readonly events: PlayEvent[];
+}
 
 const require = createRequire(import.meta.url);
 
@@ -69,10 +75,10 @@ export class PlayDB {
     const { DatabaseSync } = require("node:sqlite");
     this.db = new DatabaseSync(join(runDir, "play.db"));
     this.db.exec("PRAGMA journal_mode = WAL");
-    this.migrate();
+    this.initializeSchema();
   }
 
-  private migrate(): void {
+  private initializeSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS entities (
         id TEXT PRIMARY KEY,

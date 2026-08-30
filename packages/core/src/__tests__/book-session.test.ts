@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   BookSessionSchema,
-  GlobalSessionSchema,
   createBookSession,
   appendBookSessionMessage,
 } from "../interaction/session.js";
@@ -13,7 +12,6 @@ describe("BookSession", () => {
         sessionId: "123-abc",
         bookId: "my-book",
         messages: [],
-        draftRounds: [],
         events: [],
         createdAt: 1000,
         updatedAt: 1000,
@@ -28,7 +26,6 @@ describe("BookSession", () => {
         sessionId: "123-abc",
         bookId: null,
         messages: [],
-        draftRounds: [],
         events: [],
         createdAt: 1000,
         updatedAt: 1000,
@@ -46,22 +43,7 @@ describe("BookSession", () => {
       };
       const result = BookSessionSchema.parse(raw);
       expect(result.messages).toEqual([]);
-      expect(result.draftRounds).toEqual([]);
       expect(result.events).toEqual([]);
-    });
-  });
-
-  describe("GlobalSessionSchema", () => {
-    it("parses with defaults", () => {
-      const result = GlobalSessionSchema.parse({});
-      expect(result.automationMode).toBe("semi");
-      expect(result.activeBookId).toBeUndefined();
-    });
-
-    it("parses with values", () => {
-      const result = GlobalSessionSchema.parse({ activeBookId: "book-1", automationMode: "auto" });
-      expect(result.activeBookId).toBe("book-1");
-      expect(result.automationMode).toBe("auto");
     });
   });
 

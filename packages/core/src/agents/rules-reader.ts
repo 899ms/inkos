@@ -10,8 +10,9 @@ const BUILTIN_GENRES_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../
 async function tryReadFile(path: string): Promise<string | null> {
   try {
     return await readFile(path, "utf-8");
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 
@@ -61,7 +62,9 @@ export async function listAvailableGenres(
       const parsed = parseGenreProfile(raw);
       results.set(id, { id, name: parsed.profile.name, source: "builtin" });
     }
-  } catch { /* no builtin dir */ }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 
   // Project-level genres override
   const projectDir = join(projectRoot, "genres");
@@ -75,7 +78,9 @@ export async function listAvailableGenres(
       const parsed = parseGenreProfile(raw);
       results.set(id, { id, name: parsed.profile.name, source: "project" });
     }
-  } catch { /* no project genres dir */ }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 
   return [...results.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -88,27 +93,18 @@ export function getBuiltinGenresDir(): string {
 /**
  * Load structured book rules.
  *
- * New books keep human-readable guidance in book_rules.md and the small host
+ * Books keep human-readable guidance in book_rules.md and the small host
  * surface in book_rules.json. Prose is never reinterpreted by code.
  */
-export async function readBookRules(bookDir: string): Promise<ParsedBookRules | null> {
-  const rulesRaw = await tryReadFile(join(bookDir, "story/book_rules.md"));
-  const dataRaw = await tryReadFile(join(bookDir, "story/book_rules.json"));
-  if (!rulesRaw && !dataRaw) return null;
-  const rules = dataRaw
-    ? BookRulesSchema.parse(JSON.parse(dataRaw))
-    : BookRulesSchema.parse({});
-  return { rules, body: rulesRaw?.trim() ?? "" };
+export async function readBookRules(bookDir: string): Promise<ParsedBookRules> {
+  const [rulesRaw, dataRaw] = await Promise.all([
+    readFile(join(bookDir, "story/book_rules.md"), "utf-8"),
+    readFile(join(bookDir, "story/book_rules.json"), "utf-8"),
+  ]);
+  return { rules: BookRulesSchema.parse(JSON.parse(dataRaw)), body: rulesRaw.trim() };
 }
 
-export async function readBookLanguage(bookDir: string): Promise<"zh" | "en" | undefined> {
-  const raw = await tryReadFile(join(bookDir, "book.json"));
-  if (!raw) return undefined;
-
-  try {
-    const parsed = BookConfigSchema.pick({ language: true }).safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data.language : undefined;
-  } catch {
-    return undefined;
-  }
+export async function readBookLanguage(bookDir: string): Promise<"zh" | "en"> {
+  const raw = await readFile(join(bookDir, "book.json"), "utf-8");
+  return BookConfigSchema.pick({ language: true }).parse(JSON.parse(raw)).language;
 }

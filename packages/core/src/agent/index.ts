@@ -1,5 +1,4 @@
 export {
-  createSubAgentTool,
   createReadTool,
   createEditTool,
   createWriteFileTool,
@@ -15,6 +14,7 @@ export {
   createIngestMaterialTool,
   createManageBookReferenceTool,
   createImportChaptersTool,
+  createResyncChapterStateTool,
   createGenerateCoverTool,
   createPlayStartTool,
   createPlayReviseTool,

@@ -57,34 +57,31 @@ export class FanficCanonImporter extends BaseAgent {
     const keyEvents = result.keyEvents.trim();
     const powerSystem = result.powerSystem.trim();
     const writingStyle = result.writingStyle.trim();
-
-    const meta = [
-      "---",
-      "meta:",
-      `  sourceFile: "${sourceName}"`,
-      `  fanficMode: "${fanficMode}"`,
-      `  generatedAt: "${new Date().toISOString()}"`,
-    ].join("\n");
+    if ([worldRules, characterProfiles, keyEvents, powerSystem, writingStyle].some((section) => !section)) {
+      throw new Error("Fanfic canon compiler returned an empty required section.");
+    }
 
     const fullDocument = [
       `# 同人正典（《${sourceName}》）`,
       "",
       "## 世界规则",
-      worldRules || "（素材中未提取到明确世界规则）",
+      worldRules,
       "",
       "## 角色档案",
-      characterProfiles || "（素材中未提取到角色信息）",
+      characterProfiles,
       "",
       "## 关键事件时间线",
-      keyEvents || "（素材中未提取到关键事件）",
+      keyEvents,
       "",
       "## 力量体系",
-      powerSystem || "（原作无明确力量体系）",
+      powerSystem,
       "",
       "## 原作写作风格",
-      writingStyle || "（素材不足以提取风格特征）",
+      writingStyle,
       "",
-      meta,
+      "## 来源",
+      `- 素材：${sourceName}`,
+      `- 同人模式：${fanficMode}`,
     ].join("\n");
 
     return { worldRules, characterProfiles, keyEvents, powerSystem, writingStyle, fullDocument };
@@ -103,11 +100,7 @@ export class FanficCanonImporter extends BaseAgent {
         [
           {
             role: "system",
-            content: [
-              "你是同人正典资料编译器。任务是把一个原作片段压成后续抽取可用的 Markdown 资料包。",
-              "不要续写、不要创作、不要补不存在的信息。只保留片段里实际出现的世界规则、人物、关系、关键事件、能力体系、口头禅、说话风格和原文证据。",
-              "如果片段没有某类信息，直接省略该类。保留片段编号，方便后续追溯。",
-            ].join("\n"),
+            content: "按已激活的导入 Skill 把完整原作片段编译为可追溯 Markdown 资料包；片段编号由输入提供。",
           },
           {
             role: "user",
@@ -122,9 +115,8 @@ export class FanficCanonImporter extends BaseAgent {
         { temperature: 0.2 },
       );
       const content = response.content.trim();
-      if (content) {
-        notes.push([`## 片段 ${index + 1}/${chunks.length}`, content].join("\n\n"));
-      }
+      if (!content) throw new Error(`Fanfic source compiler returned empty output for chunk ${index + 1}/${chunks.length}.`);
+      notes.push([`## 片段 ${index + 1}/${chunks.length}`, content].join("\n\n"));
     }
 
     return {

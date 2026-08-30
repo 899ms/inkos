@@ -5,7 +5,7 @@ export const GenreProfileSchema = z.object({
   name: z.string(),
   id: z.string(),
   language: z.enum(["zh", "en"]).default("zh"),
-});
+}).strict();
 
 export type GenreProfile = z.infer<typeof GenreProfileSchema>;
 

@@ -12,13 +12,11 @@ describe("tui layout", () => {
       locale: "zh-CN",
       projectName: "inkos-demo",
       activeBookTitle: undefined,
-      automationMode: "semi",
       status: "idle",
     });
 
     expect(frame).toContain("项目 inkos-demo");
     expect(frame).toContain("阶段 就绪");
-    expect(frame).toContain("模式 半自动");
     expect(frame).not.toContain("Header");
     expect(frame).not.toContain("Conversation");
     expect(frame).not.toContain("Status");
@@ -31,7 +29,6 @@ describe("tui layout", () => {
       locale: "en",
       projectName: "inkos-demo",
       activeBookTitle: "Night Harbor Echo",
-      automationMode: "auto",
       status: "writing",
       messages: ["user: continue", "assistant: Completed write_next for harbor."],
       events: ["task.completed: Completed write_next for harbor."],
@@ -42,7 +39,6 @@ describe("tui layout", () => {
     expect(frame).toContain("user: continue");
     expect(frame).toContain("task.completed: Completed write_next for harbor.");
     expect(frame.indexOf("task.completed: Completed write_next for harbor.")).toBeLessThan(frame.indexOf("Ask InkOS"));
-    expect(frame.indexOf("Mode auto")).toBeLessThan(frame.indexOf("Ask InkOS"));
   });
 
   it("does not add blank lines before the readline prompt", () => {

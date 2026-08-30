@@ -332,10 +332,10 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   const tool: AgentTool<TParameters, Static<TParameters>> = {
     ...resultTool,
     execute: async (_toolCallId, params): Promise<AgentToolResult<Static<TParameters>>> => {
-      submitted = params;
+      submitted = Value.Parse(resultTool.parameters, params) as Static<TParameters>;
       return {
-        content: [{ type: "text", text: "Structured result accepted by the host." }],
-        details: params,
+        content: [{ type: "text", text: "Structured result received by the host." }],
+        details: submitted,
       };
     },
   };

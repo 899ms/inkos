@@ -41,7 +41,7 @@ export async function stageArtifactRevision(input: {
     parentRevisionId: currentRevisionId(manifest, artifactId),
     path,
     contentType: input.contentType,
-    status: input.promote ? "accepted" : "candidate",
+    status: input.promote ? "current" : "candidate",
     checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
     byteLength: bytes.byteLength,
     episodeId: input.episodeId,
@@ -52,7 +52,9 @@ export async function stageArtifactRevision(input: {
     kind: artifactKind,
     currentRevisionId: input.promote ? revisionId : currentRevisionId(manifest, artifactId),
     revisions: [
-      ...(manifest.artifacts.find((artifact) => artifact.id === artifactId)?.revisions ?? []),
+      ...(manifest.artifacts.find((artifact) => artifact.id === artifactId)?.revisions ?? []).map((item) => (
+        input.promote && item.status === "current" ? { ...item, status: "superseded" as const } : item
+      )),
       revision,
     ],
     metadata: manifest.artifacts.find((artifact) => artifact.id === artifactId)?.metadata ?? {},
@@ -75,7 +77,7 @@ export async function stageArtifactRevision(input: {
   return { manifest: nextManifest, revision };
 }
 
-export function createAcceptedArtifact(input: {
+export function createCurrentArtifact(input: {
   readonly artifactId: string;
   readonly artifactKind: string;
   readonly revisionId?: string;
@@ -95,7 +97,7 @@ export function createAcceptedArtifact(input: {
     parentRevisionId: null,
     path: input.path,
     contentType: input.contentType,
-    status: "accepted",
+    status: "current",
     checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
     byteLength: bytes.byteLength,
     episodeId: input.episodeId,
@@ -129,9 +131,10 @@ export async function promoteArtifactRevision(input: {
   const nextArtifact = ArtifactManifestSchema.parse({
     ...artifact,
     currentRevisionId: revisionId,
-    revisions: artifact.revisions.map((revision) => (
-      revision.id === revisionId ? { ...revision, status: "accepted" } : revision
-    )),
+    revisions: artifact.revisions.map((revision) => {
+      if (revision.id === revisionId) return { ...revision, status: "current" };
+      return revision.status === "current" ? { ...revision, status: "superseded" } : revision;
+    }),
   });
   const nextManifest = WorkManifestSchema.parse({
     ...manifest,

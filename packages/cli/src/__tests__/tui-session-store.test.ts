@@ -36,7 +36,6 @@ describe("tui session store", () => {
   it("creates a default project session", () => {
     const session = createProjectSession(projectRoot);
     expect(session.projectRoot).toBe(projectRoot);
-    expect(session.automationMode).toBe("semi");
     expect(session.messages).toEqual([]);
   });
 
@@ -44,14 +43,12 @@ describe("tui session store", () => {
     const session = {
       ...createProjectSession(projectRoot),
       activeBookId: "night-harbor",
-      automationMode: "auto" as const,
     };
 
     await persistProjectSession(projectRoot, session);
     const reloaded = await loadProjectSession(projectRoot);
 
     expect(reloaded.activeBookId).toBe("night-harbor");
-    expect(reloaded.automationMode).toBe("auto");
   });
 
   it("resolves active book from session when it still exists", async () => {

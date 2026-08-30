@@ -19,8 +19,12 @@ import {
 import { createPlayDB } from "./play-db-factory.js";
 import { applyPlayMutation, seedPlayGraph, type PlayReducerDB } from "./play-reducer.js";
 import { PlayStore, type PlayWorld } from "./play-store.js";
-import type { PlayGraphSnapshot } from "./play-file-db.js";
+import type { PlayGraphSnapshot } from "./play-db.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { compileContext, ContextSourceRegistry, type ContextFragment } from "../harness/context-compiler.js";
+import { createBuiltInWorkProfileRegistry } from "../harness/builtin-profiles.js";
+import { semanticInputBudget } from "../llm/semantic-input.js";
+import { SemanticContextCompilerAgent } from "../agents/semantic-context-compiler.js";
 
 export interface PlayActionInterpreterLike {
   readonly interpret: (input: {
@@ -120,6 +124,8 @@ export class PlayRunner {
   private readonly worldMutator: PlayWorldMutatorLike;
   private readonly sceneRenderer: PlaySceneRendererLike;
   private readonly sceneReconciler: PlaySceneReconcilerLike | null;
+  private readonly contextCompiler: SemanticContextCompilerAgent | null;
+  private readonly contextBudgetTokens: number | undefined;
 
   constructor(private readonly options: PlayRunnerOptions) {
     this.store = options.store ?? new PlayStore(options.projectRoot);
@@ -133,6 +139,13 @@ export class PlayRunner {
     this.worldMutator = options.agents?.worldMutator ?? new PlayWorldMutatorAgent(ctx!);
     this.sceneRenderer = options.agents?.sceneRenderer ?? new PlaySceneRendererAgent(ctx!);
     this.sceneReconciler = options.agents?.sceneReconciler ?? (ctx ? new PlaySceneReconcilerAgent(ctx) : null);
+    this.contextCompiler = ctx ? new SemanticContextCompilerAgent(ctx) : null;
+    this.contextBudgetTokens = ctx
+      ? semanticInputBudget(ctx.client, {
+          reservedOutputTokens: ctx.client.defaults.maxTokens,
+          promptOverheadTokens: 4096,
+        })
+      : undefined;
   }
 
   /**
@@ -151,15 +164,14 @@ export class PlayRunner {
     readonly sceneText: string;
     readonly suggestedActions?: readonly string[];
   }): Promise<PlayOpeningSeedResult | null> {
-    await this.store.ensureWorldDefinition(this.options.worldId);
+    const world = await this.store.ensureWorldDefinition(this.options.worldId);
     await this.store.ensureRun(this.options.worldId, this.options.runId);
     const existing = readGraphSnapshot(this.db);
     if (isOpeningGraphReady(existing)) {
       return null;
     }
 
-    const world = await this.store.loadWorld(this.options.worldId);
-    const language = world?.language ?? "zh";
+    const language = world.language;
     const action: PlayActionIntent = {
       actionKind: "look",
       intent: language === "en" ? "Seed the opening state for the first playable scene." : "播种第一幕已成立的开场状态。",
@@ -169,7 +181,7 @@ export class PlayRunner {
       secondaryActions: [],
     };
     const worldContext = renderPlayWorldContext(world, language);
-    const context = await this.buildContextBrief(input.sceneText, language, world);
+    const context = await this.buildContextBrief(input.sceneText, language, world, input.sceneText);
     const mutation = PlayMutationSchema.parse(await this.worldMutator.proposeMutation({
       turn: 0,
       input: buildOpeningSeedInput({
@@ -238,7 +250,11 @@ export class PlayRunner {
       await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true });
       return result;
     } catch (error) {
-      await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: false }).catch(() => undefined);
+      try {
+        await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: false });
+      } catch (syncError) {
+        throw new AggregateError([error, syncError], `Play turn ${turn} failed and candidate artifacts could not be recorded`);
+      }
       throw error;
     }
   }
@@ -248,8 +264,8 @@ export class PlayRunner {
     turn: number,
     options: { readonly replayContext?: string },
   ): Promise<PlayStepResult> {
-    const world = await this.store.loadWorld(this.options.worldId);
-    const language = world?.language ?? "zh";
+    const world = await this.store.ensureWorldDefinition(this.options.worldId);
+    const language = world.language;
     const sceneBrief = await this.readOptionalProjection("projections/scene.md");
     const action = PlayActionIntentSchema.parse(await this.actionInterpreter.interpret({
       input: rawInput,
@@ -257,7 +273,7 @@ export class PlayRunner {
       language,
     }));
     const worldContext = renderPlayWorldContext(world, language);
-    const context = await this.buildContextBrief(sceneBrief, language, world);
+    const context = await this.buildContextBrief(sceneBrief, language, world, rawInput);
     const mutation = PlayMutationSchema.parse(await this.worldMutator.proposeMutation({
       turn,
       input: rawInput,
@@ -277,7 +293,7 @@ export class PlayRunner {
       mutationSummary: mutation.summary || mutation.blockedReason,
       stateBrief,
       replayContext: options.replayContext,
-      mode: world?.mode ?? "open",
+      mode: world.mode,
       language,
       worldPremise: worldContext,
     });
@@ -325,8 +341,8 @@ export class PlayRunner {
         lastSummary: finalMutation.summary,
         timeAdvance: finalMutation.timeAdvance ?? null,
         blocked: finalMutation.blocked,
-        worldContract: world?.worldContract ?? "",
-        visualContract: world?.visualContract ?? "",
+        worldContract: world.worldContract,
+        visualContract: world.visualContract,
       });
       await this.store.writeProjection(this.options.worldId, this.options.runId, "projections/scene.md", `${render.sceneText}\n`);
       await this.store.appendTranscriptTurn(this.options.worldId, this.options.runId, {
@@ -389,7 +405,7 @@ export class PlayRunner {
       replayContext: buildReplayContext({
         originalInput: last.rawInput,
         replacementInput: input?.trim(),
-        language: (await this.store.loadWorld(this.options.worldId))?.language ?? "zh",
+        language: (await this.store.ensureWorldDefinition(this.options.worldId)).language,
       }),
     });
     const nextGraph = readGraphSnapshot(this.db);
@@ -431,26 +447,68 @@ export class PlayRunner {
     };
   }
 
-  private async buildContextBrief(sceneBrief: string, language: "zh" | "en", world: PlayWorld | null): Promise<string> {
+  private async buildContextBrief(
+    sceneBrief: string,
+    language: "zh" | "en",
+    world: PlayWorld,
+    intent: string,
+  ): Promise<string> {
     const stateBrief = await this.readOptionalProjection("projections/state.md");
-    const isEn = language === "en";
     const worldContext = renderPlayWorldContext(world, language);
-    const sceneLabel = isEn ? "Current scene:" : "当前场景：";
-    const stateLabel = isEn ? "Current state:" : "当前状态：";
-    const entityRoster = renderEntityRoster(readGraphSnapshot(this.db)?.entities ?? [], language);
-    return [
-      worldContext,
-      entityRoster,
-      sceneBrief ? `${sceneLabel}\n${sceneBrief}` : "",
-      stateBrief ? `${stateLabel}\n${stateBrief}` : "",
-    ].filter(Boolean).join("\n\n") || (isEn ? "No persisted state yet." : "暂无持久化状态。");
+    const graph = readGraphSnapshot(this.db);
+    const playerAdjacentIds = new Set<string>(["actor_player"]);
+    for (const edge of graph?.edges ?? []) {
+      if (edge.fromId === "actor_player") playerAdjacentIds.add(edge.toId);
+      if (edge.toId === "actor_player") playerAdjacentIds.add(edge.fromId);
+    }
+    const fragments: ContextFragment[] = [
+      { id: "play-world", source: "World contract", content: worldContext, protection: "protected", priority: 100 },
+      ...(sceneBrief ? [{ id: "play-scene", source: "Current scene", content: sceneBrief, protection: "protected" as const, priority: 95 }] : []),
+      ...(stateBrief ? [{ id: "play-state", source: "Current state", content: stateBrief, protection: "protected" as const, priority: 95 }] : []),
+      ...(graph?.entities ?? []).map((entity) => ({
+        id: `play-entity-${entity.id}`,
+        source: `Entity ${entity.id}`,
+        content: renderEntity(entity, language),
+        protection: playerAdjacentIds.has(entity.id) ? "protected" as const : "compressible" as const,
+        priority: playerAdjacentIds.has(entity.id) ? 90 : 40,
+        pointer: `play.db#entity:${entity.id}`,
+      })),
+    ];
+    if (this.contextBudgetTokens === undefined) {
+      return fragments.map((fragment) => fragment.content).filter(Boolean).join("\n\n");
+    }
+    const sources = new ContextSourceRegistry();
+    sources.register({ id: "play-current", async load() { return fragments; } });
+    const compiled = await compileContext({
+      recipe: { id: "interactive-world-turn", sourceIds: ["play-current"] },
+      sources,
+      request: {
+        projectRoot: this.options.projectRoot,
+        work: null,
+        profile: createBuiltInWorkProfileRegistry().require("interactive-world"),
+        actionId: "play_step",
+        intent,
+        signal: this.options.ctx?.signal,
+      },
+      budgetTokens: this.contextBudgetTokens,
+      compiler: this.contextCompiler
+        ? (request) => this.contextCompiler!.compile({
+            intent: request.intent,
+            maxTokens: request.maxTokens,
+            fragments: request.fragments,
+            language,
+          })
+        : undefined,
+    });
+    return compiled.markdown;
   }
 
   private async readOptionalProjection(relativePath: string): Promise<string> {
     try {
       return await this.store.readProjection(this.options.worldId, this.options.runId, relativePath);
-    } catch {
-      return "";
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
     }
   }
 }
@@ -541,11 +599,7 @@ function readGraphSnapshot(db: PlayReducerDB): PlayGraphSnapshot | null {
   if (typeof maybeSnapshot !== "function") {
     return null;
   }
-  try {
-    return maybeSnapshot.call(db) as PlayGraphSnapshot;
-  } catch {
-    return null;
-  }
+  return maybeSnapshot.call(db) as PlayGraphSnapshot;
 }
 
 function requireRestorableGraphDB(db: PlayReducerDB): PlayReducerDB & {
@@ -600,18 +654,8 @@ function mergeMutationSummary(base: string, supplement: string): string {
   const right = supplement.trim();
   if (!right) return left;
   if (!left) return right;
-  const normalizedLeft = normalizeSummaryForDedupe(left);
-  const normalizedRight = normalizeSummaryForDedupe(right);
-  if (normalizedLeft === normalizedRight) return left;
-  if (normalizedLeft.includes(normalizedRight)) return left;
-  if (normalizedRight.includes(normalizedLeft)) return right;
+  if (left === right) return left;
   return `${left}；${right}`;
-}
-
-function normalizeSummaryForDedupe(value: string): string {
-  return value
-    .replace(/[\s，,。.!！?？；;：:、"'“”‘’「」『』（）()[\]{}《》<>—\-…]+/g, "")
-    .toLowerCase();
 }
 
 function isEmptyMutationSupplement(mutation: PlayMutation): boolean {
@@ -625,25 +669,12 @@ function isEmptyMutationSupplement(mutation: PlayMutation): boolean {
     && !mutation.blocked;
 }
 
-function renderEntityRoster(entities: ReadonlyArray<PlayEntity>, language: "zh" | "en"): string {
-  if (entities.length === 0) {
-    return "";
-  }
+function renderEntity(entity: PlayEntity, language: "zh" | "en"): string {
   const isEn = language === "en";
-  const header = isEn
-    ? "Current entity roster (reuse these ids; do not recreate the same person/thing):"
-    : "当前实体名册（复用这些 id；不要把同一个人/物换新 id 重建）：";
-  const lines = entities.map((entity) => {
-    const detail = [entity.summary, entity.status ? `${isEn ? "status" : "状态"}: ${entity.status}` : ""]
-      .filter(Boolean)
-      .join(isEn ? "; " : "；");
-    return `- ${entity.id} [${entity.type}]: ${entity.label}${detail ? ` — ${clampRosterText(detail)}` : ""}`;
-  });
-  return [header, ...lines].join("\n");
-}
-
-function clampRosterText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  const detail = [entity.summary, entity.status ? `${isEn ? "status" : "状态"}: ${entity.status}` : ""]
+    .filter(Boolean)
+    .join(isEn ? "; " : "；");
+  return `${entity.id} [${entity.type}]: ${entity.label}${detail ? ` — ${detail}` : ""}`;
 }
 
 function renderStateBrief(input: {

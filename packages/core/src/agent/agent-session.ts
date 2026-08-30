@@ -391,7 +391,12 @@ export function isTerminalProductionToolName(toolName: unknown): boolean {
   if (typeof toolName !== "string") return false;
   const actionName = capabilityActionId(toolName);
   return actionName === "propose_action"
-    || actionName === "sub_agent"
+    || actionName === "create_book"
+    || actionName === "revise_foundation"
+    || actionName === "write_chapters"
+    || actionName === "review_chapter"
+    || actionName === "revise_chapter"
+    || actionName === "export_book"
     || actionName === "resync_chapter_state"
     || actionName === "short_fiction_run"
     || actionName === "script_create"
@@ -842,8 +847,9 @@ async function loadSurfaceWork(
   if (!workId) return null;
   try {
     return await loadWorkManifest(projectRoot, workId);
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 
@@ -861,12 +867,17 @@ function agentContextBudget(model: Model<Api>): number {
   const contextWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
     ? model.contextWindow
     : 32_000;
-  return Math.max(2_000, Math.min(16_000, Math.floor(contextWindow * 0.25)));
+  const declaredOutput = typeof model.maxTokens === "number" && model.maxTokens > 0
+    ? model.maxTokens
+    : 4096;
+  const reservedOutput = Math.max(4096, Math.min(declaredOutput, Math.floor(contextWindow * 0.25)));
+  const transportOverhead = Math.max(2048, Math.floor(contextWindow * 0.05));
+  return Math.max(2000, contextWindow - reservedOutput - transportOverhead);
 }
 
 function isAbortLike(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  return error.name === "AbortError" || /\babort(?:ed)?\b/i.test(error.message);
+  return error.name === "AbortError";
 }
 
 /**

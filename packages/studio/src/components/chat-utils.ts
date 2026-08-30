@@ -8,7 +8,6 @@ interface ChatMessage {
 
 interface SharedSessionMeta {
   readonly activeBookId?: string;
-  readonly automationMode?: string;
   readonly currentStage?: string;
   readonly pendingSummary?: string;
   readonly draftTitle?: string;
@@ -50,7 +49,6 @@ export function formatSharedSessionContext(meta: SharedSessionMeta): string {
   return [
     meta.activeBookId ?? "no-book",
     meta.draftTitle ? `draft:${meta.draftTitle}` : undefined,
-    meta.automationMode ?? "semi",
     meta.currentStage,
   ].filter(Boolean).join(" · ");
 }

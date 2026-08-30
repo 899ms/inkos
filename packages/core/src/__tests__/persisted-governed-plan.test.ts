@@ -90,7 +90,7 @@ describe("persisted-governed-plan round trip", () => {
     expect(loaded).toBeNull();
   });
 
-  it("returns null when typed cache shape is invalid", async () => {
+  it("rejects an invalid typed cache", async () => {
     const dir = await mkdtemp(join(tmpdir(), "inkos-plan-"));
     await mkdir(join(dir, "story", "runtime"), { recursive: true });
 
@@ -100,8 +100,7 @@ describe("persisted-governed-plan round trip", () => {
       "utf-8",
     );
 
-    const loaded = await loadPersistedPlan(dir, 1);
-    expect(loaded).toBeNull();
+    await expect(loadPersistedPlan(dir, 1)).rejects.toThrow();
   });
 
   it("returns null when chapter number does not match", async () => {

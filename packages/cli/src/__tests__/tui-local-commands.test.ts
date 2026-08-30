@@ -1,54 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { classifyLocalTuiCommand, parseDepthCommand, parseModelCommand } from "../tui/local-commands.js";
 
-describe("tui local commands", () => {
-  it("recognizes help aliases", () => {
-    expect(classifyLocalTuiCommand("/help")).toBe("help");
-    expect(classifyLocalTuiCommand("help")).toBe("help");
-    expect(classifyLocalTuiCommand("帮助")).toBe("help");
+describe("TUI slash-command protocol", () => {
+  it("keeps host commands explicit and leaves free text to Pi", () => {
+    expect([
+      classifyLocalTuiCommand("/help"),
+      classifyLocalTuiCommand("/status"),
+      classifyLocalTuiCommand("/clear"),
+      classifyLocalTuiCommand("/config"),
+      classifyLocalTuiCommand("/quit"),
+    ]).toEqual(["help", "status", "clear", "config", "quit"]);
+    expect(["help", "状态", "bye", "配置", "continue current book"]
+      .map(classifyLocalTuiCommand)).toEqual([undefined, undefined, undefined, undefined, undefined]);
   });
 
-  it("recognizes status aliases", () => {
-    expect(classifyLocalTuiCommand("/status")).toBe("status");
-    expect(classifyLocalTuiCommand("status")).toBe("status");
-    expect(classifyLocalTuiCommand("状态")).toBe("status");
-  });
-
-  it("recognizes quit aliases", () => {
-    expect(classifyLocalTuiCommand("/quit")).toBe("quit");
-    expect(classifyLocalTuiCommand("/exit")).toBe("quit");
-    expect(classifyLocalTuiCommand("quit")).toBe("quit");
-    expect(classifyLocalTuiCommand("exit")).toBe("quit");
-    expect(classifyLocalTuiCommand("bye")).toBe("quit");
-    expect(classifyLocalTuiCommand("退出")).toBe("quit");
-  });
-
-  it("recognizes config and clear aliases", () => {
-    expect(classifyLocalTuiCommand("/config")).toBe("config");
-    expect(classifyLocalTuiCommand("配置")).toBe("config");
-    expect(classifyLocalTuiCommand("/clear")).toBe("clear");
-    expect(classifyLocalTuiCommand("清屏")).toBe("clear");
-  });
-
-  it("returns undefined for normal chat input", () => {
-    expect(classifyLocalTuiCommand("hi")).toBeUndefined();
-    expect(classifyLocalTuiCommand("continue current book")).toBeUndefined();
-  });
-
-  it("parses depth commands", () => {
-    expect(parseDepthCommand("/depth deep")).toBe("deep");
-    expect(parseDepthCommand("depth light")).toBe("light");
-    expect(parseDepthCommand("/depth normal")).toBe("normal");
-    expect(parseDepthCommand("深度 轻量")).toBe("light");
-    expect(parseDepthCommand("/深度 标准")).toBe("normal");
-    expect(parseDepthCommand("深度 深入")).toBe("deep");
-    expect(parseDepthCommand("/depth weird")).toBeUndefined();
-  });
-
-  it("parses model commands without treating ordinary model discussion as a command", () => {
-    expect(parseModelCommand("/model")).toEqual({ kind: "show" });
-    expect(parseModelCommand("/model deepseek-v4-pro")).toEqual({ kind: "set", model: "deepseek-v4-pro" });
-    expect(parseModelCommand("model gemini-3.1-pro-preview")).toBeUndefined();
+  it("parses only explicit depth and model commands", () => {
+    expect([
+      parseDepthCommand("/depth deep"),
+      parseDepthCommand("/深度 轻量"),
+      parseDepthCommand("depth light"),
+    ]).toEqual(["deep", "light", undefined]);
+    expect(parseModelCommand("/model gemini-3.1-pro-preview"))
+      .toEqual({ kind: "set", model: "gemini-3.1-pro-preview" });
     expect(parseModelCommand("我们讨论一下模型选择")).toBeUndefined();
   });
 });

@@ -39,11 +39,7 @@ export class StateValidatorAgent extends BaseAgent {
     language: "zh" | "en" = "zh",
     authorityContext?: StateValidationAuthorityContext,
   ): Promise<ValidationResult> {
-    const stateDiff = this.computeDiff(oldState, newState, "State Card");
-    const hooksDiff = this.computeDiff(oldHooks, newHooks, "Hooks Pool");
-
-    // Skip validation if nothing changed
-    if (!stateDiff && !hooksDiff) {
+    if (oldState === newState && oldHooks === newHooks) {
       return { warnings: [], consistent: true, reconciliationRequired: false };
     }
 
@@ -51,8 +47,8 @@ export class StateValidatorAgent extends BaseAgent {
       ? "Respond in English."
       : "用中文回答。";
 
-    const systemPrompt = `Validate the incremental truth projection against the chapter and authority context. ${langInstruction}
-Request reconciliation when an explicit chapter fact is missing, a projected change lacks textual support, a temporal/state contradiction exists, or a hook transition conflicts with the chapter. The chapter itself remains unchanged. Submit the decision and evidence through the validation tool.`;
+    const systemPrompt = `Validate the derived truth projection against the current chapter and supplied authority using the activated long-writing Skill. ${langInstruction}
+Do not rewrite the chapter or silently resolve contradictory sources. Submit whether reconciliation is required and the concrete evidence through the validation tool.`;
 
     const authorityBlock = this.buildAuthorityContextBlock(authorityContext);
 
@@ -60,11 +56,17 @@ Request reconciliation when an explicit chapter fact is missing, a projected cha
 
 ${authorityBlock}
 
-## State Card Changes
-${stateDiff || "(no changes)"}
+## Previous State Card
+${oldState}
 
-## Hooks Pool Changes
-${hooksDiff || "(no changes)"}
+## Proposed State Card
+${newState}
+
+## Previous Hooks
+${oldHooks}
+
+## Proposed Hooks
+${newHooks}
 
 ## Chapter Text (for reference)
 ${chapterContent}`;
@@ -94,23 +96,6 @@ ${chapterContent}`;
     }
   }
 
-  private computeDiff(oldText: string, newText: string, label: string): string | null {
-    if (oldText === newText) return null;
-
-    const oldLines = oldText.split("\n").filter((l) => l.trim());
-    const newLines = newText.split("\n").filter((l) => l.trim());
-
-    const added = newLines.filter((l) => !oldLines.includes(l));
-    const removed = oldLines.filter((l) => !newLines.includes(l));
-
-    if (added.length === 0 && removed.length === 0) return null;
-
-    const parts = [`### ${label}`];
-    if (removed.length > 0) parts.push("Removed:\n" + removed.map((l) => `- ${l}`).join("\n"));
-    if (added.length > 0) parts.push("Added:\n" + added.map((l) => `+ ${l}`).join("\n"));
-    return parts.join("\n");
-  }
-
   private buildAuthorityContextBlock(authorityContext?: StateValidationAuthorityContext): string {
     if (!authorityContext) return "## Authority / Cross-Truth Context\n(no authority context provided)";
 
@@ -120,7 +105,7 @@ ${chapterContent}`;
 
     return [
       "## Authority / Cross-Truth Context",
-      "Authority priority: current chapter text > runtime truth files/current summaries > story_frame/book_rules.",
+      "Contradictory authority must be reported for reconciliation rather than silently reordered.",
       "",
       "### story_frame",
       storyFrame || "(empty)",

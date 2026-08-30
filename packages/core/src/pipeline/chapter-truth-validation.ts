@@ -1,10 +1,16 @@
 import type { StateValidationAuthorityContext, ValidationResult, StateValidatorAgent } from "../agents/state-validator.js";
 import type { WriteChapterOutput, WriterAgent } from "../agents/writer.js";
 import type { BookConfig } from "../models/book.js";
-import type { ContextPackage, RuleStack } from "../models/input-governance.js";
+import type { ContextPackage } from "../models/input-governance.js";
 import type { Logger } from "../utils/logger.js";
 import type { LengthLanguage } from "../utils/length-metrics.js";
 import { reconcileChapterStateAfterReview } from "./chapter-state-recovery.js";
+import { loadRuntimeStateSnapshot } from "../state/runtime-state-store.js";
+import {
+  renderChapterSummariesProjection,
+  renderCurrentStateProjection,
+  renderHooksProjection,
+} from "../state/state-projections.js";
 
 export async function validateChapterTruthPersistence(params: {
   readonly writer: Pick<WriterAgent, "settleChapterState">;
@@ -18,13 +24,11 @@ export async function validateChapterTruthPersistence(params: {
   readonly previousTruth: {
     readonly oldState: string;
     readonly oldHooks: string;
-    readonly oldLedger: string;
   };
   readonly authorityContext?: StateValidationAuthorityContext;
-  readonly reducedControlInput?: {
+  readonly reducedControlInput: {
     chapterIntent: string;
     contextPackage: ContextPackage;
-    ruleStack: RuleStack;
   };
   readonly language: LengthLanguage;
   readonly logWarn: (message: { zh: string; en: string }) => void;
@@ -58,7 +62,7 @@ export async function validateChapterTruthPersistence(params: {
           description: `State validation was unavailable: ${String(error)}`,
         }],
       },
-      persistenceOutput,
+      persistenceOutput: await preserveCanonicalRuntimeState(params, persistenceOutput),
     };
   }
 
@@ -90,12 +94,32 @@ export async function validateChapterTruthPersistence(params: {
       logger: params.logger,
     });
 
-    persistenceOutput = recovery.output;
+    persistenceOutput = recovery.kind === "reconciled"
+      ? recovery.output
+      : await preserveCanonicalRuntimeState(params, recovery.output);
     validation = recovery.validation;
   }
 
   return {
     validation,
     persistenceOutput,
+  };
+}
+
+async function preserveCanonicalRuntimeState(
+  params: {
+    readonly bookDir: string;
+    readonly language: LengthLanguage;
+  },
+  output: WriteChapterOutput,
+): Promise<WriteChapterOutput> {
+  const snapshot = await loadRuntimeStateSnapshot(params.bookDir);
+  return {
+    ...output,
+    runtimeStateSnapshot: snapshot,
+    updatedState: renderCurrentStateProjection(snapshot.currentState, params.language),
+    updatedHooks: renderHooksProjection(snapshot.hooks, params.language),
+    updatedChapterSummaries: renderChapterSummariesProjection(snapshot.chapterSummaries, params.language),
+    runtimeStateApplied: false,
   };
 }

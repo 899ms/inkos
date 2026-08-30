@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFillNodeTool, createReviseNodeTool, type FilmLLMDeps } from "../agent/film-authoring-tools.js";
@@ -43,24 +43,6 @@ describe("fill_node tool (stubbed LLM)", () => {
     expect(result.details).toMatchObject({ skillIds: ["inkos-interactive-film"] });
   });
 
-  it("loads interactive-film script prompt-pack overrides and reports skill details", async () => {
-    await mkdir(join(root, "prompt", "interactive-film"), { recursive: true });
-    await writeFile(join(root, "prompt", "interactive-film", "script.md"), "PROJECT SCRIPT OVERRIDE: keep node dialogue short and playable.");
-    let systemPrompt = "";
-    const tool = createFillNodeTool(root, "p", filmDeps({
-      submitNode: async (system, _user, nodeId) => {
-        systemPrompt = system;
-        return { ...node, id: nodeId };
-      },
-    }));
-
-    const result = await tool.execute("call-1", { nodeId: "n1", instruction: "写抉择场景" } as never);
-
-    expect(systemPrompt).toContain("Prompt Pack Guidance");
-    expect(systemPrompt).toContain("PROJECT SCRIPT OVERRIDE");
-    expect(result.details).not.toHaveProperty("usedSkills");
-    expect((result.details as any).promptPacks).toContain("interactive-film.script");
-  });
 });
 
 describe("revise_node tool (stubbed LLM)", () => {

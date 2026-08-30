@@ -1,20 +1,16 @@
 import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { PipelineRunner } from "../pipeline/runner.js";
-import { type ReviseMode } from "../agents/reviser.js";
 import { defaultChapterLength } from "../utils/length-metrics.js";
-import { inferLanguage } from "../utils/language.js";
 import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { StateManager } from "../state/manager.js";
 import { deleteLatestChapter } from "../state/chapter-delete.js";
-import { writeExportArtifact } from "../interaction/export-artifact.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../utils/book-id.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath } from "../utils/posix-path.js";
 import {
-  normalizePlatformId,
-  normalizePlatformOrOther,
+  type Platform,
   type BookConfig,
   type FanficMode,
 } from "../models/book.js";
@@ -63,6 +59,19 @@ function textResult<T = undefined>(text: string, details?: T): AgentToolResult<T
   return { content: [{ type: "text", text }], details: details as T };
 }
 
+function reviewIssuesAsObservations(issues: ReadonlyArray<{
+  readonly category?: string;
+  readonly description: string;
+  readonly suggestion?: string;
+}>) {
+  return issues.map((issue, index) => ({
+    code: `${issue.category || "review"}-${index + 1}`,
+    kind: "soft" as const,
+    summary: issue.description,
+    evidence: issue.suggestion ? [issue.suggestion] : [],
+  }));
+}
+
 /**
  * Resolve a user-supplied relative path against the books root and guard
  * against path-traversal (../ etc.).
@@ -90,7 +99,7 @@ function resolveToolBookId(
 function buildAgentBookConfig(input: {
   readonly title: string;
   readonly genre?: string;
-  readonly platform?: string;
+  readonly platform?: Platform;
   readonly language?: "zh" | "en";
   readonly targetChapters?: number;
   readonly chapterWordCount?: number;
@@ -103,14 +112,14 @@ function buildAgentBookConfig(input: {
   return {
     id,
     title: input.title.trim(),
-    platform: normalizePlatformOrOther(input.platform),
+    platform: input.platform ?? "other",
     genre: input.genre?.trim() || "other",
     status: "outlining",
     targetChapters: input.targetChapters ?? defaults.targetChapters ?? 200,
     chapterWordCount: input.chapterWordCount
       ?? defaults.chapterWordCount
       ?? defaultChapterLength(input.language === "en" ? "en" : "zh"),
-    ...(input.language ? { language: input.language } : {}),
+    language: input.language ?? "zh",
     ...(input.parentBookId ? { parentBookId: input.parentBookId } : {}),
     ...(input.fanficMode ? { fanficMode: input.fanficMode } : {}),
     createdAt: now,
@@ -171,38 +180,24 @@ function closePlayRunner(runner: unknown): void {
 }
 
 function safePlayId(value: string | undefined, fallback: string): string {
-  const raw = (value?.trim() || fallback).slice(0, 80);
-  if (!raw || raw === "." || raw === ".." || raw.includes("/") || raw.includes("\\") || raw.includes("\0")) {
+  const raw = value?.trim() || fallback;
+  if (raw.length > 80 || !raw || raw === "." || raw === ".." || raw.includes("/") || raw.includes("\\") || raw.includes("\0")) {
     throw new Error(`Invalid play id: ${JSON.stringify(value)}`);
   }
   return raw;
 }
 
-const SuggestedActionParam = Type.Union([
-  Type.String({ description: "A short clickable player action." }),
-  Type.Object({
-    label: Type.Optional(Type.String({ description: "Short clickable player action." })),
-    action: Type.Optional(Type.String({ description: "Concrete action text." })),
-    text: Type.Optional(Type.String({ description: "Concrete action text." })),
-    title: Type.Optional(Type.String({ description: "Short action title." })),
-    description: Type.Optional(Type.String({ description: "Optional action description." })),
-  }, { description: "A model may describe an action as an object; InkOS will normalize it to one short action string." }),
-], { description: "Suggested action as a string or small action object." });
+const SuggestedActionParam = Type.String({ description: "A short clickable player action." });
 
 type SuggestedActionParamType = Static<typeof SuggestedActionParam>;
 
-function normalizeSuggestedActions(value: readonly SuggestedActionParamType[] | undefined): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  for (const raw of value) {
-    const text = typeof raw === "string"
-      ? raw
-      : raw.action ?? raw.label ?? raw.text ?? raw.title ?? raw.description ?? "";
-    const normalized = text.replace(/\s+/g, " ").trim();
-    if (normalized) out.push(normalized);
-    if (out.length >= 4) break;
-  }
-  return out;
+function validateSuggestedActions(value: readonly SuggestedActionParamType[] | undefined): string[] {
+  if (value === undefined) return [];
+  if (value.length > 4) throw new Error("Play suggestedActions supports at most four actions.");
+  const actions = value.map((action) => action.trim());
+  if (actions.some((action) => !action)) throw new Error("Play suggestedActions cannot contain an empty action.");
+  if (new Set(actions).size !== actions.length) throw new Error("Play suggestedActions must be unique.");
+  return actions;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,15 +224,15 @@ const ProposeActionParams = Type.Object({
   ], {
     description: "The production or assisted Studio workflow the user appears to want, but which needs explicit confirmation from general chat.",
   }),
-  instruction: Type.Optional(Type.String({
+  instruction: Type.String({ minLength: 1,
     description: "The exact production instruction to run after the user confirms. It must be self-contained: include title, story direction, active target, output directory, cover visual direction, or any referenced context that would otherwise be lost when switching sessions.",
-  })),
-  title: Type.Optional(Type.String({
+  }),
+  title: Type.String({ minLength: 1,
     description: "Short user-facing title for the confirmation card.",
-  })),
-  summary: Type.Optional(Type.String({
+  }),
+  summary: Type.String({ minLength: 1,
     description: "One or two sentences explaining what will happen if the user confirms.",
-  })),
+  }),
   createBook: Type.Optional(Type.Object({
     title: Type.String({
       description: "Confirmed long-form book title.",
@@ -245,12 +240,7 @@ const ProposeActionParams = Type.Object({
     genre: Type.Optional(Type.String({
       description: "Confirmed book genre/category.",
     })),
-    platform: Type.Optional(Type.Union([
-      Type.Literal("tomato"),
-      Type.Literal("qidian"),
-      Type.Literal("feilu"),
-      Type.Literal("other"),
-    ], { description: "Confirmed target platform, e.g. tomato for 番茄." })),
+    platform: Type.Optional(Type.String({ minLength: 1, description: "Confirmed target platform, preserved exactly as Work metadata." })),
     language: Type.Optional(Type.Union([
       Type.Literal("zh"),
       Type.Literal("en"),
@@ -314,7 +304,7 @@ const ProposeActionParams = Type.Object({
   generateCover: Type.Optional(Type.Object({
     title: Type.String({ description: "Confirmed cover title." }),
     intro: Type.Optional(Type.String({ description: "Confirmed synopsis/hook for the cover." })),
-    sellingPoints: Type.Optional(Type.String({ description: "Confirmed selling points for the cover." })),
+    sellingPoints: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "Confirmed selling points for the cover." })),
     coverPrompt: Type.Optional(Type.String({ description: "Confirmed visual direction." })),
     outputDir: Type.Optional(Type.String({ description: "Confirmed output directory." })),
   }, { description: "Structured execution args for action=generate_cover." })),
@@ -379,9 +369,7 @@ const ProposeActionParams = Type.Object({
       Type.Literal("cp"),
     ], { description: "Confirmed fanfiction mode." })),
     genre: Type.Optional(Type.String({ description: "Confirmed genre." })),
-    platform: Type.Optional(Type.Union([
-      Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
-    ])),
+    platform: Type.Optional(Type.String({ minLength: 1 })),
     language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
     targetChapters: Type.Optional(Type.Number({ description: "Confirmed total chapter count." })),
     chapterWordCount: Type.Optional(Type.Number({ description: "Confirmed per-chapter length." })),
@@ -393,9 +381,7 @@ const ProposeActionParams = Type.Object({
     splitPattern: Type.Optional(Type.String({ description: "Optional custom chapter-heading regex source." })),
     resumeFrom: Type.Optional(Type.Number({ description: "Existing Work only: resume an interrupted import from this 1-based source chapter. Omit when creating a new continuation Work." })),
     genre: Type.Optional(Type.String({ description: "Genre for a newly created continuation book." })),
-    platform: Type.Optional(Type.Union([
-      Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
-    ])),
+    platform: Type.Optional(Type.String({ minLength: 1 })),
     language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
     targetChapters: Type.Optional(Type.Number({ description: "Target total chapters for a new book." })),
     chapterWordCount: Type.Optional(Type.Number({ description: "Per-chapter length for a new book." })),
@@ -405,9 +391,7 @@ const ProposeActionParams = Type.Object({
     parentBookId: Type.String({ description: "Existing InkOS parent book id whose canon is inherited." }),
     direction: Type.Optional(Type.String({ description: "Confirmed standalone side-story direction." })),
     genre: Type.Optional(Type.String({ description: "Optional genre override; defaults to the parent book." })),
-    platform: Type.Optional(Type.Union([
-      Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
-    ])),
+    platform: Type.Optional(Type.String({ minLength: 1 })),
     language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
     targetChapters: Type.Optional(Type.Number({ description: "Optional chapter count; defaults to the parent book." })),
     chapterWordCount: Type.Optional(Type.Number({ description: "Optional chapter length; defaults to the parent book." })),
@@ -419,9 +403,7 @@ const ProposeActionParams = Type.Object({
     storyIdea: Type.String({ description: "Confirmed original story idea; do not copy the reference plot." }),
     sourceName: Type.Optional(Type.String({ description: "Human-readable reference work name." })),
     genre: Type.Optional(Type.String({ description: "Confirmed genre." })),
-    platform: Type.Optional(Type.Union([
-      Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
-    ])),
+    platform: Type.Optional(Type.String({ minLength: 1 })),
     language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
     targetChapters: Type.Optional(Type.Number({ description: "Confirmed total chapter count." })),
     chapterWordCount: Type.Optional(Type.Number({ description: "Confirmed per-chapter length." })),
@@ -478,144 +460,46 @@ function proposedActionSessionKind(action: ProposeActionParamsType["action"]): "
   return "short";
 }
 
-function proposedActionFallbackTitle(action: ProposeActionParamsType["action"], isZh: boolean): string {
-  switch (action) {
-    case "create_book":
-      return isZh ? "创建长篇书籍" : "Create a long-form book";
-    case "short_run":
-      return isZh ? "生成 InkOS Short" : "Generate InkOS Short";
-    case "play_start":
-      return isZh ? "启动 InkOS Play" : "Start InkOS Play";
-    case "generate_cover":
-      return isZh ? "生成封面" : "Generate cover";
-    case "fanfic_init":
-      return isZh ? "创建同人作品" : "Create fanfiction";
-    case "continuation_import":
-      return isZh ? "导入并续写作品" : "Import and continue a work";
-    case "spinoff_create":
-      return isZh ? "创建番外作品" : "Create a side story";
-    case "style_imitation":
-      return isZh ? "创建仿写作品" : "Create a style-imitation work";
-    case "script_create":
-      return isZh ? "创建剧本" : "Create script";
-    case "storyboard_create":
-      return isZh ? "创建分镜" : "Create storyboard";
-    case "interactive_film_create":
-      return isZh ? "创建互动影游" : "Create interactive film";
-    case "translation_create":
-      return isZh ? "创建翻译项目" : "Create translation project";
-    case "draft_structure":
-      return isZh ? "生成故事结构" : "Draft story structure";
-    case "connect_choice":
-      return isZh ? "连接选项" : "Connect choice";
-    case "remove_node":
-      return isZh ? "删除节点" : "Remove node";
-  }
-}
-
-function proposedActionFallbackSummary(action: ProposeActionParamsType["action"], isZh: boolean): string {
-  return isZh
-    ? "确认后将直接执行这条需求；不会要求你再去另一个表单重复填写。"
-    : "After confirmation, InkOS will run this request directly without asking you to repeat it in another form.";
-}
-
-function compactObject<T extends Record<string, unknown>>(value: T | undefined): T | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const out: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (typeof raw === "string") {
-      const text = raw.trim();
-      if (text) out[key] = text;
-      continue;
-    }
-    if (Array.isArray(raw)) {
-      const items = raw.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-        .map((item) => item.trim());
-      if (items.length > 0) out[key] = items;
-      continue;
-    }
-    if (typeof raw === "number") {
-      if (Number.isFinite(raw) && raw > 0) out[key] = raw;
-      continue;
-    }
-    if (raw !== undefined && raw !== null) {
-      out[key] = raw;
-    }
-  }
-  return Object.keys(out).length > 0 ? out as T : undefined;
-}
-
-function compactPlayStartPayload(value: ProposeActionParamsType["playStart"]): NonNullable<ActionPayload["playStart"]> | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const out: NonNullable<ActionPayload["playStart"]> = {};
-  const title = value.title?.trim();
-  if (title) out.title = title;
-  const premise = value.premise?.trim();
-  if (premise) out.premise = premise;
-  const worldContract = value.worldContract?.trim();
-  if (worldContract) out.worldContract = worldContract;
-  const visualContract = value.visualContract?.trim();
-  if (visualContract) out.visualContract = visualContract;
-  if (value.mode) out.mode = value.mode;
-  const initialScene = value.initialScene?.trim();
-  if (initialScene) out.initialScene = initialScene;
-  const suggestedActions = normalizeSuggestedActions(value.suggestedActions);
-  if (suggestedActions.length > 0) out.suggestedActions = suggestedActions;
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 function proposedActionPayload(
   params: ProposeActionParamsType,
   language: "zh" | "en",
 ): ActionPayload | undefined {
   const payload: ActionPayload = {};
   if (params.action === "create_book") {
-    const createBook = compactObject(params.createBook);
-    if (createBook) payload.createBook = createBook;
+    if (params.createBook) payload.createBook = params.createBook;
   }
   if (params.action === "short_run") {
-    const shortRun = compactObject(params.shortRun);
-    if (shortRun) payload.shortRun = { language, ...shortRun };
+    if (params.shortRun) payload.shortRun = { language, ...params.shortRun };
   }
   if (params.action === "play_start") {
-    const playStart = compactPlayStartPayload(params.playStart);
-    if (playStart) payload.playStart = playStart;
+    if (params.playStart) payload.playStart = params.playStart;
   }
   if (params.action === "generate_cover") {
-    const generateCover = compactObject(params.generateCover);
-    if (generateCover) payload.generateCover = generateCover;
+    if (params.generateCover) payload.generateCover = params.generateCover;
   }
   if (params.action === "script_create") {
-    const scriptCreate = compactObject(params.scriptCreate);
-    if (scriptCreate) payload.scriptCreate = scriptCreate;
+    if (params.scriptCreate) payload.scriptCreate = params.scriptCreate;
   }
   if (params.action === "storyboard_create") {
-    const storyboardCreate = compactObject(params.storyboardCreate);
-    if (storyboardCreate) payload.storyboardCreate = storyboardCreate;
+    if (params.storyboardCreate) payload.storyboardCreate = params.storyboardCreate;
   }
   if (params.action === "interactive_film_create") {
-    const interactiveFilmCreate = compactObject(params.interactiveFilmCreate);
-    if (interactiveFilmCreate) payload.interactiveFilmCreate = interactiveFilmCreate;
+    if (params.interactiveFilmCreate) payload.interactiveFilmCreate = params.interactiveFilmCreate;
   }
   if (params.action === "translation_create") {
-    const translationCreate = compactObject(params.translationCreate);
-    if (translationCreate) payload.translationCreate = translationCreate;
+    if (params.translationCreate) payload.translationCreate = params.translationCreate;
   }
   if (params.action === "fanfic_init") {
-    const fanficCreate = compactObject(params.fanficCreate);
-    if (fanficCreate) payload.fanficCreate = fanficCreate;
+    if (params.fanficCreate) payload.fanficCreate = params.fanficCreate;
   }
   if (params.action === "continuation_import") {
-    const continuationImport = compactObject(params.continuationImport);
-    if (continuationImport) payload.continuationImport = continuationImport;
+    if (params.continuationImport) payload.continuationImport = params.continuationImport;
   }
   if (params.action === "spinoff_create") {
-    const spinoffCreate = compactObject(params.spinoffCreate);
-    if (spinoffCreate) payload.spinoffCreate = spinoffCreate;
+    if (params.spinoffCreate) payload.spinoffCreate = params.spinoffCreate;
   }
   if (params.action === "style_imitation") {
-    const imitationCreate = compactObject(params.imitationCreate);
-    if (imitationCreate) payload.imitationCreate = imitationCreate;
+    if (params.imitationCreate) payload.imitationCreate = params.imitationCreate;
   }
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
@@ -757,10 +641,12 @@ export function createProposeActionTool(
     parameters,
     async execute(_toolCallId: string, params: ProposeActionParamsType): Promise<AgentToolResult<unknown>> {
       const targetSessionKind = proposedActionSessionKind(params.action);
-      const isZh = language === "zh";
-      const title = params.title?.trim() || proposedActionFallbackTitle(params.action, isZh);
-      const summary = params.summary?.trim() || proposedActionFallbackSummary(params.action, isZh);
-      const instruction = params.instruction?.trim() || summary || title;
+      const title = params.title.trim();
+      const summary = params.summary.trim();
+      const instruction = params.instruction.trim();
+      if (!title || !summary || !instruction) {
+        throw new Error("propose_action requires non-empty title, summary, and instruction.");
+      }
       const proposedPayload = validateProposedActionPayload(withSingleAttachmentFallback(
         params,
         proposedActionPayload(params, language),
@@ -808,104 +694,8 @@ function normalizeProposedSkillIds(values: ReadonlyArray<string> | undefined): s
 }
 
 // ---------------------------------------------------------------------------
-// 2. SubAgentTool (sub_agent)
+// Shared production-tool execution helpers
 // ---------------------------------------------------------------------------
-
-const SubAgentParams = Type.Object({
-  agent: Type.Union([
-    Type.Literal("architect"),
-    Type.Literal("writer"),
-    Type.Literal("auditor"),
-    Type.Literal("reviser"),
-    Type.Literal("exporter"),
-  ]),
-  instruction: Type.String({ description: "Natural language instruction for the sub-agent. For reviser, this is passed as the one-off revision brief." }),
-  bookId: Type.Optional(Type.String({
-    description: "Optional book ID. In active-book sessions, omit it to use the current active book; if provided, it must match the current active book. For architect creation, this optionally sets the new book ID.",
-  })),
-  chapterNumber: Type.Optional(Type.Number({ description: "auditor/reviser: target chapter number. Omit to use the latest chapter." })),
-  chapterCount: Type.Optional(Type.Integer({
-    minimum: 1,
-    maximum: 20,
-    description: "writer only: number of consecutive new chapters to write in this operation. Default: 1. InkOS writes them sequentially under one book lock.",
-  })),
-  // -- architect params --
-  title: Type.Optional(Type.String({ description: "architect only: explicit book title. Required when creating a book." })),
-  genre: Type.Optional(Type.String({ description: "architect only: genre (xuanhuan, urban, mystery, romance, scifi, fantasy, wuxia, general, etc.)" })),
-  platform: Type.Optional(Type.Union([
-    Type.Literal("tomato"),
-    Type.Literal("qidian"),
-    Type.Literal("feilu"),
-    Type.Literal("other"),
-  ], { description: "architect only: target platform. Default: other" })),
-  language: Type.Optional(Type.Union([
-    Type.Literal("zh"),
-    Type.Literal("en"),
-  ], { description: "architect only: writing language. Default: zh" })),
-  targetChapters: Type.Optional(Type.Number({ description: "architect only: total chapter count. Default: 200" })),
-  chapterWordCount: Type.Optional(Type.Number({ description: "architect/writer: per-chapter length in the book's native unit (zh characters / en words). Default: 3000 zh, 2000 en" })),
-  revise: Type.Optional(Type.Boolean({
-    description: "architect only: true 表示在当前 active book 上重新生成架构稿，而不是新建书籍。no-book creation sessions cannot revise an existing book.",
-  })),
-  feedback: Type.Optional(Type.String({
-    description: "architect only: revise 模式下的调整要求。举例：把架构稿从条目式升级成段落式架构稿、某个角色设定需要重新设计、主线冲突表达太弱需要加强等。如果是架构稿评审未通过要求重写的场景，把评审意见的 overallFeedback 原样传入即可",
-  })),
-  // -- reviser params --
-  mode: Type.Optional(Type.Union([
-    Type.Literal("spot-fix"),
-    Type.Literal("polish"),
-    Type.Literal("rewrite"),
-    Type.Literal("rework"),
-    Type.Literal("anti-detect"),
-  ], { description: "reviser only: revision mode. Default: spot-fix" })),
-  // -- exporter params --
-  format: Type.Optional(Type.Union([
-    Type.Literal("txt"),
-    Type.Literal("md"),
-    Type.Literal("epub"),
-  ], { description: "exporter only: export format. Default: txt" })),
-});
-
-type SubAgentParamsType = Static<typeof SubAgentParams>;
-
-const ArchitectCreateSubAgentParams = Type.Object({
-  agent: Type.Literal("architect"),
-  instruction: Type.String({ description: "Confirmed self-contained book-creation instruction for the architect." }),
-  bookId: Type.Optional(Type.String({
-    description: "Optional new book ID. Usually omit it and let InkOS derive the ID from title.",
-  })),
-  title: Type.Optional(Type.String({ description: "Confirmed book title. Required when creating a book." })),
-  genre: Type.Optional(Type.String({ description: "Confirmed book genre." })),
-  platform: Type.Optional(Type.Union([
-    Type.Literal("tomato"),
-    Type.Literal("qidian"),
-    Type.Literal("feilu"),
-    Type.Literal("other"),
-  ], { description: "Confirmed target platform. Default: other" })),
-  language: Type.Optional(Type.Union([
-    Type.Literal("zh"),
-    Type.Literal("en"),
-  ], { description: "Confirmed writing language. Default: zh" })),
-  targetChapters: Type.Optional(Type.Number({ description: "Confirmed total chapter count. Default: 200" })),
-  chapterWordCount: Type.Optional(Type.Number({ description: "Confirmed per-chapter length in the book's native unit. Default: 3000 zh, 2000 en" })),
-});
-
-function prepareSubAgentArguments(args: unknown): SubAgentParamsType {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return args as SubAgentParamsType;
-  }
-
-  const prepared = { ...(args as Record<string, unknown>) };
-  if ("platform" in prepared) {
-    const platform = normalizePlatformId(prepared.platform);
-    if (platform) {
-      prepared.platform = platform;
-    } else {
-      delete prepared.platform;
-    }
-  }
-  return prepared as SubAgentParamsType;
-}
 
 function runPipelineWithAgentContext<T>(
   pipeline: PipelineRunner,
@@ -936,276 +726,6 @@ function resolveProductionToolSkills(options: SkillAwareProductionOptions): Acti
     options.defaultSkills ?? [],
     options.activeSkills?.() ?? [],
   );
-}
-
-export function createSubAgentTool(
-  pipeline: PipelineRunner,
-  activeBookId: string | null,
-  projectRoot?: string,
-  options: {
-    readonly actionPayload?: ActionPayload;
-    readonly architectCreateOnly?: boolean;
-    readonly language?: "zh" | "en";
-    readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
-    readonly workerSkills?: (agent: string) => ReadonlyArray<ActivatedSkillGuidance>;
-  } = {},
-): AgentTool<any> {
-  const sessionIsZh = (options.language ?? "zh") !== "en";
-  return {
-    name: "sub_agent",
-    description: options.architectCreateOnly
-      ? "Create a new long-form InkOS book foundation. This confirmation turn can only call agent='architect'; writing chapters happens after the session is bound to the created book."
-      : "Delegate a heavy operation to a specialised sub-agent. " +
-        "Use agent='architect' to initialise a new book, 'writer' to write the next chapter, " +
-        "'auditor' to audit quality, 'reviser' to revise a chapter, 'exporter' to export.",
-    label: "Sub-Agent",
-    parameters: options.architectCreateOnly ? ArchitectCreateSubAgentParams : SubAgentParams,
-    prepareArguments: prepareSubAgentArguments,
-    async execute(
-      toolCallId: string,
-      params: SubAgentParamsType,
-      _signal?: AbortSignal,
-      onUpdate?: AgentToolUpdateCallback,
-    ): Promise<AgentToolResult<unknown>> {
-      return runWithAgentTrajectoryRole("subagent", async () => {
-        const { agent, instruction, bookId, title, chapterNumber, chapterCount, genre, platform, language, targetChapters, chapterWordCount, revise, feedback, mode, format } = params;
-        const activatedSkills = mergeActivatedSkillGuidance(
-          options.workerSkills?.(agent) ?? [],
-          options.activeSkills?.() ?? [],
-        );
-        const skillIds = activatedSkills.map((activation) => activation.skill.id);
-
-        const progress = (msg: string) => {
-          onUpdate?.(textResult(msg));
-        };
-
-        try {
-          if (options.architectCreateOnly && agent !== "architect") {
-            throw new Error("This confirmed book-creation turn can only run the architect. Open the created book or use the book session to write chapters.");
-          }
-          if (!activeBookId && agent !== "architect") {
-            return textResult("No active book. Only the architect agent can create a book from this session.");
-          }
-          if (activeBookId && agent === "architect" && !revise) {
-            return textResult(
-              sessionIsZh
-                ? "当前已有书籍，不需要建书。如果你想创建新书，请先回到首页。"
-                : "This session already has a book, so no new book is needed. To create a new book, go back to the home page first.",
-            );
-          }
-
-          switch (agent) {
-            case "architect": {
-            const createBookPayload = options.actionPayload?.createBook;
-            if (revise) {
-              if (!activeBookId) {
-                return textResult("Open the book first before revising its foundation.");
-              }
-              const targetBookId = resolveToolBookId("architect", bookId, activeBookId);
-              progress(`Revising foundation for "${targetBookId}"...`);
-              await runPipelineWithAgentContext(
-                pipeline,
-                _signal,
-                activatedSkills,
-                () => pipeline.reviseFoundation(targetBookId, feedback ?? instruction),
-              );
-              progress(`Foundation revised for "${targetBookId}".`);
-              return textResult(
-                sessionIsZh
-                  ? `Book "${targetBookId}" 架构稿已按要求重写。原书的条目式架构稿已备份到 story/.backup-phase4-<时间戳>/。`
-                  : `Book "${targetBookId}" foundation has been rewritten as requested. The previous itemized foundation was backed up to story/.backup-phase4-<timestamp>/.`,
-              );
-            }
-            const confirmedTitle = createBookPayload?.title?.trim();
-            const resolvedTitle = confirmedTitle || title?.trim();
-            if (!resolvedTitle) {
-              return textResult('Error: title is required for the architect agent.');
-            }
-            const id = confirmedTitle
-              ? deriveBookIdFromTitle(confirmedTitle) || `book-${Date.now().toString(36)}`
-              : bookId
-                ? assertSafeBookId(bookId, "architect.bookId")
-                : deriveBookIdFromTitle(resolvedTitle) || `book-${Date.now().toString(36)}`;
-            const now = new Date().toISOString();
-            const resolvedLanguage = createBookPayload?.language ?? language ?? inferLanguage(instruction);
-            progress(`Starting architect for book "${id}"...`);
-            await runPipelineWithAgentContext(
-              pipeline,
-              _signal,
-              activatedSkills,
-              () => pipeline.initBook(
-                {
-                  id,
-                  title: resolvedTitle,
-                  genre: createBookPayload?.genre ?? genre ?? "general",
-                  platform: normalizePlatformOrOther(createBookPayload?.platform ?? platform),
-                  language: resolvedLanguage as any,
-                  status: "outlining" as any,
-                  targetChapters: createBookPayload?.targetChapters ?? targetChapters ?? 200,
-                  chapterWordCount: createBookPayload?.chapterWordCount ?? chapterWordCount ?? defaultChapterLength(resolvedLanguage),
-                  createdAt: now,
-                  updatedAt: now,
-                },
-                { externalContext: instruction },
-              ),
-            );
-            progress(`Architect finished — book "${id}" foundation created.`);
-            return textResult(
-              `Book "${resolvedTitle}" (${id}) initialised successfully. Foundation files are ready.`,
-              { kind: "book_created", bookId: id, title: resolvedTitle, skillIds },
-            );
-          }
-
-          case "writer": {
-            const targetBookId = resolveToolBookId("writer", bookId, activeBookId);
-            const requestedCount = chapterCount ?? 1;
-            if (requestedCount > 1) {
-              progress(`Writing ${requestedCount} consecutive chapters for "${targetBookId}"...`);
-              const results = await runPipelineWithAgentContext(
-                pipeline,
-                _signal,
-                activatedSkills,
-                () => pipeline.writeChapters(targetBookId, requestedCount, {
-                  wordCount: chapterWordCount,
-                  externalContext: instruction,
-                  onChapterComplete(result, completedCount, totalCount) {
-                    progress(`Writer finished chapter ${result.chapterNumber} (${completedCount}/${totalCount}) for "${targetBookId}".`);
-                  },
-                }),
-              );
-              const last = results.at(-1);
-              return textResult(
-                sessionIsZh
-                  ? `已连续完成 ${results.length} 章（第 ${results[0]?.chapterNumber} 章至第 ${last?.chapterNumber} 章）。`
-                  : `Writer completed ${results.length} consecutive chapters for "${targetBookId}".`,
-                {
-                  kind: "chapters_written",
-                  bookId: targetBookId,
-                  requestedCount,
-                  completedCount: results.length,
-                  skillIds,
-                  chapters: results.map((result) => ({
-                    chapterNumber: result.chapterNumber,
-                    title: result.title,
-                    wordCount: result.wordCount,
-                    observationCount: result.review.issues.length,
-                    ...(result.contextTrace ? { contextTrace: result.contextTrace } : {}),
-                  })),
-                },
-              );
-            }
-            progress(`Writing next chapter for "${targetBookId}"...`);
-            const result = await runPipelineWithAgentContext(
-              pipeline,
-              _signal,
-              activatedSkills,
-              () => pipeline.writeNextChapter(targetBookId, chapterWordCount, undefined, instruction),
-            );
-            progress(`Writer finished chapter for "${targetBookId}".`);
-            const wordCount = result.wordCount;
-            const chapterNumberResult = result.chapterNumber;
-            const titleResult = result.title;
-            const chapterRef = chapterNumberResult
-              ? sessionIsZh
-                ? `第 ${chapterNumberResult} 章${titleResult ? `《${titleResult}》` : ""}`
-                : `chapter ${chapterNumberResult}${titleResult ? ` "${titleResult}"` : ""}`
-              : sessionIsZh ? "下一章" : "the next chapter";
-            return textResult(
-              sessionIsZh
-                ? `已为 ${targetBookId} 完成${chapterRef}，字数 ${wordCount}，记录 ${result.review.issues.length} 条审查观察。`
-                : `Completed ${chapterRef} for ${targetBookId}: ${wordCount} words with ${result.review.issues.length} review observation(s).`,
-              {
-                kind: "chapter_written",
-                bookId: targetBookId,
-                chapterNumber: chapterNumberResult,
-                title: titleResult,
-                wordCount,
-                observations: result.review.issues,
-                skillIds,
-                ...(result.contextTrace ? { contextTrace: result.contextTrace } : {}),
-              },
-            );
-          }
-
-          case "auditor": {
-            const targetBookId = resolveToolBookId("auditor", bookId, activeBookId);
-            progress(`Auditing chapter ${chapterNumber ?? "latest"} for "${targetBookId}"...`);
-            const audit = await runPipelineWithAgentContext(
-              pipeline,
-              _signal,
-              activatedSkills,
-              () => pipeline.auditDraft(targetBookId, chapterNumber),
-            );
-            progress(`Audit complete for "${targetBookId}".`);
-            const issueLines = (audit.issues ?? [])
-              .map((i: any) => `[${i.severity}] ${i.description}`)
-              .join("\n");
-            return textResult(
-              `Reviewed chapter ${audit.chapterNumber}: ${(audit.issues ?? []).length} observation(s).` +
-              (issueLines ? `\n${issueLines}` : ""),
-              {
-                kind: "chapter_review",
-                bookId: targetBookId,
-                chapterNumber: audit.chapterNumber,
-                observations: audit.issues,
-                skillIds,
-              },
-            );
-          }
-
-          case "reviser": {
-            const targetBookId = resolveToolBookId("reviser", bookId, activeBookId);
-            const resolvedMode: ReviseMode = (mode as ReviseMode) ?? "spot-fix";
-            progress(`Revising "${targetBookId}" chapter ${chapterNumber ?? "latest"} in ${resolvedMode} mode...`);
-            const result = await runPipelineWithAgentContext(
-              pipeline,
-              _signal,
-              activatedSkills,
-              () => pipeline.reviseDraft(targetBookId, chapterNumber, resolvedMode, instruction),
-            );
-            const resultChapter = result.chapterNumber ?? chapterNumber;
-            const details = {
-              kind: "chapter_revision",
-              bookId: targetBookId,
-              chapterNumber: resultChapter,
-              mode: resolvedMode,
-              wordCount: result.wordCount,
-              changed: result.changed,
-              fixedIssues: result.fixedIssues,
-              observations: result.observations,
-              skillIds,
-            };
-            progress(`Revision complete for "${targetBookId}".`);
-            return textResult(
-              result.changed
-                ? `Revision (${resolvedMode}) complete for "${targetBookId}" chapter ${resultChapter ?? "latest"}; ${result.observations.length} review observation(s) recorded.`
-                : `Revision (${resolvedMode}) made no change to "${targetBookId}" chapter ${resultChapter ?? "latest"}; no actionable review finding was present.`,
-              details,
-            );
-          }
-
-          case "exporter": {
-            const targetBookId = resolveToolBookId("exporter", bookId, activeBookId);
-            if (!projectRoot) return textResult("Error: exporter requires projectRoot.");
-            const state = new StateManager(projectRoot);
-            const result = await writeExportArtifact(state, targetBookId, {
-              format: format ?? "txt",
-            });
-            return textResult(
-              `Exported "${targetBookId}": ${result.chaptersExported} chapters, ${result.totalWords} words → ${result.outputPath}`,
-            );
-          }
-
-            default:
-              return textResult(`Unknown agent: ${agent}`);
-          }
-        } catch (err: any) {
-          console.error(`[sub_agent] "${agent}" failed:`, err);
-          throw err;
-        }
-      }, toolCallId);
-    },
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1275,7 +795,7 @@ export function createResearchWebTool(projectRoot: string): AgentTool<typeof Res
       return textResult(
         [
           `Research report saved: ${reportPath}`,
-          `Sources: ${report.sources.length}; confidence: ${report.confidence}.`,
+          `Sources collected: ${report.sources.length}.`,
           report.partialFailures.length > 0 ? `Partial failures: ${report.partialFailures.length}.` : "Partial failures: none.",
         ].join("\n"),
         {
@@ -1285,8 +805,6 @@ export function createResearchWebTool(projectRoot: string): AgentTool<typeof Res
           purpose: params.purpose,
           depth: params.depth ?? "standard",
           sources: report.sources,
-          claims: report.claims,
-          confidence: report.confidence,
           partialFailures: report.partialFailures,
         },
       );
@@ -1366,9 +884,7 @@ export function createIngestMaterialTool(projectRoot: string): AgentTool<typeof 
           `Material ID: ${asset.id}`,
           `Kind: ${asset.kind}; chars: ${asset.charCount}; source: ${asset.source}`,
           asset.totalPages !== undefined ? `PDF pages: ${asset.totalPages}` : "",
-          "",
-          "Excerpt:",
-          asset.excerpt,
+          `Use retrieve_material for task-relevant passages or read ${asset.markdownPath} for the complete source.`,
         ].filter(Boolean).join("\n"),
         {
           kind: "material_ingested",
@@ -1655,7 +1171,7 @@ export function createImportChaptersTool(
           regeneratedFoundation
             ? "Foundation and truth files were reverse-engineered from the imported text; chapter files and the chapter index were rebuilt by sequential replay."
             : `Resumed replay from chapter ${params.resumeFrom}; earlier chapters and the existing foundation were kept.`,
-          `The book can now be continued with sub_agent(agent="writer") in the book session.`,
+          `The book can now be continued with write_chapters in the book session.`,
         ].join("\n"),
         {
           kind: "chapters_imported",
@@ -1679,9 +1195,7 @@ const FanficCreateParams = Type.Object({
     Type.Literal("canon"), Type.Literal("au"), Type.Literal("ooc"), Type.Literal("cp"),
   ])),
   genre: Type.Optional(Type.String()),
-  platform: Type.Optional(Type.Union([
-    Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
-  ])),
+  platform: Type.Optional(Type.String({ minLength: 1 })),
   language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -1723,6 +1237,7 @@ export function createFanficBookTool(
         {
           kind: "book_created",
           creationKind: "fanfic",
+          workId: book.id,
           bookId: book.id,
           title: book.title,
           fanficMode: mode,
@@ -1739,9 +1254,7 @@ const SpinoffCreateParams = Type.Object({
   parentBookId: Type.String({ description: "Existing InkOS parent book id." }),
   direction: Type.Optional(Type.String({ description: "Side-story direction that must not advance the parent mainline." })),
   genre: Type.Optional(Type.String()),
-  platform: Type.Optional(Type.Union([
-    Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
-  ])),
+  platform: Type.Optional(Type.String({ minLength: 1 })),
   language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -1783,6 +1296,7 @@ export function createSpinoffBookTool(
         {
           kind: "book_created",
           creationKind: "spinoff",
+          workId: book.id,
           bookId: book.id,
           title: book.title,
           parentBookId,
@@ -1800,9 +1314,7 @@ const ImitationCreateParams = Type.Object({
   storyIdea: Type.String({ description: "Original story idea. The reference contributes prose style, not plot or characters." }),
   sourceName: Type.Optional(Type.String({ description: "Human-readable reference work name." })),
   genre: Type.Optional(Type.String()),
-  platform: Type.Optional(Type.Union([
-    Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
-  ])),
+  platform: Type.Optional(Type.String({ minLength: 1 })),
   language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -1840,6 +1352,7 @@ export function createImitationBookTool(
         {
           kind: "book_created",
           creationKind: "imitation",
+          workId: book.id,
           bookId: book.id,
           title: book.title,
           sourceName: reference.name,
@@ -1860,9 +1373,7 @@ const ContinuationImportParams = Type.Object({
     description: "Existing Work only: resume an interrupted import from this 1-based source chapter. Omit for a new continuation Work.",
   })),
   genre: Type.Optional(Type.String()),
-  platform: Type.Optional(Type.Union([
-    Type.Literal("tomato"), Type.Literal("qidian"), Type.Literal("feilu"), Type.Literal("other"),
-  ])),
+  platform: Type.Optional(Type.String({ minLength: 1 })),
   language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -1934,6 +1445,7 @@ export function createContinuationImportTool(
         {
           kind: created ? "book_created" : "chapters_imported",
           creationKind: "continuation",
+          workId: bookId,
           bookId,
           importedCount: result.importedCount,
           totalWords: result.totalWords,
@@ -2091,32 +1603,19 @@ export function createShortFictionRunTool(
             ? `Cover image: ${result.coverImagePath}`
             : [
                 "Cover image: not generated.",
-                `Cover image reason: ${summarizeCoverGenerationError(result.coverError)}`,
+                `Cover image reason: ${result.coverError ?? "not generated"}`,
                 "The short fiction draft, synopsis, selling points, and cover prompt were still written successfully.",
               ].join("\n"),
         ].join("\n"),
         {
           kind: "short_fiction_created",
+          workId: result.storyId,
           ...result,
           skillIds: activatedSkillIds(activatedSkills),
         },
       );
     },
   };
-}
-
-function summarizeCoverGenerationError(error: string | undefined): string {
-  const text = (error ?? "not generated").trim();
-  if (text.includes("HTTP 503")) {
-    return "cover provider returned HTTP 503; retry later or switch the Studio cover provider/model.";
-  }
-  if (text.includes("HTTP 502")) {
-    return "cover provider returned HTTP 502; retry later or switch the Studio cover provider/model.";
-  }
-  if (/API key is required|api key/i.test(text)) {
-    return "cover API key is missing; configure it in Studio service settings.";
-  }
-  return text.slice(0, 300);
 }
 
 // ---------------------------------------------------------------------------
@@ -2209,7 +1708,7 @@ export function createScriptCreationTool(
           `Spec: ${result.specPath}`,
           `Script: ${result.scriptPath}`,
         ].join("\n"),
-        { kind: "script_created", ...result, skillIds: activatedSkillIds(activatedSkills) },
+        { kind: "script_created", workId: result.projectId, ...result, skillIds: activatedSkillIds(activatedSkills) },
       );
     },
   };
@@ -2303,7 +1802,7 @@ export function createStoryboardCreationTool(
           `Image prompts: ${result.imagePromptsPath}`,
           `Image assets: ${result.assetsManifestPath}`,
         ].join("\n"),
-        { kind: "storyboard_created", ...result, skillIds: activatedSkillIds(activatedSkills) },
+        { kind: "storyboard_created", workId: result.projectId, ...result, skillIds: activatedSkillIds(activatedSkills) },
       );
     },
   };
@@ -2405,7 +1904,7 @@ export function createInteractiveFilmCreationTool(
           `Image prompts: ${result.imagePromptsPath}`,
           `Image assets: ${result.assetsManifestPath}`,
         ].join("\n"),
-        { kind: "interactive_film_created", ...result, skillIds: activatedSkillIds(activatedSkills) },
+        { kind: "interactive_film_created", workId: result.projectId, ...result, skillIds: activatedSkillIds(activatedSkills) },
       );
     },
   };
@@ -2422,8 +1921,8 @@ const GenerateCoverParams = Type.Object({
   intro: Type.Optional(Type.String({
     description: "Optional synopsis or one-paragraph story hook to guide the cover.",
   })),
-  sellingPoints: Type.Optional(Type.String({
-    description: "Optional selling points separated by semicolons or new lines, e.g. 婚姻背叛；证据反杀；女主冷笑.",
+  sellingPoints: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
+    description: "Optional concrete selling points for the cover.",
   })),
   coverPrompt: Type.Optional(Type.String({
     description: "Optional concrete or revised visual direction. Use this when the user changes the cover prompt through chat. Keep it short and commercial; do not paste the whole story.",
@@ -2526,6 +2025,7 @@ type PlayStartParamsType = Static<typeof PlayStartParams>;
 
 export interface PlayStartToolOptions extends SkillAwareProductionOptions {
   readonly actionPayload?: ActionPayload;
+  readonly language?: "zh" | "en";
   readonly runnerFactory?: (input: {
     readonly projectRoot: string;
     readonly worldId: string;
@@ -2573,7 +2073,7 @@ export function createPlayStartTool(
       const worldContract = playPayload?.worldContract ?? params.worldContract;
       const visualContract = playPayload?.visualContract ?? params.visualContract;
       const initialScene = playPayload?.initialScene?.trim() || params.initialScene;
-      const playLanguage = inferLanguage([title, premise, worldContract, visualContract, initialScene].filter(Boolean).join("\n"));
+      const playLanguage = playPayload?.language ?? options.language ?? "zh";
       const existingWorld = await store.loadWorld(worldId);
       const world = await store.createWorld({
         id: worldId,
@@ -2590,7 +2090,10 @@ export function createPlayStartTool(
       const sceneText = (initialScene?.trim() || (world.language === "en"
         ? [`You enter "${world.title}".`, world.premise || "The scene is set. Make your first move."].join("\n")
         : [`你进入「${world.title}」。`, world.premise || "场景已经就位，等待你的第一个动作。"].join("\n"))).trim();
-      const suggestedActions = normalizeSuggestedActions(playPayload?.suggestedActions ?? params.suggestedActions);
+      const suggestedActions = validateSuggestedActions(playPayload?.suggestedActions ?? params.suggestedActions);
+      if (world.mode === "open" && suggestedActions.length > 0) {
+        throw new Error("Open-world Play does not accept suggestedActions; use free player input or guided mode.");
+      }
       let seed: PlayOpeningSeedResult | null = null;
       let graph;
       try {
@@ -2658,6 +2161,7 @@ export function createPlayStartTool(
         sceneText,
         {
           kind: "play_world_started",
+          workId: world.id,
           worldId: world.id,
           runId,
           title: world.title,
@@ -2827,11 +2331,9 @@ export function createPlayEditTool(
       const runId = "main";
       const world = await store.loadWorld(worldId);
       if (!world) {
-        return textResult(
-          language === "en"
-            ? "There is no interactive world to edit yet. Start one with play_start first."
-            : "还没有可编辑的互动世界。先用 play_start 开一局。",
-        );
+        throw new Error(language === "en"
+          ? "There is no interactive world to edit yet. Start one with play_start first."
+          : "还没有可编辑的互动世界。先用 play_start 开一局。");
       }
       const isZh = (world.language ?? "zh") !== "en";
 
@@ -2876,9 +2378,9 @@ export function createPlayEditTool(
           if (upsertPlayEditEntity(db, update)) updatedEntities += 1;
         }
         const graph = db.snapshot();
-        const currentState = await store.loadCurrentState(worldId, runId).catch(() => ({}));
+        const currentState = await store.loadCurrentState(worldId, runId);
         await store.saveCurrentState(worldId, runId, {
-          ...(currentState && typeof currentState === "object" ? currentState as Record<string, unknown> : {}),
+          ...(currentState ?? {}),
           worldContract: updatedWorld.worldContract,
           visualContract: updatedWorld.visualContract,
           premise: updatedWorld.premise,
@@ -2888,6 +2390,7 @@ export function createPlayEditTool(
           params.note?.trim() || (isZh ? "互动世界设定已更新。" : "Interactive world settings updated."),
           {
             kind: "play_world_updated",
+            workId: worldId,
             worldId,
             runId,
             world: updatedWorld,
@@ -2926,18 +2429,16 @@ export function createPlayStepTool(
       onUpdate?: AgentToolUpdateCallback,
     ): Promise<AgentToolResult<unknown>> {
       const input = params.input.trim();
-      if (!input) return textResult("Play input is empty.");
+      if (!input) throw new Error("Play input is empty.");
       const store = new PlayStore(projectRoot);
       // The play world is bound to this chat session (worldId === sessionId).
       const worldId = safePlayId(sessionId, sessionId);
       const runId = "main";
       const world = await store.loadWorld(worldId);
       if (!world) {
-        return textResult(
-          options.language === "en"
-            ? "There is no interactive world to advance yet. Start one with play_start first."
-            : "还没有可推进的互动世界。先用 play_start 开一局。",
-        );
+        throw new Error(options.language === "en"
+          ? "There is no interactive world to advance yet. Start one with play_start first."
+          : "还没有可推进的互动世界。先用 play_start 开一局。");
       }
       const target = { worldId, runId, world };
       const activatedSkills = resolveProductionToolSkills(options);
@@ -2961,26 +2462,6 @@ export function createPlayStepTool(
           runner = activeRunner;
           return activeRunner.step(input);
         });
-      } catch (err) {
-        // Never hand a raw tool error to the outer agent — it improvises a fake
-        // "service unavailable / reload your save" message. Return a fixed, graceful
-        // structured failure so the turn fails honestly and recoverably instead.
-        const isZh = (target.world?.language ?? "zh") !== "en";
-        return {
-          ...textResult(
-          isZh
-            ? "（系统刚才卡了一下，这一步没能展开。把你刚才想做的再说一遍，我就接着推进。）"
-            : "(The system hiccuped and this step didn't resolve. Say what you just did again and I'll continue.)",
-          {
-            kind: "play_step_failed",
-            worldId: target.worldId,
-            runId: target.runId,
-            error: err instanceof Error ? err.message : String(err),
-            skillIds: activatedSkillIds(activatedSkills),
-          },
-          ),
-          isError: true,
-        } as AgentToolResult<unknown>;
       } finally {
         closePlayRunner(runner);
       }
@@ -2992,12 +2473,13 @@ export function createPlayStepTool(
       } finally {
         closePlayDB(db);
       }
-      const currentState = await store.loadCurrentState(target.worldId, target.runId).catch(() => null);
+      const currentState = await store.loadCurrentState(target.worldId, target.runId);
 
       return textResult(
         step.sceneText,
         {
           kind: "play_turn_advanced",
+          workId: target.worldId,
           worldId: target.worldId,
           runId: target.runId,
           title: target.world?.title,
@@ -3046,11 +2528,9 @@ export function createPlayReviseTool(
       const runId = "main";
       const world = await store.loadWorld(worldId);
       if (!world) {
-        return textResult(
-          options.language === "en"
-            ? "There is no interactive world to redo yet. Start one with play_start first."
-            : "还没有可重做的互动世界。先用 play_start 开一局。",
-        );
+        throw new Error(options.language === "en"
+          ? "There is no interactive world to redo yet. Start one with play_start first."
+          : "还没有可重做的互动世界。先用 play_start 开一局。");
       }
       const isZh = (world.language ?? "zh") !== "en";
       const activatedSkills = resolveProductionToolSkills(options);
@@ -3079,11 +2559,9 @@ export function createPlayReviseTool(
           const turn = params.turn;
           const variantId = params.variantId?.trim();
           if (typeof turn !== "number" || !Number.isFinite(turn) || !variantId) {
-            return textResult(
-              isZh
-                ? "恢复版本需要 turn 和 variantId。"
-                : "Restoring a variant requires both turn and variantId.",
-            );
+            throw new Error(isZh
+              ? "恢复版本需要 turn 和 variantId。"
+              : "Restoring a variant requires both turn and variantId.");
           }
           onUpdate?.(textResult(`Restoring play variant "${variantId}"...`));
           const restored = await runWithPlayRunner((activeRunner) => activeRunner.restoreVariant({
@@ -3094,6 +2572,7 @@ export function createPlayReviseTool(
             restored.sceneText || (isZh ? "已切换到指定互动回合版本。" : "Switched to the requested play turn variant."),
             {
               kind: "play_variant_restored",
+              workId: worldId,
               worldId,
               runId,
               title: world.title,
@@ -3107,38 +2586,12 @@ export function createPlayReviseTool(
 
         const replacement = params.action === "edit_last_input" ? params.input?.trim() : undefined;
         if (params.action === "edit_last_input" && !replacement) {
-          return textResult(
-            isZh
-              ? "编辑上一条玩家动作需要提供新的 input。"
-              : "Editing the previous player action requires a new input.",
-          );
+          throw new Error(isZh
+            ? "编辑上一条玩家动作需要提供新的 input。"
+            : "Editing the previous player action requires a new input.");
         }
         onUpdate?.(textResult(params.action === "edit_last_input" ? "Replaying edited play turn..." : "Regenerating last play turn..."));
-        try {
-          replay = await runWithPlayRunner((activeRunner) => activeRunner.regenerateLastTurn(replacement));
-        } catch (err) {
-          return {
-            ...textResult(
-              isZh
-                ? "（上一回合暂时不能安全重做。继续输入新的动作，我会从当前状态推进。）"
-                : "(The previous turn cannot be safely regenerated yet. Enter a new action and I will continue from the current state.)",
-              {
-                kind: "play_revise_failed",
-                worldId,
-                runId,
-                error: err instanceof Error ? err.message : String(err),
-                skillIds: activatedSkillIds(activatedSkills),
-                observations: [{
-                  code: "play-revise-failed",
-                  kind: "hard",
-                  summary: err instanceof Error ? err.message : String(err),
-                  evidence: [],
-                }],
-              },
-            ),
-            isError: true,
-          } as AgentToolResult<unknown>;
-        }
+        replay = await runWithPlayRunner((activeRunner) => activeRunner.regenerateLastTurn(replacement));
       } finally {
         closePlayRunner(runner);
       }
@@ -3150,12 +2603,13 @@ export function createPlayReviseTool(
       } finally {
         closePlayDB(db);
       }
-      const currentState = await store.loadCurrentState(worldId, runId).catch(() => null);
+      const currentState = await store.loadCurrentState(worldId, runId);
 
       return textResult(
         replay.sceneText,
         {
           kind: "play_turn_revised",
+          workId: worldId,
           worldId,
           runId,
           title: world.title,
@@ -3187,8 +2641,13 @@ function mergeContract(
   for (const patch of replacements ?? []) {
     const from = patch.from.trim();
     const to = patch.to.trim();
-    if (!from || !to || !current.includes(from)) continue;
-    current = current.split(from).join(to);
+    if (!from || !to) throw new Error("Contract replacements require non-empty from and to text.");
+    const first = current.indexOf(from);
+    if (first < 0) throw new Error(`Contract replacement target was not found: ${from}`);
+    if (current.indexOf(from, first + from.length) >= 0) {
+      throw new Error(`Contract replacement target is ambiguous: ${from}`);
+    }
+    current = `${current.slice(0, first)}${to}${current.slice(first + from.length)}`;
   }
   const add = addition?.trim();
   if (!add) return current;
@@ -3201,7 +2660,7 @@ function upsertPlayEditEntity(db: PlayGraphDB, update: PlayEntityUpdateParamType
   const status = update.status?.trim();
   const label = update.label?.trim();
   const entityId = resolvePlayEditEntityId(db, update);
-  if (!entityId && !label) return false;
+  if (!entityId && !label) throw new Error("Play entity updates require an exact id or label.");
   const existing = entityId ? db.getEntity(entityId) : null;
   const id = entityId || playEditEntityId(update.type ?? "actor", label!);
   db.upsertEntity({
@@ -3318,9 +2777,10 @@ export function createResyncChapterStateTool(
       ].join("\n");
       return textResult(summary, {
         kind: "chapter_state_resynced",
+        workId: bookId,
         bookId,
         chapterNumber: result.chapter.chapterNumber,
-        observations: issues,
+        observations: reviewIssuesAsObservations(issues),
         summary: result.audit.summary,
         skillIds: activatedSkillIds(activatedSkills),
       });
@@ -3368,13 +2828,9 @@ export function createReadTool(
       _toolCallId: string,
       params: Static<typeof ReadParams>,
     ): Promise<AgentToolResult<undefined>> {
-      try {
-        const filePath = resolveReadPath(readRoot, params.path, options);
-        const content = await readFile(filePath, "utf-8");
-        return textResult(content);
-      } catch (err: any) {
-        return textResult(`Failed to read "${params.path}": ${err?.message ?? String(err)}`);
-      }
+      const filePath = resolveReadPath(readRoot, params.path, options);
+      const content = await readFile(filePath, "utf-8");
+      return textResult(content);
     },
   };
 }
@@ -3398,29 +2854,25 @@ export function createEditTool(projectRoot: string): AgentTool<typeof EditParams
       "Edit a file under works/ via exact string replacement. " +
       "old_string must appear exactly once in the file. " +
       "For chapter text use patch_chapter_text; for canonical truth files (outline/story_frame.md, outline/volume_map.md, roles/**/*.md, current_focus.md, author_intent.md) prefer write_truth_file; " +
-      "to rewrite or polish a whole chapter call sub_agent with agent=\"reviser\".",
+      "to rewrite or polish a whole chapter call revise_chapter.",
     label: "Edit File",
     parameters: EditParams,
     async execute(
       _toolCallId: string,
       params: Static<typeof EditParams>,
     ): Promise<AgentToolResult<undefined>> {
-      try {
-        const filePath = safeBooksPath(worksRoot, params.path);
-        const content = await readFile(filePath, "utf-8");
-        const idx = content.indexOf(params.old_string);
-        if (idx === -1) {
-          return textResult(`old_string not found in "${params.path}".`);
-        }
-        if (content.indexOf(params.old_string, idx + 1) !== -1) {
-          return textResult(`old_string appears more than once in "${params.path}". Provide a more specific match.`);
-        }
-        const updated = content.slice(0, idx) + params.new_string + content.slice(idx + params.old_string.length);
-        await writeFile(filePath, updated, "utf-8");
-        return textResult(`File "${params.path}" updated successfully.`);
-      } catch (err: any) {
-        return textResult(`Failed to edit "${params.path}": ${err?.message ?? String(err)}`);
+      const filePath = safeBooksPath(worksRoot, params.path);
+      const content = await readFile(filePath, "utf-8");
+      const idx = content.indexOf(params.old_string);
+      if (idx === -1) {
+        throw new Error(`old_string not found in "${params.path}".`);
       }
+      if (content.indexOf(params.old_string, idx + 1) !== -1) {
+        throw new Error(`old_string appears more than once in "${params.path}". Provide a more specific match.`);
+      }
+      const updated = content.slice(0, idx) + params.new_string + content.slice(idx + params.old_string.length);
+      await writeFile(filePath, updated, "utf-8");
+      return textResult(`File "${params.path}" updated successfully.`);
     },
   };
 }
@@ -3443,23 +2895,19 @@ export function createWriteFileTool(projectRoot: string): AgentTool<typeof Write
       "Create a new file, or fully replace an existing file's content under works/. " +
       "Parent directories are created automatically. Existing content is overwritten silently — " +
       "for canonical truth files prefer write_truth_file; " +
-      "for whole-chapter rewrites/polishing call sub_agent with agent=\"reviser\".",
+      "for whole-chapter rewrites/polishing call revise_chapter.",
     label: "Write File",
     parameters: WriteFileParams,
     async execute(
       _toolCallId: string,
       params: Static<typeof WriteFileParams>,
     ): Promise<AgentToolResult<undefined>> {
-      try {
-        const filePath = safeBooksPath(worksRoot, params.path);
-        const parentDir = resolve(filePath, "..");
-        const { mkdir } = await import("node:fs/promises");
-        await mkdir(parentDir, { recursive: true });
-        await writeFile(filePath, params.content, "utf-8");
-        return textResult(`File "${params.path}" written successfully.`);
-      } catch (err: any) {
-        return textResult(`Failed to write "${params.path}": ${err?.message ?? String(err)}`);
-      }
+      const filePath = safeBooksPath(worksRoot, params.path);
+      const parentDir = resolve(filePath, "..");
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(parentDir, { recursive: true });
+      await writeFile(filePath, params.content, "utf-8");
+      return textResult(`File "${params.path}" written successfully.`);
     },
   };
 }
@@ -3594,8 +3042,8 @@ export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams
         }
 
         return textResult(results.join("\n"));
-      } catch (err: any) {
-        return textResult(`Grep failed: ${err?.message ?? String(err)}`);
+      } catch (err) {
+        throw new Error(`Grep failed: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
       }
     },
   };
@@ -3647,8 +3095,11 @@ export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
         }
 
         return textResult(details.join("\n"));
-      } catch (err: any) {
-        return textResult(`Failed to list "${params.bookId}/${params.subdir ?? ""}": ${err?.message ?? String(err)}`);
+      } catch (err) {
+        throw new Error(
+          `Failed to list "${params.bookId}/${params.subdir ?? ""}": ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
       }
     },
   };

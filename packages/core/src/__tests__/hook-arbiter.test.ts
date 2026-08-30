@@ -17,6 +17,10 @@ function createHook(overrides: Partial<HookRecord> = {}): HookRecord {
 function createDelta(overrides: Partial<RuntimeStateDelta> = {}): RuntimeStateDelta {
   return {
     chapter: overrides.chapter ?? 12,
+    factOps: {
+      upsert: overrides.factOps?.upsert ?? [],
+      expire: overrides.factOps?.expire ?? [],
+    },
     hookOps: {
       upsert: overrides.hookOps?.upsert ?? [],
       mention: overrides.hookOps?.mention ?? [],
@@ -24,10 +28,6 @@ function createDelta(overrides: Partial<RuntimeStateDelta> = {}): RuntimeStateDe
       defer: overrides.hookOps?.defer ?? [],
     },
     newHookCandidates: overrides.newHookCandidates ?? [],
-    subplotOps: [],
-    emotionalArcOps: [],
-    characterMatrixOps: [],
-    notes: [],
   };
 }
 
@@ -133,7 +133,7 @@ describe("arbitrateRuntimeStateDeltaHooks", () => {
   });
 
   it("can structurally forbid hook-set expansion without guessing semantic identity", () => {
-    const result = arbitrateRuntimeStateDeltaHooks({
+    expect(() => arbitrateRuntimeStateDeltaHooks({
       hooks: [createHook({ hookId: "H012" })],
       allowNewHooks: false,
       delta: createDelta({
@@ -149,18 +149,11 @@ describe("arbitrateRuntimeStateDeltaHooks", () => {
           notes: "The same chapter-ending question as H012.",
         }],
       }),
-    });
-
-    expect(result.resolvedDelta.hookOps.upsert).toEqual([
-      expect.objectContaining({ hookId: "H012", status: "progressing" }),
-    ]);
-    expect(result.decisions).toEqual([
-      expect.objectContaining({ action: "rejected", reason: "new_hooks_disabled" }),
-    ]);
+    })).toThrow("forbids new hooks");
   });
 
-  it("accepts a schema-valid candidate without host semantic scoring", () => {
-    const result = arbitrateRuntimeStateDeltaHooks({
+  it("rejects an incomplete new-hook contract instead of inventing its payoff", () => {
+    expect(() => arbitrateRuntimeStateDeltaHooks({
       hooks: [],
       delta: createDelta({
         newHookCandidates: [{
@@ -169,13 +162,6 @@ describe("arbitrateRuntimeStateDeltaHooks", () => {
           notes: "",
         }],
       }),
-    });
-
-    expect(result.resolvedDelta.hookOps.upsert).toEqual([
-      expect.objectContaining({ hookId: "hook", type: "mystery" }),
-    ]);
-    expect(result.decisions).toEqual([
-      expect.objectContaining({ action: "created", reason: "admit" }),
-    ]);
+    })).toThrow();
   });
 });

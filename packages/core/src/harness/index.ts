@@ -50,7 +50,6 @@ export {
   createCapabilityPiTools,
   capabilityActionId,
   capabilityToolName,
-  CapabilityActionError,
   type CreateCapabilityPiToolsOptions,
 } from "./pi-tools.js";
 export {
@@ -68,6 +67,13 @@ export { createHarnessContextTransform } from "./agent-context.js";
 export { resolveSessionHarnessBinding } from "./session-binding.js";
 export { executeExplicitCapabilityTool } from "./explicit-action.js";
 export { createExportBookTool } from "./tools/export-book.js";
+export {
+  createBookFoundationTool,
+  createFoundationRevisionTool,
+  createWriteChaptersTool,
+  createReviewChapterTool,
+  createReviseChapterTool,
+} from "./tools/longform-production.js";
 export {
   assertSafeTruthFileName,
   createWriteTruthFileTool,
@@ -117,12 +123,6 @@ export {
 export {
   stageArtifactRevision,
   promoteArtifactRevision,
-  createAcceptedArtifact,
+  createCurrentArtifact,
 } from "./artifact-revisions.js";
-export {
-  scanLegacyWorks,
-  migrateLegacyProject,
-  type LegacyMigrationCandidate,
-  type LegacyMigrationReport,
-} from "./legacy-migration.js";
 export { syncWorkSourceArtifacts, createInitialWorkManifestWrite } from "./source-sync.js";

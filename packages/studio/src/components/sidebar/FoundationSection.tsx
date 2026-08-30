@@ -9,10 +9,6 @@ import { foundationFileLabel, FOUNDATION_FILE_ORDER } from "../../lib/truth-disp
 interface TruthFileInfo {
   name: string;
   size: number;
-  // Pre-Phase-5 compat shims (story_bible.md / book_rules.md) on a new-layout
-  // book are tagged legacy by the API; those are deprecated pointers, not real
-  // content, so they are hidden from the foundation list.
-  legacy?: boolean;
 }
 
 interface FoundationSectionProps {
@@ -31,7 +27,7 @@ export function FoundationSection({ bookId }: FoundationSectionProps) {
   }, [bookId, bookDataVersion]);
 
   const available = files
-    .filter((f) => !f.legacy && foundationFileLabel(f.name) !== undefined)
+    .filter((f) => foundationFileLabel(f.name) !== undefined)
     .sort((a, b) => FOUNDATION_FILE_ORDER.indexOf(a.name) - FOUNDATION_FILE_ORDER.indexOf(b.name));
 
   if (available.length === 0) return null;

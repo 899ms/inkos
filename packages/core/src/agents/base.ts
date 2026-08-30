@@ -1,7 +1,6 @@
 import type { LLMClient, LLMMessage, LLMResponse, OnStreamProgress } from "../llm/provider.js";
 import { runWorkerAgent, runWorkerAgentTool, type WorkerResultTool } from "../agent/worker-agent.js";
 import type { Static, TSchema } from "@sinclair/typebox";
-import { appendPromptPackGuidance } from "../prompts/prompt-pack.js";
 import type { Logger } from "../utils/logger.js";
 import {
   hydrateActivatedSkillGuidance,
@@ -61,13 +60,6 @@ export abstract class BaseAgent {
     return { result, usage };
   }
 
-  protected async withPromptPackGuidance(basePrompt: string, promptId: string): Promise<string> {
-    return appendPromptPackGuidance(basePrompt, {
-      promptId,
-      projectRoot: this.ctx.projectRoot,
-    });
-  }
-
   private async appendTaskSkillGuidance(
     messages: ReadonlyArray<LLMMessage>,
   ): Promise<ReadonlyArray<LLMMessage>> {
@@ -75,12 +67,7 @@ export abstract class BaseAgent {
       .filter((message) => message.role === "user")
       .map((message) => message.content)
       .join("\n\n");
-    let activations = this.ctx.activatedSkills;
-    try {
-      activations = await hydrateActivatedSkillGuidance(activations, query);
-    } catch (error) {
-      this.log?.warn(`[skills] Reference retrieval failed for ${this.name}: ${String(error)}`);
-    }
+    const activations = await hydrateActivatedSkillGuidance(this.ctx.activatedSkills, query);
     return appendActivatedSkillGuidance(messages, activations);
   }
 

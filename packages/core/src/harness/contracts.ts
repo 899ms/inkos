@@ -34,12 +34,12 @@ export const WorkLineageSchema = z.object({
 }).strict();
 export type WorkLineage = z.infer<typeof WorkLineageSchema>;
 
-export const ArtifactRevisionStatusSchema = z.enum(["candidate", "accepted", "rejected"]);
+export const ArtifactRevisionStatusSchema = z.enum(["candidate", "current", "superseded"]);
 export type ArtifactRevisionStatus = z.infer<typeof ArtifactRevisionStatusSchema>;
 
 export const ArtifactRevisionSchema = z.object({
   id: HarnessIdSchema,
-  parentRevisionId: HarnessIdSchema.nullable().default(null),
+  parentRevisionId: HarnessIdSchema.nullable(),
   path: RelativeArtifactPathSchema,
   contentType: z.string().min(1),
   status: ArtifactRevisionStatusSchema,
@@ -53,9 +53,9 @@ export type ArtifactRevision = z.infer<typeof ArtifactRevisionSchema>;
 export const ArtifactManifestSchema = z.object({
   id: WorkResourceIdSchema,
   kind: HarnessIdSchema,
-  currentRevisionId: HarnessIdSchema.nullable().default(null),
-  revisions: z.array(ArtifactRevisionSchema).default([]),
-  metadata: z.record(z.string(), z.unknown()).default({}),
+  currentRevisionId: HarnessIdSchema.nullable(),
+  revisions: z.array(ArtifactRevisionSchema),
+  metadata: z.record(z.string(), z.unknown()),
 }).strict().superRefine((artifact, context) => {
   const revisionIds = new Set(artifact.revisions.map((revision) => revision.id));
   if (artifact.currentRevisionId !== null && !revisionIds.has(artifact.currentRevisionId)) {
@@ -63,6 +63,28 @@ export const ArtifactManifestSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ["currentRevisionId"],
       message: "currentRevisionId must reference a known revision",
+    });
+  }
+  const currentRevisions = artifact.revisions.filter((revision) => revision.status === "current");
+  if (currentRevisions.length > 1) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["revisions"],
+      message: "An artifact can have only one current revision",
+    });
+  }
+  if (artifact.currentRevisionId === null && currentRevisions.length > 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["currentRevisionId"],
+      message: "currentRevisionId is required when a revision is current",
+    });
+  }
+  if (artifact.currentRevisionId !== null && currentRevisions[0]?.id !== artifact.currentRevisionId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["currentRevisionId"],
+      message: "currentRevisionId must identify the revision whose status is current",
     });
   }
 });
@@ -74,19 +96,19 @@ export const WorkManifestSchema = z.object({
   title: z.string().min(1),
   profileId: HarnessIdSchema,
   language: z.string().min(1),
-  status: z.enum(["draft", "active", "archived"]).default("active"),
-  lineage: z.array(WorkLineageSchema).default([]),
-  artifacts: z.array(ArtifactManifestSchema).default([]),
-  metadata: z.record(z.string(), z.unknown()).default({}),
+  status: z.enum(["draft", "active", "archived"]),
+  lineage: z.array(WorkLineageSchema),
+  artifacts: z.array(ArtifactManifestSchema),
+  metadata: z.record(z.string(), z.unknown()),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
 }).strict();
 export type WorkManifest = z.infer<typeof WorkManifestSchema>;
 
 export const ConfirmationPolicySchema = z.object({
-  inferredMutation: z.enum(["execute", "confirm"]).default("confirm"),
-  explicitRecoverableMutation: z.enum(["execute", "confirm"]).default("execute"),
-  destructiveMutation: z.literal("confirm").default("confirm"),
+  inferredMutation: z.enum(["execute", "confirm"]),
+  explicitRecoverableMutation: z.enum(["execute", "confirm"]),
+  destructiveMutation: z.literal("confirm"),
 }).strict();
 export type ConfirmationPolicy = z.infer<typeof ConfirmationPolicySchema>;
 
@@ -94,17 +116,13 @@ export const WorkProfileSchema = z.object({
   version: z.literal(HARNESS_VERSION),
   id: HarnessIdSchema,
   title: z.string().min(1),
-  description: z.string().default(""),
+  description: z.string(),
   capabilityIds: z.array(HarnessIdSchema).min(1),
-  requiredSkillIds: z.array(HarnessIdSchema).default([]),
-  recommendedSkillIds: z.array(HarnessIdSchema).default([]),
-  contextRecipes: z.record(HarnessIdSchema, HarnessIdSchema).default({}),
-  artifactKinds: z.array(HarnessIdSchema).default([]),
-  confirmation: ConfirmationPolicySchema.default({
-    inferredMutation: "confirm",
-    explicitRecoverableMutation: "execute",
-    destructiveMutation: "confirm",
-  }),
+  requiredSkillIds: z.array(HarnessIdSchema),
+  recommendedSkillIds: z.array(HarnessIdSchema),
+  contextRecipes: z.record(HarnessIdSchema, HarnessIdSchema),
+  artifactKinds: z.array(HarnessIdSchema),
+  confirmation: ConfirmationPolicySchema,
 }).strict();
 export type WorkProfile = z.infer<typeof WorkProfileSchema>;
 
@@ -123,16 +141,12 @@ export const ActionObservationSchema = ObservationSchema;
 export type ActionObservation = Observation;
 
 export const ActionResultSchema = z.object({
-  status: z.enum(["success", "error"]),
+  status: z.literal("success"),
   summary: z.string().min(1),
   content: z.string().optional(),
-  nextActions: z.array(HarnessIdSchema).default([]),
-  artifacts: z.array(ActionArtifactRefSchema).default([]),
-  observations: z.array(ActionObservationSchema).default([]),
-  retry: z.object({
-    allowed: z.boolean(),
-    reason: z.string().optional(),
-  }).strict().optional(),
+  nextActions: z.array(HarnessIdSchema),
+  artifacts: z.array(ActionArtifactRefSchema),
+  observations: z.array(ActionObservationSchema),
   data: z.unknown().optional(),
 }).strict();
 export type ActionResult = z.infer<typeof ActionResultSchema>;
@@ -143,11 +157,11 @@ export type EpisodeStatus = z.infer<typeof EpisodeStatusSchema>;
 export const CreativeEpisodeSchema = z.object({
   version: z.literal(HARNESS_VERSION),
   id: HarnessIdSchema,
-  workId: WorkResourceIdSchema.nullable().default(null),
-  profileId: HarnessIdSchema.nullable().default(null),
+  workId: WorkResourceIdSchema.nullable(),
+  profileId: HarnessIdSchema.nullable(),
   status: EpisodeStatusSchema,
   startedAt: z.string().min(1),
-  completedAt: z.string().min(1).nullable().default(null),
+  completedAt: z.string().min(1).nullable(),
 }).strict();
 export type CreativeEpisode = z.infer<typeof CreativeEpisodeSchema>;
 
@@ -157,9 +171,9 @@ export const CreativeEpisodeEventSchema = z.object({
   seq: z.number().int().nonnegative(),
   timestamp: z.string().min(1),
   type: HarnessIdSchema,
-  workId: WorkResourceIdSchema.nullable().default(null),
+  workId: WorkResourceIdSchema.nullable(),
   capabilityId: HarnessIdSchema.optional(),
   actionId: HarnessIdSchema.optional(),
-  payload: z.record(z.string(), z.unknown()).default({}),
+  payload: z.record(z.string(), z.unknown()),
 }).strict();
 export type CreativeEpisodeEvent = z.infer<typeof CreativeEpisodeEventSchema>;

@@ -69,8 +69,12 @@ export function createHarnessContextTransform(input: {
         }),
       }];
       for (const relativePath of PROFILE_CONTEXT_FILES[request.profile.id] ?? []) {
-        const content = await readFile(join(workDirectory(request.projectRoot, work.id), relativePath), "utf-8")
-          .catch(() => "");
+        let content = "";
+        try {
+          content = await readFile(join(workDirectory(request.projectRoot, work.id), relativePath), "utf-8");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
         if (!content.trim()) continue;
         fragments.push({
           id: relativePath.replaceAll("/", "-"),

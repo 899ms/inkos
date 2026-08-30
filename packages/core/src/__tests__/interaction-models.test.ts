@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  AutomationModeSchema,
   ActionPayloadSchema,
   ActionSourceSchema,
-  BookCreationDraftSchema,
   ExecutionStatusSchema,
   InteractionSessionSchema,
   PlayModeSchema,
@@ -18,24 +16,15 @@ import {
   SessionKindSchema,
   StoryboardCreateActionPayloadSchema,
   bindActiveBook,
-  clearPendingDecision,
   isTerminalExecutionStatus,
   normalizeActionSource,
   normalizePlayMode,
   normalizeRequestedIntent,
   appendInteractionMessage,
   appendInteractionEvent,
-  updateCreationDraft,
-  clearCreationDraft,
 } from "../index.js";
 
 describe("interaction models", () => {
-  it("parses supported automation modes", () => {
-    expect(AutomationModeSchema.parse("auto")).toBe("auto");
-    expect(AutomationModeSchema.parse("semi")).toBe("semi");
-    expect(AutomationModeSchema.parse("manual")).toBe("manual");
-  });
-
   it("parses Studio/agent action envelope fields from one shared schema", () => {
     expect(ActionSourceSchema.parse("free-text")).toBe("free-text");
     expect(ActionSourceSchema.parse("button")).toBe("button");
@@ -152,14 +141,7 @@ describe("interaction models", () => {
     const session = InteractionSessionSchema.parse({
       sessionId: "session-1",
       projectRoot: "/tmp/project",
-      automationMode: "semi",
       messages: [],
-      pendingDecision: {
-        kind: "approve-chapter",
-        bookId: "book-a",
-        chapterNumber: 3,
-        summary: "Chapter 3 is waiting for review.",
-      },
       currentExecution: {
         status: "waiting_human",
         bookId: "book-a",
@@ -180,7 +162,6 @@ describe("interaction models", () => {
       projectRoot: "/tmp/project",
       sessionKind: "interactive-film",
       modelOverride: "deepseek-v4-pro",
-      automationMode: "semi",
       messages: [],
       pendingProposedAction: {
         action: "interactive_film_create",
@@ -203,32 +184,10 @@ describe("interaction models", () => {
     });
   });
 
-  it("clears pending decisions while keeping the rest of the session intact", () => {
-    const session = InteractionSessionSchema.parse({
-      sessionId: "session-2",
-      projectRoot: "/tmp/project",
-      activeBookId: "book-a",
-      automationMode: "auto",
-      messages: [],
-      pendingDecision: {
-        kind: "choose-repair-mode",
-        bookId: "book-a",
-        chapterNumber: 8,
-        summary: "Choose whether to local-fix or rewrite chapter 8.",
-      },
-    });
-
-    expect(clearPendingDecision(session)).toEqual({
-      ...session,
-      pendingDecision: undefined,
-    });
-  });
-
   it("appends interaction messages in timestamp order", () => {
     const session = InteractionSessionSchema.parse({
       sessionId: "session-3",
       projectRoot: "/tmp/project",
-      automationMode: "semi",
       messages: [],
     });
 
@@ -249,7 +208,6 @@ describe("interaction models", () => {
     const session = InteractionSessionSchema.parse({
       sessionId: "session-4",
       projectRoot: "/tmp/project",
-      automationMode: "semi",
       messages: [],
       events: [],
     });
@@ -271,24 +229,4 @@ describe("interaction models", () => {
     }]);
   });
 
-  it("stores and clears a creation draft inside the shared session", () => {
-    const draft = BookCreationDraftSchema.parse({
-      concept: "港风商战悬疑，主角从灰产洗白。",
-      title: "夜港账本",
-      genre: "urban",
-      readyToCreate: false,
-    });
-
-    const session = InteractionSessionSchema.parse({
-      sessionId: "session-5",
-      projectRoot: "/tmp/project",
-      automationMode: "semi",
-      messages: [],
-      events: [],
-    });
-
-    const withDraft = updateCreationDraft(session, draft);
-    expect(withDraft.creationDraft?.title).toBe("夜港账本");
-    expect(clearCreationDraft(withDraft).creationDraft).toBeUndefined();
-  });
 });
