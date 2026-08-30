@@ -83,7 +83,6 @@ export const PlayEdgeSchema = z.object({
   sourceEventId: z.string().min(1),
   visibility: PlayVisibilitySchema.default({}),
   strength: z.number().finite().optional(),
-  confidence: z.number().finite().optional(),
 });
 export type PlayEdgeInput = z.input<typeof PlayEdgeSchema>;
 export type PlayEdge = z.infer<typeof PlayEdgeSchema>;

@@ -310,7 +310,7 @@ describe("applyRuntimeStateDelta", () => {
     ]);
   });
 
-  it("does not downgrade an existing progressed hook when the next delta restates it as open", () => {
+  it("applies the model-issued explicit hook status", () => {
     const result = applyRuntimeStateDelta({
       snapshot: {
         manifest: {
@@ -366,7 +366,7 @@ describe("applyRuntimeStateDelta", () => {
     expect(result.hooks.hooks).toEqual([
       expect.objectContaining({
         hookId: "pressure-record",
-        status: "progressing",
+        status: "open",
         lastAdvancedChapter: 2,
       }),
     ]);

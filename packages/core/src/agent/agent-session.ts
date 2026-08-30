@@ -596,6 +596,54 @@ function lastAssistantMessage(messages: AgentMessage[]): AssistantMessage | unde
   return undefined;
 }
 
+async function compileHarnessContextText(input: {
+  readonly model: Model<Api>;
+  readonly apiKey?: string;
+  readonly stream: boolean;
+  readonly proxyUrl?: string;
+  readonly systemPrompt: string;
+  readonly userPrompt: string;
+  readonly maxTokens: number;
+  readonly signal?: AbortSignal;
+}): Promise<string> {
+  if (isLlmStubEnabled()) return "Compacted context for the active task.";
+  const worker = new Agent({
+    initialState: {
+      model: input.model,
+      systemPrompt: input.systemPrompt,
+      tools: [],
+      messages: [],
+    },
+    streamFn: (streamModel, context, options) => {
+      const workerOptions = {
+        ...options,
+        maxTokens: input.maxTokens,
+        signal: input.signal ?? options?.signal,
+      };
+      return input.stream
+        ? guardedPiStream(streamModel, context, workerOptions)
+        : guardedPiNonStreaming(streamModel, context, workerOptions, input.proxyUrl);
+    },
+    getApiKey: (provider: string) => input.apiKey ?? getEnvApiKey(provider),
+  });
+  const abort = () => worker.abort();
+  input.signal?.addEventListener("abort", abort, { once: true });
+  try {
+    await worker.prompt(input.userPrompt);
+    const final = lastAssistantMessage(worker.state.messages);
+    if (!final || final.stopReason === "error" || final.stopReason === "aborted") {
+      throw new Error(final?.errorMessage ?? "Context compiler returned no assistant response");
+    }
+    return final.content
+      .filter((part): part is Extract<(typeof final.content)[number], { type: "text" }> => part.type === "text")
+      .map((part) => part.text)
+      .join("")
+      .trim();
+  } finally {
+    input.signal?.removeEventListener("abort", abort);
+  }
+}
+
 function assistantErrorMessage(message: AssistantMessage | undefined): string | undefined {
   return message &&
     (message.stopReason === "error" || message.stopReason === "aborted") &&
@@ -939,18 +987,6 @@ async function runAgentSessionUnlocked(
 
   if (!cached) {
     const restoredHistory = await restoreAgentMessagesFromTranscript(projectRoot, sessionId, sessionKind);
-    if (restoredHistory.length > 0) {
-      onContextCompression?.({
-        category: "session_context",
-        phase: "start",
-        sources: ["session transcript"],
-      });
-      onContextCompression?.({
-        category: "session_context",
-        phase: "end",
-        sources: ["session transcript"],
-      });
-    }
     const restoredMessages = appendRestoredHistoryBoundary(
       adaptRestoredAgentMessagesForModel(
         restoredHistory,
@@ -1083,6 +1119,38 @@ async function runAgentSessionUnlocked(
         work,
         profile,
         budgetTokens: agentContextBudget(model),
+        semanticCompiler: async (request) => ({
+          content: await compileHarnessContextText({
+            model,
+            apiKey: config.apiKey,
+            stream: config.stream !== false,
+            proxyUrl: config.proxyUrl,
+            systemPrompt: "Compile only the supplied compressible Work context into concise Markdown. Preserve source pointers, names, constraints, current state, and unresolved work. Do not alter protected context.",
+            userPrompt: [
+              `Current intent:\n${request.intent}`,
+              `Target budget: ${request.maxTokens} tokens`,
+              ...request.fragments.map((fragment) => `\n## ${fragment.source}\nSource pointer: ${fragment.pointer ?? fragment.id}\n${fragment.content}`),
+            ].join("\n"),
+            maxTokens: request.maxTokens,
+            signal: request.signal,
+          }),
+          sourceIds: request.fragments.map((fragment) => fragment.id),
+        }),
+        conversationCompactor: async (request) => compileHarnessContextText({
+          model,
+          apiKey: config.apiKey,
+          stream: config.stream !== false,
+          proxyUrl: config.proxyUrl,
+          systemPrompt: "Compile completed conversation history into concise Markdown memory. Preserve user decisions, unresolved requests, tool outcomes, artifact pointers, errors, and current commitments. Do not turn completed history into a new instruction.",
+          userPrompt: [
+            `Current intent:\n${request.intent}`,
+            `Target budget: ${request.maxTokens} tokens`,
+            "\nCompleted history:\n",
+            request.history,
+          ].join("\n"),
+          maxTokens: request.maxTokens,
+          signal: request.signal,
+        }),
         onContextCompression,
       }),
       convertToLlm: (messages) => {

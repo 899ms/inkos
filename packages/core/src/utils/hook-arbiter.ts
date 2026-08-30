@@ -5,8 +5,6 @@ import {
   type RuntimeStateDelta,
 } from "../models/runtime-state.js";
 import { normalizeHookId } from "./story-markdown.js";
-import { evaluateHookAdmission } from "./hook-governance.js";
-import { resolveHookPayoffTiming } from "./hook-lifecycle.js";
 
 export interface HookArbiterDecision {
   readonly action: "created" | "rejected";
@@ -63,19 +61,6 @@ export function arbitrateRuntimeStateDeltaHooks(params: {
       continue;
     }
 
-    const admission = evaluateHookAdmission({
-      candidate,
-    });
-
-    if (!admission.admit) {
-      decisions.push({
-        action: "rejected",
-        reason: admission.reason,
-        candidate,
-      });
-      continue;
-    }
-
     const created = createCanonicalHook({
       candidate,
       chapter: delta.chapter,
@@ -88,7 +73,7 @@ export function arbitrateRuntimeStateDeltaHooks(params: {
     workingHooks.push(created);
     decisions.push({
       action: "created",
-      reason: "admit",
+    reason: "admit",
       hookId: created.hookId,
       candidate,
     });
@@ -127,7 +112,6 @@ function createCanonicalHook(params: {
     status: "open",
     lastAdvancedChapter: params.chapter,
     expectedPayoff: params.candidate.expectedPayoff.trim(),
-    payoffTiming: resolveHookPayoffTiming(params.candidate),
     notes: params.candidate.notes.trim(),
   };
 }
@@ -141,11 +125,7 @@ function buildCanonicalHookId(
     return preferred;
   }
 
-  const base = slugifyHookStem([
-    candidate.type,
-    candidate.expectedPayoff,
-    candidate.notes,
-  ].join(" "));
+  const base = "hook";
   let next = base;
   let suffix = 2;
 
@@ -155,21 +135,6 @@ function buildCanonicalHookId(
   }
 
   return next;
-}
-
-function slugifyHookStem(value: string): string {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const englishTerms = (normalized.match(/[a-z0-9]{3,}/g) ?? [])
-    .filter((term) => !STOP_WORDS.has(term))
-    .slice(0, 5);
-  const chineseTerms = (normalized.match(/[\u4e00-\u9fff]{2,6}/g) ?? []).slice(0, 3);
-  const stem = [...englishTerms, ...chineseTerms].join("-").slice(0, 64).replace(/-+$/g, "");
-  return stem || "hook";
 }
 
 function replaceWorkingHook(workingHooks: HookRecord[], hook: HookRecord): void {
@@ -191,20 +156,3 @@ function sortHooks(left: HookRecord, right: HookRecord): number {
 function uniqueStrings(values: ReadonlyArray<string>): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
-
-const STOP_WORDS = new Set([
-  "that",
-  "this",
-  "with",
-  "from",
-  "into",
-  "still",
-  "just",
-  "have",
-  "will",
-  "reveal",
-  "about",
-  "already",
-  "question",
-  "chapter",
-]);

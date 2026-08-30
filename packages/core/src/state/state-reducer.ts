@@ -11,8 +11,6 @@ import {
   type RuntimeStateDelta,
   type StateManifest,
 } from "../models/runtime-state.js";
-import { evaluateHookAdmission } from "../utils/hook-governance.js";
-import { resolveHookPayoffTiming } from "../utils/hook-lifecycle.js";
 import { validateRuntimeState } from "./state-validator.js";
 
 export interface RuntimeStateSnapshot {
@@ -88,18 +86,6 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
       continue;
     }
 
-    const admission = evaluateHookAdmission({
-      candidate: {
-        type: hook.type,
-        expectedPayoff: hook.expectedPayoff,
-        notes: hook.notes,
-      },
-    });
-
-    if (!admission.admit) {
-      throw new Error(`invalid hook ${hook.hookId}: ${admission.reason}`);
-    }
-
     hooksById.set(hook.hookId, { ...hook });
   }
 
@@ -138,45 +124,17 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
 }
 
 function mergeHookRecord(existing: HookRecord, incoming: HookRecord): HookRecord {
-  const expectedPayoff = preferRicherText(existing.expectedPayoff, incoming.expectedPayoff);
-  const notes = preferRicherText(existing.notes, incoming.notes);
   const advanced = Math.max(existing.lastAdvancedChapter, incoming.lastAdvancedChapter);
-  const progressed = advanced > existing.lastAdvancedChapter;
 
   return {
     ...existing,
     startChapter: Math.min(existing.startChapter, incoming.startChapter),
-    type: preferRicherText(existing.type, incoming.type),
-    status: mergeHookStatus(existing.status, incoming.status, progressed),
+    type: incoming.type.trim() || existing.type,
+    status: existing.status === "resolved" ? "resolved" : incoming.status,
     lastAdvancedChapter: advanced,
-    expectedPayoff,
-    payoffTiming: resolveHookPayoffTiming({
-      payoffTiming: incoming.payoffTiming ?? existing.payoffTiming,
-      expectedPayoff,
-      notes,
-    }),
-    notes,
+    expectedPayoff: incoming.expectedPayoff.trim() || existing.expectedPayoff,
+    notes: incoming.notes.trim() || existing.notes,
   };
-}
-
-function mergeHookStatus(
-  existing: HookRecord["status"],
-  incoming: HookRecord["status"],
-  progressed: boolean,
-): HookRecord["status"] {
-  if (existing === "resolved" || incoming === "resolved") return "resolved";
-  if (progressed || existing === "progressing" || incoming === "progressing") return "progressing";
-  return existing;
-}
-
-function preferRicherText(primary: string, fallback: string): string {
-  const left = primary.trim();
-  const right = fallback.trim();
-
-  if (!left) return right;
-  if (!right) return left;
-  if (left === right) return left;
-  return right.length > left.length ? right : left;
 }
 
 function applyCurrentStatePatch(

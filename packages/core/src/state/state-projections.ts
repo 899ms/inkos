@@ -3,39 +3,23 @@ import type {
   CurrentStateState,
   HooksState,
 } from "../models/runtime-state.js";
-import {
-  localizeHookPayoffTiming,
-  resolveHookPayoffTiming,
-} from "../utils/hook-lifecycle.js";
-import {
-  computeHookDiagnostics,
-  renderHookDiagnosticMarker,
-} from "../utils/hook-stale-detection.js";
 
 export function renderHooksProjection(
   state: HooksState,
   language: "zh" | "en" = "zh",
   options?: { readonly currentChapter?: number },
 ): string {
+  void options;
   const title = language === "en" ? "# Pending Hooks" : "# 伏笔池";
-  // Phase 7 + hotfixes 1 & 2: depends_on / pays_off_in_arc / core_hook / half_life / promoted
-  // are visible columns, so writer and reviewer both see the causal chain, planned payoff arc,
-  // stale threshold, and promotion flag. stale / blocked diagnostic flags are appended to the
-  // status cell.
   const headers = language === "en"
     ? [
-      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     : [
-      "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 备注 |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
     ];
-
-  const currentChapter = options?.currentChapter;
-  const diagnostics = typeof currentChapter === "number"
-    ? computeHookDiagnostics({ hooks: state.hooks, currentChapter })
-    : null;
 
   const rows = [...state.hooks]
     .sort((left, right) => (
@@ -43,53 +27,19 @@ export function renderHooksProjection(
       || left.lastAdvancedChapter - right.lastAdvancedChapter
       || left.hookId.localeCompare(right.hookId)
     ))
-    .map((hook) => {
-      const diag = diagnostics?.get(hook.hookId);
-      const marker = diag ? renderHookDiagnosticMarker(diag, language) : "";
-      const statusCell = marker
-        ? `${hook.status} (${marker})`
-        : hook.status;
-      return `| ${
+    .map((hook) => `| ${
         [
           hook.hookId,
           hook.startChapter,
           hook.type,
-          statusCell,
+          hook.status,
           hook.lastAdvancedChapter,
           hook.expectedPayoff,
-          localizeHookPayoffTiming(resolveHookPayoffTiming(hook), language),
-          renderDependsOnCell(hook.dependsOn ?? [], language),
-          hook.paysOffInArc ?? "",
-          renderCoreHookCell(hook.coreHook === true, language),
-          renderHalfLifeCell(hook.halfLifeChapters),
-          renderPromotedCell(hook.promoted, language),
           hook.notes,
         ].map(escapeTableCell).join(" | ")
-      } |`;
-    });
+      } |`);
 
   return [title, "", ...headers, ...rows, ""].join("\n");
-}
-
-function renderDependsOnCell(ids: ReadonlyArray<string>, language: "zh" | "en"): string {
-  if (ids.length === 0) return language === "en" ? "none" : "无";
-  return `[${ids.join(", ")}]`;
-}
-
-function renderCoreHookCell(isCore: boolean, language: "zh" | "en"): string {
-  if (language === "en") return isCore ? "true" : "false";
-  return isCore ? "是" : "否";
-}
-
-function renderHalfLifeCell(value: number | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "";
-  return String(Math.trunc(value));
-}
-
-function renderPromotedCell(value: boolean | undefined, language: "zh" | "en"): string {
-  if (value === undefined) return "";
-  if (language === "en") return value ? "true" : "false";
-  return value ? "是" : "否";
 }
 
 export function renderChapterSummariesProjection(

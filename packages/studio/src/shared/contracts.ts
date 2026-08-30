@@ -53,7 +53,6 @@ export interface ChapterSummary {
 export interface ChapterDetail extends ChapterSummary {
   readonly observations: ReadonlyArray<{
     readonly code: string;
-    readonly status: "pass" | "warning" | "fail";
     readonly summary: string;
     readonly evidence: ReadonlyArray<string>;
   }>;

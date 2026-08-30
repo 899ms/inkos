@@ -12,9 +12,8 @@ import {
   type StateManifest,
 } from "../models/runtime-state.js";
 import type { Fact, StoredHook } from "./memory-db.js";
-import { normalizeHookPayoffTiming, resolveHookStatusAlias } from "../utils/hook-lifecycle.js";
+import { resolveHookStatusAlias } from "../utils/hook-lifecycle.js";
 import {
-  inferFactSubject,
   isCurrentChapterLabel,
   isStateTableHeaderRow,
   normalizeHookId,
@@ -305,7 +304,6 @@ function parsePendingHooksStateMarkdown(markdown: string, warnings: string[]) {
         status: "open" as HookStatus,
         lastAdvancedChapter: 0,
         expectedPayoff: "",
-        payoffTiming: undefined,
         notes: line,
       })),
   });
@@ -340,7 +338,7 @@ function parseCurrentStateStateMarkdown(
           if (!label || !value) return [];
 
           return [{
-            subject: inferFactSubject(label),
+            subject: "current_state",
             predicate: label,
             object: value,
             validFromChapter: stateChapter,

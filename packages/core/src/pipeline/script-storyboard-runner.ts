@@ -6,12 +6,9 @@ import type { StoryGraph } from "../interactive-film/graph-schema.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import {
   InteractiveFilmCreationAgent,
+  ProductionDocumentCompilerAgent,
   ScriptCreationAgent,
   StoryboardCreationAgent,
-  countMarkdownSections,
-  extractStoryboardImagePrompts,
-  extractMarkdownSection,
-  normalizeScriptEpisodeEndLabels,
   renderInteractiveFilmSpec,
   renderScriptSpec,
   renderStoryboardSpec,
@@ -166,8 +163,7 @@ export async function runScriptCreation(
 
   options.onProgress?.("Writing script draft...");
   const agent = new ScriptCreationAgent(options.runtime);
-  const script = normalizeScriptEpisodeEndLabels(await agent.writeScript(input));
-  assertScriptDeliverable(script, options.language ?? "zh");
+  const script = await agent.writeScript(input);
   const artifacts = [
     textArtifact(join(baseDir, "script-spec.md"), spec),
     textArtifact(join(baseDir, "script.md"), script),
@@ -192,24 +188,6 @@ export async function runScriptCreation(
     specPath: relPath(baseDir, "script-spec.md"),
     scriptPath: relPath(baseDir, "script.md"),
   };
-}
-
-function assertScriptDeliverable(script: string, language: "zh" | "en"): void {
-  const characterHeadings = language === "en" ? ["Characters"] : ["人物", "Characters"];
-  const scriptHeadings = language === "en" ? ["Script"] : ["剧本正文", "Script"];
-  const body = extractMarkdownSection(
-    script,
-    scriptHeadings,
-  );
-  const characterSectionCount = countMarkdownSections(script, characterHeadings);
-  const scriptSectionCount = countMarkdownSections(script, scriptHeadings);
-  if (!body?.trim() || characterSectionCount !== 1 || scriptSectionCount !== 1) {
-    throw new Error(
-      language === "en"
-        ? "Script production did not return exactly one `## Characters` and one non-empty `## Script` deliverable. No artifacts were committed."
-        : "剧本生产没有返回且仅返回一份 `## 人物` 和一份非空 `## 剧本正文` 交付段，未提交任何产物。",
-    );
-  }
 }
 
 export async function runInteractiveFilmCreation(
@@ -237,32 +215,11 @@ export async function runInteractiveFilmCreation(
   options.onProgress?.("Writing story tree, flags, script, storyboard, and image prompts...");
   const agent = new InteractiveFilmCreationAgent(options.runtime);
   const packageMarkdown = await agent.writeInteractiveFilm(input);
-  const storyTree = requiredSection(packageMarkdown, [
-    "剧情树",
-    "Story Tree",
-    "Branching Story Tree",
-  ], packageMarkdown);
-  const flags = requiredSection(packageMarkdown, [
-    "旗标与变量系统说明",
-    "变量与旗标表",
-    "变量和旗标表",
-    "变量表",
-    "旗标表",
-    "Variables and Flags",
-    "Flag Table",
-  ], packageMarkdown);
-  const script = requiredSection(packageMarkdown, [
-    "互动剧本",
-    "Interactive Script",
-    "Script",
-  ], packageMarkdown);
-  const storyboard = requiredSection(packageMarkdown, [
-    "分镜与图像提示词",
-    "分镜表",
-    "Storyboard and Image Prompts",
-    "Storyboard",
-  ], packageMarkdown);
-  const imagePrompts = extractStoryboardImagePrompts(storyboard);
+  const compiler = new ProductionDocumentCompilerAgent(options.runtime);
+  const compiled = await compiler.compileInteractiveFilmPackage(packageMarkdown, options.language ?? "zh");
+  const { storyTree, flags, script, storyboard } = compiled;
+  const imagePromptItems = compiled.imagePrompts;
+  const imagePrompts = renderImagePrompts(imagePromptItems);
   const storyGraphPath = relPath(baseDir, "story-graph.json");
 
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "source"));
@@ -274,7 +231,7 @@ export async function runInteractiveFilmCreation(
     baseDir,
     storyboardPath: join(baseDir, "storyboard.md"),
     imagePromptsPath: join(baseDir, "image-prompts.md"),
-    imagePrompts,
+    imagePrompts: imagePromptItems,
     createdAt: new Date().toISOString(),
   });
 
@@ -293,7 +250,7 @@ export async function runInteractiveFilmCreation(
     textArtifact(join(baseDir, "interactive-spec.md"), spec),
     textArtifact(join(baseDir, "story-tree.md"), storyTree),
     textArtifact(join(baseDir, "flags.md"), flags),
-    textArtifact(join(baseDir, "script.md"), normalizeScriptEpisodeEndLabels(script)),
+    textArtifact(join(baseDir, "script.md"), script),
     textArtifact(join(baseDir, "storyboard.md"), storyboard),
     textArtifact(join(baseDir, "image-prompts.md"), imagePrompts),
     textArtifact(join(baseDir, "assets.json"), JSON.stringify(assetsManifest, null, 2)),
@@ -351,32 +308,10 @@ export async function runStoryboardCreation(
 
   options.onProgress?.("Writing storyboard and image prompts...");
   const agent = new StoryboardCreationAgent(options.runtime);
-  const segments = splitStoryboardSource(input.sourceText, input.maxShots);
-  const storyboardParts: string[] = [];
-  for (const [index, segment] of segments.entries()) {
-    if (segments.length > 1) {
-      options.onProgress?.(`Writing storyboard segment ${index + 1}/${segments.length}: ${segment.label}...`);
-    }
-    storyboardParts.push(await agent.writeStoryboard({
-      ...input,
-      sourceText: segment.sourceText,
-      ...(segments.length > 1 ? {
-        segment: {
-          label: segment.label,
-          index,
-          count: segments.length,
-          estimatedShots: Math.ceil((input.maxShots ?? 24) / segments.length),
-        },
-      } : {}),
-    }));
-  }
-  const storyboard = storyboardParts.join("\n\n");
-  // Extract each segment before concatenation because a Markdown section
-  // extractor correctly returns only the first matching heading.
-  const imagePrompts = storyboardParts
-    .map((part) => extractStoryboardImagePrompts(part))
-    .filter(Boolean)
-    .join("\n\n");
+  const storyboard = await agent.writeStoryboard(input);
+  const compiler = new ProductionDocumentCompilerAgent(options.runtime);
+  const imagePromptItems = await compiler.compileStoryboardAssets(storyboard, options.language ?? "zh");
+  const imagePrompts = renderImagePrompts(imagePromptItems);
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "source"));
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "generated"));
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "selected"));
@@ -386,7 +321,7 @@ export async function runStoryboardCreation(
     baseDir,
     storyboardPath: join(baseDir, "storyboard.md"),
     imagePromptsPath: join(baseDir, "image-prompts.md"),
-    imagePrompts,
+    imagePrompts: imagePromptItems,
     createdAt: new Date().toISOString(),
   });
   const artifacts = [
@@ -418,74 +353,6 @@ export async function runStoryboardCreation(
     assetsManifestPath: relPath(baseDir, "assets.json"),
     assetsDir: relPath(baseDir, "assets"),
   };
-}
-
-interface StoryboardSourceSegment {
-  readonly label: string;
-  readonly sourceText: string;
-}
-
-/**
- * Large storyboards are generated one explicit document section at a time so
- * no model call has to emit the entire deliverable. This parses Markdown
- * structure only; it does not infer story meaning or discard source text.
- */
-function splitStoryboardSource(
-  sourceText: string | undefined,
-  maxShots: number | undefined,
-): StoryboardSourceSegment[] {
-  const source = sourceText?.trim();
-  if (!source || (maxShots ?? 24) * 700 <= 24_000) {
-    return [{ label: "full storyboard", sourceText: source ?? "" }];
-  }
-
-  const lines = source.split(/\r?\n/);
-  const headings: Array<{ readonly line: number; readonly label: string }> = [];
-  for (const [line, raw] of lines.entries()) {
-    const heading = /^#{1,6}\s+(.+?)\s*$/u.exec(raw.trim());
-    if (!heading) continue;
-    const label = heading[1]!.trim();
-    if (/^第\s*[一二三四五六七八九十百千万\d]+\s*集(?:\s|《|$)/u.test(label)
-      || /^episode\s+\d+(?:\s|[:：\-—]|$)/iu.test(label)) {
-      headings.push({ line, label });
-    }
-  }
-  if (headings.length < 2) {
-    return [{ label: "full storyboard", sourceText: source }];
-  }
-
-  const episodeSegments = headings.map((heading, index) => {
-    const start = index === 0 ? 0 : heading.line;
-    const end = headings[index + 1]?.line ?? lines.length;
-    return {
-      label: heading.label,
-      sourceText: lines.slice(start, end).join("\n").trim(),
-    };
-  });
-  return episodeSegments.flatMap(splitStoryboardEpisodeScenes);
-}
-
-function splitStoryboardEpisodeScenes(episode: StoryboardSourceSegment): StoryboardSourceSegment[] {
-  const lines = episode.sourceText.split(/\r?\n/);
-  const boundaries: Array<{ readonly line: number; readonly label: string }> = [];
-  for (const [line, raw] of lines.entries()) {
-    const text = raw.trim();
-    const bold = /^\*\*(.+?)\*\*(?:\s.*)?$/u.exec(text);
-    const label = bold?.[1]?.trim();
-    if (!label) continue;
-    if (/^(?:场次\s*\d+|集尾钩子)(?:\s|[：:／/]|$)/u.test(label)
-      || /^(?:scene\s+\d+|episode[- ]end hook)(?:\s|[：:/\-—]|$)/iu.test(label)) {
-      boundaries.push({ line, label });
-    }
-  }
-  if (boundaries.length < 2) return [episode];
-  return boundaries.map((boundary, index) => ({
-    label: `${episode.label} / ${boundary.label}`,
-    sourceText: lines
-      .slice(index === 0 ? 0 : boundary.line, boundaries[index + 1]?.line ?? lines.length)
-      .join("\n")
-      .trim(),
-  }));
 }
 
 async function createInteractiveFilmStoryGraph(
@@ -560,11 +427,10 @@ export function createStoryboardAssetsManifest(args: {
   readonly baseDir: string;
   readonly storyboardPath: string;
   readonly imagePromptsPath: string;
-  readonly imagePrompts: string;
+  readonly imagePrompts: ReadonlyArray<string>;
   readonly createdAt: string;
 }): StoryboardAssetsManifest {
   const assetsDir = relPath(args.baseDir, "assets");
-  const prompts = parseStoryboardPromptLines(args.imagePrompts);
   return {
     version: 1,
     kind: "storyboard_assets",
@@ -578,7 +444,7 @@ export function createStoryboardAssetsManifest(args: {
     generatedDir: relPath(assetsDir, "generated"),
     selectedDir: relPath(assetsDir, "selected"),
     createdAt: args.createdAt,
-    assets: prompts.map((prompt, index) => {
+    assets: args.imagePrompts.map((prompt, index) => {
       const shotId = `shot-${String(index + 1).padStart(3, "0")}`;
       return {
         shotId,
@@ -589,6 +455,10 @@ export function createStoryboardAssetsManifest(args: {
       };
     }),
   };
+}
+
+function renderImagePrompts(prompts: ReadonlyArray<string>): string {
+  return prompts.map((prompt, index) => `${index + 1}. ${prompt}`).join("\n");
 }
 
 async function resolveSourceText(
@@ -659,79 +529,6 @@ function slugify(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "");
   return text || `script-${Date.now()}`;
-}
-
-function parseStoryboardPromptLines(markdown: string): string[] {
-  const lines = markdown.split(/\r?\n/);
-  const prompts: string[] = [];
-  let promptColumnIndex = -1;
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) {
-      promptColumnIndex = -1;
-      continue;
-    }
-    const tableCells = parseMarkdownTableRow(line);
-    if (tableCells) {
-      if (isMarkdownTableSeparator(tableCells)) continue;
-      const headerIndex = tableCells.findIndex(isPromptColumnHeader);
-      if (headerIndex >= 0) {
-        promptColumnIndex = headerIndex;
-        continue;
-      }
-      if (promptColumnIndex >= 0) {
-        const prompt = cleanPromptText(tableCells[promptColumnIndex] ?? "");
-        if (prompt) prompts.push(prompt);
-      }
-      continue;
-    }
-    promptColumnIndex = -1;
-    const promptMatch = /(?:^|[|>\-\d.)、\s])(?:\*\*)?\s*(?:Prompt(?:\s+for\s+[^:*：]+)?|提示词(?:\s*[^:*：]+)?|图像提示词|分镜图提示词)\s*(?:\*\*)?\s*[：:]\s*(.+?)\s*$/iu.exec(line);
-    if (promptMatch) {
-      const prompt = cleanPromptText(promptMatch[1]!);
-      if (prompt) prompts.push(prompt);
-      continue;
-    }
-    const numberedPrompt = /^(?:[-*]\s*)?(?:\d+|[０-９]+)[.)、：:\s-]+(.+)$/u.exec(line);
-    if (numberedPrompt) {
-      const prompt = numberedPrompt[1]!
-        .replace(/\s+/g, " ")
-        .trim();
-      if (prompt) prompts.push(prompt);
-    }
-  }
-
-  return prompts;
-}
-
-function parseMarkdownTableRow(line: string): string[] | undefined {
-  if (!line.startsWith("|") || !line.endsWith("|")) return undefined;
-  const cells = line.slice(1, -1).split("|").map((cell) => cell.trim());
-  return cells.length >= 2 ? cells : undefined;
-}
-
-function isMarkdownTableSeparator(cells: readonly string[]): boolean {
-  return cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
-}
-
-function isPromptColumnHeader(cell: string): boolean {
-  return /^(?:prompt|image\s*prompt|shot\s*prompt|提示词|图像提示词|分镜图提示词)$/iu.test(
-    cell.replace(/[`*_]+/gu, "").trim(),
-  );
-}
-
-function cleanPromptText(text: string): string {
-  return text
-    .replace(/\s*\|\s*$/u, "")
-    .replace(/\*\*$/u, "")
-    .replace(/^(?:Prompt(?:\s+for\s+[^:*：]+)?|提示词(?:\s*[^:*：]+)?|图像提示词|分镜图提示词)\s*[：:]\s*/iu, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function requiredSection(raw: string, headings: readonly string[], fallback: string): string {
-  return extractMarkdownSection(raw, headings)?.trim() || fallback.trim();
 }
 
 export async function projectFileExists(projectRoot: string, relativePath: string): Promise<boolean> {

@@ -1,10 +1,8 @@
-import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { StoryGraphSchema, type StoryGraph } from "./graph-schema.js";
 import { applyStoryGraphDelta, type StoryGraphDelta } from "./delta.js";
 import { loadStoryGraph, saveStoryGraph, storyGraphPath } from "./graph-store.js";
-
-const SNAPSHOT_KEEP = 20;
 
 // Per-project async mutex: concurrent applyGraphDelta calls to the same project
 // run strictly one-at-a-time so no rev or update is silently lost.
@@ -75,11 +73,6 @@ async function writeSnapshot(projectRoot: string, projectId: string, rev: number
   const dir = snapshotDir(projectRoot, projectId);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${rev}.json`), JSON.stringify(graph, null, 2), "utf-8");
-  const files = (await readdir(dir)).filter((f) => f.endsWith(".json"));
-  const revs = files.map((f) => Number(f.replace(".json", ""))).filter((n) => !Number.isNaN(n)).sort((a, b) => a - b);
-  for (const old of revs.slice(0, Math.max(0, revs.length - SNAPSHOT_KEEP))) {
-    await rm(join(dir, `${old}.json`), { force: true });
-  }
 }
 
 /**

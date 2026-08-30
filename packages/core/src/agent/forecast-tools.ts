@@ -41,8 +41,7 @@ function resolveForecastBookId(
 }
 
 function describeBranch(branch: ForecastBranch): string {
-  return `${branch.branchId} "${branch.title}" — intent fit ${branch.intentAlignment.score}/100, `
-    + `${branch.risks.length} risk(s), premise: ${branch.premise}`;
+  return `${branch.branchId} "${branch.title}" — ${branch.risks.length} risk(s), premise: ${branch.premise}`;
 }
 
 function describeForecast(forecast: NarrativeForecast, stale: boolean): string[] {

@@ -37,6 +37,7 @@ export interface SemanticContextCompileRequest {
   readonly intent: string;
   readonly maxTokens: number;
   readonly fragments: ReadonlyArray<ContextFragment>;
+  readonly signal?: AbortSignal;
 }
 
 export interface SemanticContextCompileResult {
@@ -136,6 +137,7 @@ export async function compileContext(input: {
     intent: input.request.intent,
     maxTokens: availableTokens,
     fragments: compressibleFragments,
+    signal: input.request.signal,
   });
   const content = compiled.content.trim();
   if (!content) throw new Error("Semantic context compiler returned empty content");
@@ -228,4 +230,3 @@ function dedupeFragments(fragments: ReadonlyArray<ContextFragment>): ContextFrag
   }
   return [...byId.values()];
 }
-

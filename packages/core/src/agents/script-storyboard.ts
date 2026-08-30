@@ -1,5 +1,6 @@
 import { BaseAgent } from "./base.js";
 import { completeLongForm } from "../llm/long-form-completion.js";
+import { InteractiveFilmPackageToolSchema, StoryboardAssetsToolSchema } from "./production-document-tool.js";
 
 export type ScriptTargetFormat =
   | "vertical_short_drama"
@@ -116,7 +117,7 @@ export class ScriptCreationAgent extends LongFormProductionAgent {
         language === "en" ? ["## Characters", "## Script"] : ["## 人物", "## 剧本正文"],
       ),
     });
-    return extractProductionDocument(response.content, input.title);
+    return response.content.trim();
   }
 }
 
@@ -145,7 +146,7 @@ export class StoryboardCreationAgent extends LongFormProductionAgent {
         language === "en" ? ["## Storyboard", "## Image Prompts"] : ["## 分镜表", "## 图像提示词"],
       ),
     });
-    return extractProductionDocument(response.content, input.title);
+    return response.content.trim();
   }
 }
 
@@ -176,7 +177,57 @@ export class InteractiveFilmCreationAgent extends LongFormProductionAgent {
           : ["## 剧情树", "## 变量与旗标表", "## 多结局路径", "## 互动剧本", "## 分镜与图像提示词"],
       ),
     });
-    return extractProductionDocument(response.content, input.title);
+    return response.content.trim();
+  }
+}
+
+export class ProductionDocumentCompilerAgent extends BaseAgent {
+  get name(): string {
+    return "production-document-compiler";
+  }
+
+  async compileStoryboardAssets(document: string, language: "zh" | "en" = "zh"): Promise<ReadonlyArray<string>> {
+    const { result } = await this.submitStructured(
+      [
+        {
+          role: "system",
+          content: language === "en"
+            ? "Read the complete storyboard and submit its generation-ready shot image prompts in document order. Do not invent shots or rewrite prompts."
+            : "读取完整分镜稿，按文档顺序提交每个镜头可直接生图的提示词。不要发明镜头，也不要改写提示词。",
+        },
+        { role: "user", content: document },
+      ],
+      {
+        name: "submit_storyboard_assets",
+        label: "Submit storyboard assets",
+        description: "Submit image prompts extracted semantically from the storyboard artifact.",
+        parameters: StoryboardAssetsToolSchema,
+      },
+      { temperature: 0.1 },
+    );
+    return result.imagePrompts;
+  }
+
+  async compileInteractiveFilmPackage(document: string, language: "zh" | "en" = "zh") {
+    const { result } = await this.submitStructured(
+      [
+        {
+          role: "system",
+          content: language === "en"
+            ? "Project the complete interactive-film deliverable into the typed host package. Preserve the document content; do not invent or summarize missing sections."
+            : "把完整互动影游交付稿投影到宿主结构中。保留原文内容，不发明缺失部分，也不把已有部分概括缩短。",
+        },
+        { role: "user", content: document },
+      ],
+      {
+        name: "submit_interactive_film_package",
+        label: "Submit interactive-film package",
+        description: "Submit the host-consumed sections of the interactive-film deliverable.",
+        parameters: InteractiveFilmPackageToolSchema,
+      },
+      { temperature: 0.1 },
+    );
+    return result;
   }
 }
 
@@ -335,97 +386,6 @@ export function renderInteractiveFilmSpec(input: InteractiveFilmCreationInput): 
   ].join("\n");
 }
 
-export function extractStoryboardImagePrompts(raw: string): string {
-  const section = extractMarkdownSection(raw, [
-    "图像提示词",
-    "分镜图提示词",
-    "Image Prompts",
-    "Shot Image Prompts",
-  ]);
-  const source = section?.trim() || raw.trim();
-  const prompts = extractPromptLines(source);
-  return prompts.length > 0 ? prompts.map((prompt, index) => `${index + 1}. ${prompt}`).join("\n") : "";
-}
-
-export function extractMarkdownSection(raw: string, headings: readonly string[]): string | undefined {
-  const lines = raw.split(/\r?\n/);
-  let start = -1;
-  let level = 0;
-  const normalizedHeadings = headings.map(normalizeHeadingText);
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = /^(#{1,6})\s*(.+?)\s*$/u.exec(lines[index] ?? "");
-    if (!match) continue;
-    const text = normalizeHeadingText(match[2]!);
-    if (normalizedHeadings.some((heading) => headingMatches(text, heading))) {
-      start = index + 1;
-      level = match[1]!.length;
-      break;
-    }
-  }
-  if (start < 0) return undefined;
-  let end = lines.length;
-  for (let index = start; index < lines.length; index += 1) {
-    const match = /^(#{1,6})\s+/u.exec(lines[index] ?? "");
-    if (match && match[1]!.length <= level) {
-      end = index;
-      break;
-    }
-  }
-  return lines.slice(start, end).join("\n");
-}
-
-export function countMarkdownSections(raw: string, headings: readonly string[]): number {
-  const normalizedHeadings = headings.map(normalizeHeadingText);
-  let count = 0;
-  for (const line of raw.split(/\r?\n/)) {
-    const match = /^(#{1,6})\s*(.+?)\s*$/u.exec(line);
-    if (!match) continue;
-    const text = normalizeHeadingText(match[2]!);
-    if (normalizedHeadings.some((heading) => headingMatches(text, heading))) count += 1;
-  }
-  return count;
-}
-
-export function extractProductionDocument(raw: string, title: string): string {
-  const lines = raw.split(/\r?\n/);
-  const normalizedTitle = normalizeHeadingText(title);
-  const start = lines.findIndex((line) => {
-    const match = /^#\s+(.+?)\s*$/u.exec(line);
-    if (!match) return false;
-    return normalizeHeadingText(match[1]!).startsWith(normalizedTitle);
-  });
-  return (start >= 0 ? lines.slice(start).join("\n") : raw).trim();
-}
-
-function normalizeHeadingText(text: string): string {
-  return text
-    .trim()
-    .replace(/^\*\*(.+)\*\*$/u, "$1")
-    .replace(/[`*_]+/gu, "")
-    .replace(/\s+/gu, " ")
-    .toLowerCase();
-}
-
-function headingMatches(text: string, heading: string): boolean {
-  if (text === heading) return true;
-  if (!text.startsWith(heading)) return false;
-  const rest = text.slice(heading.length).trim();
-  return rest === "" || /^[（(【\[\s:：\-—]/u.test(rest);
-}
-
-export function normalizeScriptEpisodeEndLabels(script: string): string {
-  const lines = script.split(/\r?\n/);
-  let currentEpisode: string | null = null;
-  return lines.map((line) => {
-    const heading = /^#{1,6}\s*第\s*([一二三四五六七八九十百千万\d]+)\s*集(?:\s|$)/u.exec(line.trim());
-    if (heading) currentEpisode = heading[1]!;
-    if (!currentEpisode) return line;
-    return line.replace(
-      /(字幕\s*[：:]\s*)第\s*[一二三四五六七八九十百千万\d]+\s*集完/gu,
-      `$1第${currentEpisode}集完`,
-    );
-  }).join("\n");
-}
 
 function buildScriptCreationSystemPrompt(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
@@ -675,67 +635,4 @@ function estimateStoryboardMaxTokens(input: StoryboardCreationInput): number {
 function estimateInteractiveFilmMaxTokens(input: InteractiveFilmCreationInput): number {
   const episodes = input.episodeCount ?? 6;
   return Math.min(36000, Math.max(16000, episodes * 3000));
-}
-
-function extractPromptLines(markdown: string): string[] {
-  const prompts: string[] = [];
-  let promptColumnIndex = -1;
-  for (const rawLine of markdown.split(/\r?\n/)) {
-    const line = rawLine
-      .trim()
-      .replace(/^`{1,3}\s*/u, "")
-      .replace(/\s*`{1,3}$/u, "")
-      .trim();
-    if (!line) {
-      promptColumnIndex = -1;
-      continue;
-    }
-    const tableCells = parseMarkdownTableRow(line);
-    if (tableCells) {
-      if (isMarkdownTableSeparator(tableCells)) continue;
-      const headerIndex = tableCells.findIndex(isPromptColumnHeader);
-      if (headerIndex >= 0) {
-        promptColumnIndex = headerIndex;
-        continue;
-      }
-      if (promptColumnIndex >= 0) {
-        const prompt = cleanPromptText(tableCells[promptColumnIndex] ?? "");
-        if (prompt) prompts.push(prompt);
-      }
-      continue;
-    }
-    promptColumnIndex = -1;
-    const promptMatch = /(?:^|[|>\-\d.)、\s])(?:\*\*)?\s*(?:Prompt(?:\s+for\s+[^:*：]+)?|提示词(?:\s*[^:*：]+)?|图像提示词|分镜图提示词)\s*(?:\*\*)?\s*[：:]\s*(.+?)\s*$/iu.exec(line);
-    if (!promptMatch) continue;
-    const prompt = cleanPromptText(promptMatch[1]!);
-    if (prompt) prompts.push(prompt);
-  }
-  return prompts;
-}
-
-function parseMarkdownTableRow(line: string): string[] | undefined {
-  if (!line.startsWith("|") || !line.endsWith("|")) return undefined;
-  const cells = line.slice(1, -1).split("|").map((cell) => cell.trim());
-  return cells.length >= 2 ? cells : undefined;
-}
-
-function isMarkdownTableSeparator(cells: readonly string[]): boolean {
-  return cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
-}
-
-function isPromptColumnHeader(cell: string): boolean {
-  return /^(?:prompt|image\s*prompt|shot\s*prompt|提示词|图像提示词|分镜图提示词)$/iu.test(
-    cell.replace(/[`*_]+/gu, "").trim(),
-  );
-}
-
-function cleanPromptText(text: string): string {
-  return text
-    .replace(/^`{1,3}\s*/u, "")
-    .replace(/\s*`{1,3}$/u, "")
-    .replace(/\s*\|\s*$/u, "")
-    .replace(/\*\*$/u, "")
-    .replace(/^(?:Prompt(?:\s+for\s+[^:*：]+)?|提示词(?:\s*[^:*：]+)?|图像提示词|分镜图提示词)\s*[：:]\s*/iu, "")
-    .replace(/\s+/g, " ")
-    .trim();
 }

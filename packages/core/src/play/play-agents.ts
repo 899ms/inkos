@@ -66,7 +66,7 @@ const PlayEntityResultSchema = Type.Object({
     Type.Literal("scene"), Type.Literal("event"),
   ]),
   label: Type.String(),
-  summary: Type.Optional(Type.String()),
+  summary: Type.String(),
   status: Type.Optional(Type.String()),
 });
 
@@ -78,7 +78,6 @@ const PlayEdgeResultSchema = Type.Object({
   value: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   visibility: Type.Optional(Type.Record(Type.String(), Type.String())),
   strength: Type.Optional(Type.Number()),
-  confidence: Type.Optional(Type.Number()),
 });
 
 const PlayStateSlotResultSchema = Type.Object({
@@ -150,28 +149,24 @@ const PLAY_SCENE_RENDER_TOOL = {
   }),
 } as const;
 
-// A play turn runs three internal LLM calls (interpret → mutate → render). The
-// transport-level retry in the provider does NOT cover HTTP 502/503/429 or
-// "temporarily unavailable", so a single flaky upstream response would break the
-// whole turn. Retry those here; each agent then applies its own safe failure policy.
-function isRetryableLlmError(err: unknown): boolean {
-  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
-  return /50[0-9]|429|temporarily unavailable|timeout|timed out|socket|terminated|econn|network|fetch failed|bad gateway|service unavailable|rate limit/.test(msg);
-}
-
-async function chatWithRetry<T>(call: () => Promise<T>, retries = 2): Promise<T> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await call();
-    } catch (err) {
-      lastErr = err;
-      if (attempt >= retries || !isRetryableLlmError(err)) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
-    }
-  }
-  throw lastErr;
-}
+const PLAY_ACTION_TOOL = {
+  name: "submit_play_action",
+  label: "Submit play action",
+  description: "Submit the interpreted player action without changing world state.",
+  parameters: Type.Object({
+    actionKind: Type.Union([
+      Type.Literal("look"), Type.Literal("say"), Type.Literal("move"),
+      Type.Literal("do"), Type.Literal("wait"),
+    ]),
+    targetEntityLabel: Type.Optional(Type.String()),
+    targetLocationLabel: Type.Optional(Type.String()),
+    intent: Type.String(),
+    manner: Type.Optional(Type.String()),
+    risk: Type.Optional(Type.String()),
+    ambiguity: Type.Optional(Type.String()),
+    secondaryActions: Type.Optional(Type.Array(Type.String())),
+  }),
+} as const;
 
 export class PlayActionInterpreterAgent extends BaseAgent {
   constructor(ctx: AgentContext) {
@@ -183,20 +178,11 @@ export class PlayActionInterpreterAgent extends BaseAgent {
   }
 
   async interpret(input: PlayActionInterpreterInput): Promise<PlayActionIntent> {
-    // Never throw: a transient upstream error (after retries) or unparseable output
-    // degrades to a generic action (the player's raw text as a "do"), not a crash.
-    let raw: unknown = {};
-    try {
-      const response = await chatWithRetry(() => this.chat([
-        { role: "system", content: buildActionInterpreterSystemPrompt(input.language ?? "zh") },
-        { role: "user", content: buildActionInterpreterUserPrompt(input, input.language ?? "zh") },
-      ], { temperature: 0.15, maxTokens: 1024 }));
-      raw = parseJson(response.content);
-    } catch { /* transient/malformed → degrade below */ }
-    const parsed = PlayActionIntentSchema.safeParse(raw);
-    return parsed.success
-      ? parsed.data
-      : PlayActionIntentSchema.parse({ actionKind: "do", intent: input.input });
+    const { result } = await this.submitStructured([
+      { role: "system", content: buildActionInterpreterSystemPrompt(input.language ?? "zh") },
+      { role: "user", content: buildActionInterpreterUserPrompt(input, input.language ?? "zh") },
+    ], PLAY_ACTION_TOOL, { temperature: 0.15, maxTokens: 1024 });
+    return PlayActionIntentSchema.parse(result);
   }
 }
 
@@ -216,43 +202,22 @@ export class PlayWorldMutatorAgent extends BaseAgent {
       buildWorldMutatorSystemPrompt(language),
       { promptId: "play.mutator", projectRoot: this.ctx.projectRoot },
     );
-    const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+    const messages: { role: "system" | "user"; content: string }[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: buildWorldMutatorUserPrompt(input, language) },
     ];
 
-    // Empty output cannot count as a completed turn: otherwise prose advances
-    // while the canonical graph stays frozen. Give the model one repair turn,
-    // then expose a blocked no-op instead of silently splitting state and prose.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const raw = await chatWithRetry(() => this.submitStructured(
-          messages,
-          WORLD_MUTATION_TOOL,
-          { temperature: 0.25, maxTokens: 4096 },
-        ));
-        const mutation = mutationFromStructuredResult(raw, input.turn, actionKind);
-        logDroppedMutationItems(raw, mutation, input.turn);
-        if (hasMutationResult(mutation)) return mutation;
-      } catch {
-        // One operation-level retry below. Transport retries remain in the Pi harness.
-      }
-      if (attempt === 0) {
-        messages.push({
-          role: "user",
-          content: language === "en"
-            ? "No usable world result was submitted. Call submit_world_mutation with a summary and the concrete state, entity, relationship, or time changes. If the action cannot proceed, submit blocked=true with blockedReason."
-            : "刚才没有提交可用的世界结算。调用 submit_world_mutation，写明 summary 和具体的状态、实体、关系或时间变化；动作不能执行时提交 blocked=true 与 blockedReason。",
-        });
-      }
+    const { result: raw } = await this.submitStructured(
+      messages,
+      WORLD_MUTATION_TOOL,
+      { temperature: 0.25, maxTokens: 4096 },
+    );
+    const mutation = mutationFromStructuredResult(raw, input.turn, actionKind);
+    logDroppedMutationItems(raw, mutation, input.turn);
+    if (!hasMutationResult(mutation)) {
+      throw new Error("Play world mutation was empty; the turn was not committed.");
     }
-
-    return withHostMutationIdentity(PlayMutationSchema.parse({
-      blocked: true,
-      blockedReason: language === "en"
-        ? "The model did not return a usable world-state transition. This turn did not advance."
-        : "模型没有返回可用的世界状态变更，本回合未推进。",
-    }), input.turn, actionKind);
+    return mutation;
   }
 }
 
@@ -351,11 +316,11 @@ export class PlaySceneRendererAgent extends BaseAgent {
       { role: "system", content: systemPrompt },
       { role: "user", content: buildSceneRendererUserPrompt(input, language) },
     ];
-    const raw = await chatWithRetry(() => this.submitStructured(
+    const { result: raw } = await this.submitStructured(
       messages,
       PLAY_SCENE_RENDER_TOOL,
       { temperature: 0.45, maxTokens: 4096 },
-    ));
+    );
     return PlaySceneRenderSchema.parse(raw);
   }
 }
@@ -371,40 +336,18 @@ export class PlaySceneReconcilerAgent extends BaseAgent {
 
   async reconcile(input: PlaySceneReconcileInput): Promise<PlayMutationInput> {
     const language = input.language ?? "zh";
-    const eventId = `evt-${input.turn}`;
     const actionKind = PlayActionIntentSchema.parse(input.action).actionKind;
-    const empty = emptyReconciliation(input.turn, actionKind);
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: buildSceneReconcilerSystemPrompt(language) },
       { role: "user", content: buildSceneReconcilerUserPrompt(input, language) },
     ];
-    try {
-      const raw = await chatWithRetry(() => this.submitStructured(
-        messages,
-        GRAPH_RECONCILIATION_TOOL,
-        { temperature: 0.1, maxTokens: 2048 },
-      ));
-      return mutationFromStructuredResult(raw, input.turn, actionKind);
-    } catch {
-      return empty;
-    }
+    const { result: raw } = await this.submitStructured(
+      messages,
+      GRAPH_RECONCILIATION_TOOL,
+      { temperature: 0.1, maxTokens: 2048 },
+    );
+    return mutationFromStructuredResult(raw, input.turn, actionKind);
   }
-}
-
-function emptyReconciliation(turn: number, actionKind: PlayActionIntent["actionKind"]): PlayMutationInput {
-  return {
-    eventId: `evt-${turn}`,
-    turn,
-    actionKind,
-    summary: "",
-    entities: { upsert: [] },
-    edges: { upsert: [], expire: [] },
-    stateSlots: { upsert: [] },
-    evidence: { transitions: [] },
-    blocked: false,
-    blockedReason: "",
-    notes: [],
-  };
 }
 
 function buildSceneReconcilerSystemPrompt(language: "zh" | "en"): string {
@@ -484,7 +427,7 @@ function buildActionInterpreterSystemPrompt(language: "zh" | "en"): string {
       "Your job is to normalize one line of the player's natural language into one of five action kinds: look / say / move / do / wait.",
       "Do not add drama for the player, do not advance the plot, do not write scene prose.",
       "look = observe/examine/recall a clue; say = speak/probe/confront; move = move to a location; do = perform an action/use an item/investigate; wait = wait/stall/watch.",
-      "Output strict JSON, no explanation.",
+      "Submit the normalized action through the result tool.",
     ].join("\n");
   }
   return [
@@ -492,7 +435,7 @@ function buildActionInterpreterSystemPrompt(language: "zh" | "en"): string {
     "你的任务是把玩家一句自然语言，归一成五类动作之一：look / say / move / do / wait。",
     "不要替玩家加戏，不要直接推进剧情，不要写场景正文。",
     "look=观察/检查/回忆线索；say=说话/试探/质问；move=移动到地点；do=执行动作/使用物品/调查；wait=等待/拖延/旁观。",
-    "输出严格 JSON，不要解释。",
+    "通过结果工具提交归一后的动作。",
   ].join("\n");
 }
 
@@ -588,7 +531,7 @@ export function buildSceneRendererSystemPrompt(mode: "open" | "guided" = "open",
         "Named people, places, objects, clues, and organizations may appear only when present in Applied changes or the current state. Treat supplied elapsed time and anchor as canonical.",
         "sceneText is narrative prose only; choices belong only in suggestedActions.",
         actionsRule,
-        "Return strict JSON: sceneText, suggestedActions.",
+        "Submit sceneText and suggestedActions through the result tool.",
       ]
     : [
         "按已激活的开放世界 Skill，根据已经应用的状态渲染可玩场景。",
@@ -596,7 +539,7 @@ export function buildSceneRendererSystemPrompt(mode: "open" | "guided" = "open",
         "具名人物、地点、物件、线索和组织只能来自已应用变化或当前状态；输入的 elapsed 与 anchor 是权威时间。",
         "sceneText 只写叙事正文，选择只能放在 suggestedActions。",
         actionsRule,
-        "返回严格 JSON：sceneText, suggestedActions。",
+        "通过结果工具提交 sceneText 与 suggestedActions。",
       ];
   return contract.join("\n");
 }
@@ -638,21 +581,4 @@ function buildSceneRendererUserPrompt(input: PlaySceneRenderInput, language: "zh
     input.stateBrief,
     input.replayContext ? ["", "重写约束：", input.replayContext].join("\n") : "",
   ].join("\n");
-}
-
-function parseJson(raw: string): unknown {
-  const trimmed = raw.trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      return JSON.parse(trimmed.slice(start, end + 1));
-    }
-    throw new Error("Play agent did not return JSON.");
-  }
 }

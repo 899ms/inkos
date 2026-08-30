@@ -28,7 +28,6 @@ interface ChapterMeta {
   readonly wordCount: number;
   readonly observations: ReadonlyArray<{
     readonly code: string;
-    readonly status: "pass" | "warning" | "fail";
     readonly summary: string;
   }>;
   readonly provenance: "generated" | "imported" | "edited";

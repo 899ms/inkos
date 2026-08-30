@@ -30,6 +30,7 @@ export interface WorkerAgentOptions {
   readonly onStreamProgress?: OnStreamProgress;
   readonly onTextDelta?: (text: string) => void;
   readonly signal?: AbortSignal;
+  readonly onUsage?: (usage: LLMResponse["usage"]) => void;
 }
 
 export interface WorkerResultTool<TParameters extends TSchema> {
@@ -368,6 +369,16 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
     }
     if (!submitted) {
       throw new Error(`Worker Agent completed without calling ${resultTool.name}`);
+    }
+    const usageMessage = [...agent.state.messages].reverse().find(
+      (message): message is AssistantMessage => message.role === "assistant" && message.usage.totalTokens > 0,
+    );
+    if (usageMessage) {
+      options.onUsage?.({
+        promptTokens: usageMessage.usage.input,
+        completionTokens: usageMessage.usage.output,
+        totalTokens: usageMessage.usage.totalTokens,
+      });
     }
     return submitted;
   } finally {

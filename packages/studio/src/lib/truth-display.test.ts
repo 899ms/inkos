@@ -170,10 +170,10 @@ describe("presentCurrentState", () => {
 
 describe("parsePendingHooks", () => {
   const table = [
-    "| hook_id | 起始章节 | 类型 | 状态 | 预期回收 | 回收卷 | 核心 | 备注 |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    "| H001 | 0 | 主线伏笔 | 未正式推进 | 200 | 第五卷中段 | 是 | 初始世界状态：陈烬从噩梦惊醒，确认重生。 |",
-    "| H004 | 0 | 次要伏笔 | 未正式推进 | 70 | 第二卷中段 | 否 | 室友李浩沉迷游戏，对前途迷茫。 |",
+    "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 备注 |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| H001 | 0 | 主线伏笔 | deferred | 0 | 第五卷揭开父亲专利真相 | 初始世界状态：陈烬从噩梦惊醒，确认重生。 |",
+    "| H004 | 0 | 次要伏笔 | deferred | 0 | 第二卷解决室友游戏债 | 室友李浩沉迷游戏，对前途迷茫。 |",
   ].join("\n");
 
   it("parses each hook's reader-facing fields and drops bookkeeping columns", () => {
@@ -183,24 +183,18 @@ describe("parsePendingHooks", () => {
       id: "H001",
       type: "主线伏笔",
       content: "初始世界状态：陈烬从噩梦惊醒，确认重生。",
-      payoff: "第五卷中段",
-      core: true,
+      payoff: "第五卷揭开父亲专利真相",
+      status: "deferred",
     });
-    expect(hooks[1].core).toBe(false);
-    expect(hooks[1].payoff).toBe("第二卷中段");
+    expect(hooks[1].payoff).toBe("第二卷解决室友游戏债");
   });
 
-  it("parses promoted state so seed hooks are not confused with active hook debt", () => {
-    const phase7 = [
-      "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-      "| H001 | 0 | 主线伏笔 | open | 0 | 200 | slow-burn | 无 | 第五卷 | 是 | 10 | 是 | 父亲专利的黑箱。 |",
-      "| H004 | 0 | 次要伏笔 | open | 0 | 70 | near-term | 无 | 第二卷 | 否 | 10 | 否 | 室友游戏债。 |",
-    ].join("\n");
+  it("uses the explicit hook status for display", () => {
+    const phase7 = table.replaceAll("deferred", "open");
 
     const hooks = parsePendingHooks(phase7);
-    expect(hooks[0]).toMatchObject({ id: "H001", promoted: true });
-    expect(hooks[1]).toMatchObject({ id: "H004", promoted: false });
+    expect(hooks[0]).toMatchObject({ id: "H001", status: "open" });
+    expect(hooks[1]).toMatchObject({ id: "H004", status: "open" });
   });
 
   it("is robust to column reordering (parses by header name)", () => {
@@ -210,7 +204,7 @@ describe("parsePendingHooks", () => {
       "| 内容 X | 情感线伏笔 | H007 | 否 |",
     ].join("\n");
     const hooks = parsePendingHooks(reordered);
-    expect(hooks[0]).toMatchObject({ id: "H007", type: "情感线伏笔", content: "内容 X", core: false });
+    expect(hooks[0]).toMatchObject({ id: "H007", type: "情感线伏笔", content: "内容 X" });
   });
 
   it("returns an empty array for non-table content", () => {

@@ -6,20 +6,19 @@ import { executeEditTransaction, type EditRequest } from "../../interaction/edit
 import { StateManager } from "../../state/manager.js";
 import { assertSafeBookId } from "../../utils/book-id.js";
 import { safeChildPath } from "../../utils/path-safety.js";
+import { BookRulesDataToolSchema } from "../../agents/architect-tool.js";
+import { BookRulesSchema } from "../../models/book-rules.js";
+import { commitAtomicFileSet } from "../../utils/atomic-file-set.js";
 
 const SAFE_TRUTH_FLAT_FILE_NAMES = new Set([
   "author_intent.md",
   "current_focus.md",
-  "story_bible.md",
-  "volume_outline.md",
   "book_rules.md",
-  "particle_ledger.md",
   "subplot_board.md",
   "emotional_arcs.md",
   "style_guide.md",
   "parent_canon.md",
   "fanfic_canon.md",
-  "character_matrix.md",
   "current_state.md",
   "pending_hooks.md",
   "chapter_summaries.md",
@@ -28,8 +27,6 @@ const SAFE_TRUTH_FLAT_FILE_NAMES = new Set([
 const SAFE_TRUTH_OUTLINE_FILE_NAMES = new Set([
   "outline/story_frame.md",
   "outline/volume_map.md",
-  "outline/节奏原则.md",
-  "outline/rhythm_principles.md",
 ]);
 
 const SAFE_ROLE_TRUTH_FILE_RE = /^roles\/(主要角色|次要角色|major|minor)\/[^/\\]+\.md$/u;
@@ -90,6 +87,7 @@ const WriteTruthFileParams = Type.Object({
   bookId: Type.Optional(Type.String({ description: "Work ID. Omit to use the active Work." })),
   fileName: Type.String({ description: "Truth file path under story/." }),
   content: Type.String({ description: "Full replacement content for the truth file." }),
+  bookRulesData: Type.Optional(BookRulesDataToolSchema),
 });
 
 export function createWriteTruthFileTool(
@@ -109,7 +107,21 @@ export function createWriteTruthFileTool(
         await state.ensureControlDocuments(bookId);
         const targetPath = safeChildPath(join(state.bookDir(bookId), "story"), fileName);
         await mkdir(dirname(targetPath), { recursive: true });
-        await writeFile(targetPath, params.content, "utf-8");
+        if (fileName === "book_rules.md") {
+          if (!params.bookRulesData) {
+            throw new Error("write_truth_file requires bookRulesData when replacing book_rules.md");
+          }
+          const data = BookRulesSchema.parse(params.bookRulesData);
+          await commitAtomicFileSet({
+            rootDir: state.bookDir(bookId),
+            writes: [
+              { relativePath: join("story", "book_rules.md"), content: params.content },
+              { relativePath: join("story", "book_rules.json"), content: `${JSON.stringify(data, null, 2)}\n` },
+            ],
+          });
+        } else {
+          await writeFile(targetPath, params.content, "utf-8");
+        }
       });
       return textResult(`Updated "${fileName}" for "${bookId}".`, {
         kind: "truth_file_updated",

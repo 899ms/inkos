@@ -203,16 +203,15 @@ export interface PendingHook {
   readonly id: string;
   readonly type: string; // 类型 — 主线伏笔 / 角色前置 / 情感线伏笔 …
   readonly content: string; // 备注 — the actual foreshadow / setup text
-  readonly payoff: string; // 回收卷 — where it pays off
-  readonly core: boolean; // 核心 — load-bearing hook
-  readonly promoted?: boolean; // 升级 — true means live hook debt; false means seed pool
+  readonly payoff: string;
+  readonly status: string;
 }
 
 function splitTableRow(line: string): string[] {
   return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
 }
 
-// pending_hooks.md is a 13-column tracking table. Only a few columns are
+// pending_hooks.md is an explicit-state tracking table. Only a few columns are
 // reader-facing; parse the table by header name (robust to column reordering)
 // and keep the meaningful ones so the UI can render browsable cards instead of
 // an unreadable wide table.
@@ -222,11 +221,10 @@ export function parsePendingHooks(md: string): ReadonlyArray<PendingHook> {
   const header = splitTableRow(rows[0]);
   const colOf = (...names: string[]) => header.findIndex((h) => names.includes(h));
   const idIdx = colOf("hook_id", "id");
-  const typeIdx = colOf("类型");
-  const payoffIdx = colOf("回收卷");
-  const coreIdx = colOf("核心");
-  const promotedIdx = colOf("升级", "promoted");
-  const contentIdx = colOf("备注");
+  const typeIdx = colOf("类型", "type");
+  const statusIdx = colOf("状态", "status");
+  const payoffIdx = colOf("预期回收", "expected_payoff", "回收卷");
+  const contentIdx = colOf("备注", "notes");
 
   return rows
     .slice(1)
@@ -238,25 +236,14 @@ export function parsePendingHooks(md: string): ReadonlyArray<PendingHook> {
       type: typeIdx >= 0 ? cells[typeIdx] : "",
       content: contentIdx >= 0 ? cells[contentIdx] : "",
       payoff: payoffIdx >= 0 ? cells[payoffIdx] : "",
-      core: coreIdx >= 0 && cells[coreIdx] === "是",
-      promoted: promotedIdx >= 0 ? parsePromotedCell(cells[promotedIdx]) : undefined,
+      status: statusIdx >= 0 ? cells[statusIdx] : "",
     }))
     .filter((hook) => hook.content.length > 0 || hook.id.length > 0);
-}
-
-function parsePromotedCell(cell: string | undefined): boolean | undefined {
-  const normalized = (cell ?? "").trim().toLowerCase();
-  if (!normalized) return undefined;
-  if (/^(true|yes|y|是|核心|core|1|✓|✔|promoted|已升级)$/.test(normalized)) return true;
-  if (/^(false|no|n|否|未升级|seed|0|✗|✘)$/.test(normalized)) return false;
-  return undefined;
 }
 
 export const FOUNDATION_FILE_ORDER: ReadonlyArray<string> = [
   "outline/story_frame.md",
   "outline/volume_map.md",
-  "story_bible.md",
-  "volume_outline.md",
   "book_rules.md",
   "current_state.md",
   "pending_hooks.md",

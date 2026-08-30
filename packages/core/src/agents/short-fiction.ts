@@ -14,6 +14,7 @@ import {
   buildShortFictionWriterSystemPrompt,
   buildShortFictionWriterUserPrompt,
 } from "../prompts/short-fiction.js";
+import { ShortDraftBatchToolSchema, ShortOutlineToolSchema, ShortPackageToolSchema } from "./short-fiction-tool.js";
 
 export const SHORT_FICTION_DEFAULT_CHAPTERS = 12;
 export const SHORT_FICTION_MIN_CHAPTERS = 12;
@@ -102,13 +103,17 @@ export class ShortFictionOutlineAgent extends BaseAgent {
   }
 
   async createOutline(input: ShortFictionOutlineInput): Promise<ShortFictionOutline> {
-    const response = await retryShortFictionCall(() =>
-      this.chat([
+    const response = await this.submitStructured([
         { role: "system", content: buildShortFictionOutlineSystemPrompt(input.language) },
         { role: "user", content: buildShortFictionOutlineUserPrompt(input, input.language) },
-      ], { temperature: 0.55, maxTokens: 16_384 }), this.name, this.log);
+      ], {
+        name: "submit_short_outline",
+        label: "Submit short-fiction outline",
+        description: "Submit the story title and complete readable plan.",
+        parameters: ShortOutlineToolSchema,
+      }, { temperature: 0.55, maxTokens: 16_384 });
 
-    return parseShortFictionOutline(response.content, input.language);
+    return { storyTitle: response.result.storyTitle.trim(), rawContent: response.result.planMarkdown.trim() };
   }
 }
 
@@ -123,42 +128,39 @@ export class ShortFictionWriterAgent extends BaseAgent {
       input.charsPerChapter,
       this.ctx.client.defaults.maxTokens,
     );
-    const outputs: string[] = [];
     const completedChapterNumbers: number[] = [];
     let currentDraft: ShortFictionBatchDraft | undefined;
     for (const chapterNumbers of batches) {
-      const response = await retryShortFictionCall(() =>
-        this.chat([
+      const response = await this.submitStructured([
           { role: "system", content: buildShortFictionWriterSystemPrompt(input.language) },
           {
             role: "user",
             content: buildShortFictionWriterUserPrompt({
               ...input,
               chapterNumbers,
-              ...(outputs.length > 0 ? { previousDraftMarkdown: outputs.join("\n\n") } : {}),
+              ...(currentDraft ? { previousDraftMarkdown: renderShortFictionDraftMarkdown(currentDraft, input.language) } : {}),
             }, input.language),
           },
         ], {
+          name: "submit_short_draft_batch",
+          label: "Submit short-fiction draft batch",
+          description: "Submit the requested complete chapter drafts.",
+          parameters: ShortDraftBatchToolSchema,
+        }, {
           temperature: 0.58,
           maxTokens: estimateShortFictionMaxTokens(
             chapterNumbers.length,
             input.charsPerChapter,
             this.ctx.client.defaults.maxTokens,
           ),
-        }), this.name, this.log);
-      outputs.push(response.content.trim());
+        });
       completedChapterNumbers.push(...chapterNumbers);
-      currentDraft = parseShortFictionBatchDraft(outputs.join("\n\n"), {
-        expectedChapters: input.chapterCount,
-        language: input.language,
-      });
+      currentDraft = mergeShortFictionBatch(currentDraft, response.result, input.chapterCount, input.language);
       await input.onBatchComplete?.(currentDraft, completedChapterNumbers);
     }
 
-    return currentDraft ?? parseShortFictionBatchDraft("", {
-      expectedChapters: input.chapterCount,
-      language: input.language,
-    });
+    if (!currentDraft) throw new Error("Short-fiction writer returned no chapter batch");
+    return currentDraft;
   }
 
   async continueDraft(input: ShortFictionDraftInput & { readonly draft: ShortFictionBatchDraft }): Promise<ShortFictionBatchDraft> {
@@ -177,8 +179,7 @@ export class ShortFictionWriterAgent extends BaseAgent {
       this.ctx.client.defaults.maxTokens,
     );
     for (const chapterNumbers of batches) {
-      const response = await retryShortFictionCall(() =>
-        this.chat([
+      const response = await this.submitStructured([
           { role: "system", content: buildShortFictionWriterSystemPrompt(input.language) },
           { role: "user", content: buildShortFictionWriterUserPrompt({
             ...input,
@@ -186,17 +187,19 @@ export class ShortFictionWriterAgent extends BaseAgent {
             previousDraftMarkdown: renderShortFictionDraftMarkdown(currentDraft, input.language),
           }, input.language) },
         ], {
+          name: "submit_short_draft_batch",
+          label: "Submit short-fiction draft batch",
+          description: "Submit the requested complete chapter drafts.",
+          parameters: ShortDraftBatchToolSchema,
+        }, {
           temperature: 0.68,
           maxTokens: estimateShortFictionMaxTokens(
             chapterNumbers.length,
             input.charsPerChapter,
             this.ctx.client.defaults.maxTokens,
           ),
-        }), this.name, this.log);
-      currentDraft = parseShortFictionBatchDraft(
-        `${currentDraft.rawContent.trim()}\n\n${response.content.trim()}`,
-        { expectedChapters: input.chapterCount, language: input.language },
-      );
+        });
+      currentDraft = mergeShortFictionBatch(currentDraft, response.result, input.chapterCount, input.language);
       completedChapterNumbers.push(...chapterNumbers);
       await input.onBatchComplete?.(currentDraft, completedChapterNumbers);
     }
@@ -210,14 +213,13 @@ export class ShortFictionDraftReviewerAgent extends BaseAgent {
   }
 
   async reviewDraft(input: ShortFictionDraftReviewInput): Promise<string> {
-    const response = await retryShortFictionCall(() =>
-      this.chat([
+    const response = await this.chat([
         { role: "system", content: buildShortFictionDraftReviewSystemPrompt(input.language) },
         { role: "user", content: buildShortFictionDraftReviewUserPrompt({
           ...input,
           draftMarkdown: renderShortFictionDraftMarkdown(input.draft, input.language),
         }, input.language) },
-      ], { temperature: 0.3, maxTokens: 8192 }), this.name, this.log);
+      ], { temperature: 0.3, maxTokens: 8192 });
 
     return response.content.trim();
   }
@@ -229,8 +231,7 @@ export class ShortFictionPackagingAgent extends BaseAgent {
   }
 
   async generatePackage(input: ShortFictionPackageInput): Promise<ShortFictionSalesPackage> {
-    const response = await retryShortFictionCall(() =>
-      this.chat([
+    const response = await this.submitStructured([
         { role: "system", content: buildShortFictionPackageSystemPrompt(input.language) },
         { role: "user", content: buildShortFictionPackageUserPrompt({
           direction: input.direction,
@@ -238,74 +239,70 @@ export class ShortFictionPackagingAgent extends BaseAgent {
           draftMarkdown: renderShortFictionDraftMarkdown(input.draft, input.language),
           draftTitle: input.draft.storyTitle,
         }, input.language) },
-      ], { temperature: 0.45, maxTokens: 4096 }), this.name, this.log);
+      ], {
+        name: "submit_short_package",
+        label: "Submit short-fiction package",
+        description: "Submit title, synopsis, selling points, and cover prompt.",
+        parameters: ShortPackageToolSchema,
+      }, { temperature: 0.45, maxTokens: 4096 });
 
-    return parseShortFictionSalesPackage(response.content, input.draft.storyTitle);
+    const result = response.result;
+    return {
+      title: result.title.trim() || input.draft.storyTitle,
+      intro: result.intro.trim(),
+      sellingPoints: result.sellingPoints.map((point) => point.trim()).filter(Boolean),
+      coverPrompt: result.coverPrompt.trim(),
+      rawContent: [
+        `# ${result.title.trim() || input.draft.storyTitle}`,
+        `## Intro\n${result.intro.trim()}`,
+        `## Selling Points\n${result.sellingPoints.map((point) => `- ${point}`).join("\n")}`,
+        `## Cover Prompt\n${result.coverPrompt.trim()}`,
+      ].join("\n\n"),
+    };
   }
 }
 
-export function parseShortFictionOutline(
-  rawContent: string,
+function mergeShortFictionBatch(
+  current: ShortFictionBatchDraft | undefined,
+  batch: {
+    readonly storyTitle?: string;
+    readonly openingHook?: string;
+    readonly chapters: ReadonlyArray<{ readonly number: number; readonly title: string; readonly content: string }>;
+  },
+  expectedChapters: number,
   language: ShortFictionLanguage = "zh",
-): ShortFictionOutline {
-  const fallbackTitle = untitledShortTitle(language);
-  const storyTitle = normalizeTitle(
-    extractTaggedBlock(rawContent, "SHORT_FICTION_PLAN_TITLE")
-    || extractTaggedBlock(rawContent, "SHORT_FICTION_TITLE")
-    || extractFirstHeading(rawContent)
-    || fallbackTitle,
-  ) || fallbackTitle;
-  return { storyTitle, rawContent: rawContent.trim() };
-}
-
-export function parseShortFictionBatchDraft(
-  rawContent: string,
-  options?: { readonly expectedChapters?: number; readonly language?: ShortFictionLanguage },
 ): ShortFictionBatchDraft {
-  const expectedChapters = options?.expectedChapters ?? SHORT_FICTION_DEFAULT_CHAPTERS;
-  const language = options?.language ?? "zh";
   const countingMode = resolveLengthCountingMode(language);
-  const fallbackTitle = untitledShortTitle(language);
-  const storyTitle = normalizeTitle(
-    extractTaggedBlock(rawContent, "SHORT_FICTION_TITLE")
-    || extractFirstHeading(rawContent)
-    || fallbackTitle,
-  ) || fallbackTitle;
-  const openingHook = extractTaggedBlock(rawContent, "SHORT_FICTION_OPENING_HOOK")
-    || extractTaggedBlock(rawContent, "OPENING_HOOK");
-
-  const chapters: ShortFictionChapter[] = [];
-  for (let number = 1; number <= expectedChapters; number += 1) {
-    const title = normalizeChapterTitle(
-      extractTaggedBlock(rawContent, `CHAPTER ${number} TITLE`)
-      || extractMarkdownChapterTitle(rawContent, number)
-      || fallbackChapterTitle(number, language),
-      number,
-      language,
-    );
-    const content = sanitizeChapterContent(
-      extractLastNonEmptyTaggedBlock(rawContent, `CHAPTER ${number} CONTENT`)
-      || extractDuplicateTitleTaggedChapterContent(rawContent, number)
-      || extractMarkdownChapterContent(rawContent, number)
-      || "",
-    );
-    chapters.push({
-      number,
-      title,
+  const byNumber = new Map(current?.chapters.map((chapter) => [chapter.number, chapter]) ?? []);
+  for (const chapter of batch.chapters) {
+    if (!Number.isInteger(chapter.number) || chapter.number < 1 || chapter.number > expectedChapters) continue;
+    const content = chapter.content.trim();
+    byNumber.set(chapter.number, {
+      number: chapter.number,
+      title: chapter.title.trim() || fallbackChapterTitle(chapter.number, language),
       content,
-      // charCount is in the language's native counting unit: zh characters or en words.
       charCount: countChapterLength(content, countingMode),
     });
   }
-
-  return {
+  const storyTitle = batch.storyTitle?.trim() || current?.storyTitle || untitledShortTitle(language);
+  const openingHook = batch.openingHook?.trim() || current?.openingHook;
+  const chapters = Array.from({ length: expectedChapters }, (_, index) => {
+    const number = index + 1;
+    return byNumber.get(number) ?? {
+      number,
+      title: fallbackChapterTitle(number, language),
+      content: "",
+      charCount: 0,
+    };
+  });
+  const draft: ShortFictionBatchDraft = {
     storyTitle,
-    openingHook: openingHook.trim() || undefined,
+    ...(openingHook ? { openingHook } : {}),
     chapters,
-    rawContent,
+    rawContent: "",
   };
+  return { ...draft, rawContent: renderShortFictionDraftMarkdown(draft, language) };
 }
-
 export function validateShortFictionDraftForFinal(
   draft: ShortFictionBatchDraft,
   options?: { readonly expectedChapters?: number; readonly minimumChapterLength?: number },
@@ -354,117 +351,6 @@ export function renderShortFictionDraftMarkdown(
       chapter.content,
     ].join("\n")),
   ].filter(Boolean).join("\n\n");
-}
-
-export function parseShortFictionSalesPackage(rawContent: string, fallbackTitle = "未命名短篇"): ShortFictionSalesPackage {
-  const title = normalizeTitle(
-    extractTaggedBlock(rawContent, "SHORT_FICTION_PACKAGE_TITLE")
-    || extractTaggedBlock(rawContent, "SHORT_FICTION_TITLE")
-    || fallbackTitle,
-  ) || fallbackTitle;
-  const intro = extractTaggedBlock(rawContent, "SHORT_FICTION_INTRO")
-    || extractTaggedBlock(rawContent, "INTRO")
-    || "";
-  const sellingRaw = extractTaggedBlock(rawContent, "SHORT_FICTION_SELLING_POINTS")
-    || extractTaggedBlock(rawContent, "SELLING_POINTS")
-    || "";
-  const coverPrompt = extractTaggedBlock(rawContent, "SHORT_FICTION_COVER_PROMPT")
-    || extractTaggedBlock(rawContent, "COVER_PROMPT")
-    || "";
-  return {
-    title,
-    intro: intro.trim(),
-    sellingPoints: sellingRaw
-      .split(/\n+/)
-      .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
-      .filter(Boolean),
-    coverPrompt: coverPrompt.trim(),
-    rawContent: rawContent.trim(),
-  };
-}
-
-function extractTaggedBlock(raw: string, tag: string): string {
-  return extractTaggedBlocks(raw, tag)[0] ?? "";
-}
-
-function extractLastNonEmptyTaggedBlock(raw: string, tag: string): string {
-  return extractTaggedBlocks(raw, tag)
-    .map((block) => block.trim())
-    .filter(Boolean)
-    .at(-1) ?? "";
-}
-
-function extractTaggedBlocks(raw: string, tag: string): string[] {
-  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const tagPattern = new RegExp(`^\\s*===\\s*${escaped}\\s*===\\s*$`, "gim");
-  const nextTagPattern = /^\s*===\s*[A-Z0-9_ ]+\s*===\s*$/gim;
-  const blocks: string[] = [];
-  for (const match of raw.matchAll(tagPattern)) {
-    if (match.index === undefined) continue;
-    const start = match.index + match[0].length;
-    const rest = raw.slice(start).replace(/^\s*\n/, "");
-    nextTagPattern.lastIndex = 0;
-    const next = nextTagPattern.exec(rest);
-    blocks.push((next ? rest.slice(0, next.index) : rest).trim());
-  }
-  return blocks;
-}
-
-function extractFirstHeading(raw: string): string {
-  return raw.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? "";
-}
-
-function extractMarkdownChapterTitle(raw: string, number: number): string {
-  const pattern = new RegExp(`^##\\s*(?:${markdownChapterPrefixPattern(number)})?(.+)$`, "m");
-  return pattern.exec(raw)?.[1]?.trim() ?? "";
-}
-
-function extractMarkdownChapterContent(raw: string, number: number): string {
-  const pattern = new RegExp(`^##\\s*(?:${markdownChapterPrefixPattern(number)})?.*$\\n([\\s\\S]*?)(?=^##\\s*(?:${markdownChapterPrefixPattern(number + 1)})?.*$|(?![\\s\\S]))`, "m");
-  return pattern.exec(raw)?.[1]?.trim() ?? "";
-}
-
-// Matches a zh "第N章" or en "Chapter N" heading prefix inside markdown fallbacks.
-function markdownChapterPrefixPattern(number: number): string {
-  return `第\\s*${number}\\s*章\\s*|Chapter\\s*${number}\\s*[:：.\\-–—]?\\s*`;
-}
-
-function extractDuplicateTitleTaggedChapterContent(raw: string, number: number): string {
-  const escapedTag = `CHAPTER ${number} TITLE`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const titlePattern = new RegExp(`^\\s*===\\s*${escapedTag}\\s*===\\s*$`, "gim");
-  const matches = Array.from(raw.matchAll(titlePattern));
-  const duplicateTitle = matches[1];
-  if (!duplicateTitle || duplicateTitle.index === undefined) return "";
-
-  const start = duplicateTitle.index + duplicateTitle[0].length;
-  const rest = raw.slice(start).replace(/^\s*\n/, "");
-  const nextTag = rest.search(/^\s*===\s*(?:CHAPTER\s+\d+\s+(?:TITLE|CONTENT)|SHORT_FICTION_[A-Z0-9_ ]+)\s*===\s*$/im);
-  return (nextTag >= 0 ? rest.slice(0, nextTag) : rest).trim();
-}
-
-function sanitizeChapterContent(raw: string): string {
-  return raw
-    .replace(/^```(?:md|markdown)?\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .replace(/^===\s*[A-Z0-9_ ]+\s*===\s*$/gim, "")
-    .trim();
-}
-
-function normalizeTitle(raw: string): string {
-  return raw
-    .split("\n")
-    .map((line) => line.replace(/^#+\s*/, "").trim())
-    .find(Boolean)
-    ?.replace(/^《(.+)》$/, "$1")
-    .trim() ?? "";
-}
-
-function normalizeChapterTitle(raw: string, number: number, language: ShortFictionLanguage = "zh"): string {
-  const prefixPattern = language === "en"
-    ? new RegExp(`^Chapter\\s*${number}\\s*[:：.\\-–—]?\\s*`, "i")
-    : new RegExp(`^第\\s*${number}\\s*章\\s*`);
-  const title = normalizeTitle(raw).replace(prefixPattern, "").trim();
-  return title || fallbackChapterTitle(number, language);
 }
 
 export function formatShortFictionChapterHeading(
@@ -552,31 +438,4 @@ function selectShortFictionChapters(
     ...draft,
     chapters: draft.chapters.filter((chapter) => selected.has(chapter.number)),
   };
-}
-
-async function retryShortFictionCall<T>(
-  operation: () => Promise<T>,
-  label: string,
-  logger?: { warn(message: string): void },
-): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      return await operation();
-    } catch (e) {
-      lastError = e;
-      if (attempt >= 2 || !isTransientShortFictionError(e)) throw e;
-      logger?.warn(`[${label}] transient LLM interruption, retrying once: ${String(e)}`);
-    }
-  }
-  throw lastError;
-}
-
-function isTransientShortFictionError(error: unknown): boolean {
-  const message = String(error).toLowerCase();
-  return message.includes("unexpected eof")
-    || message.includes("econnreset")
-    || message.includes("socket hang up")
-    || message.includes("terminated")
-    || message.includes("fetch failed");
 }

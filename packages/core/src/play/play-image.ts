@@ -15,23 +15,6 @@ import {
   resolveCoverGenerationRequest,
 } from "../pipeline/short-fiction-runner.js";
 
-/** Per-type task framing only; visual style must come from the world / visual contract. */
-const SHOT_BY_TYPE: Record<string, string> = {
-  actor: "为这个角色生成配图",
-  location: "为这个地点生成配图",
-  item: "为这件物品生成配图",
-  evidence: "为这件证物生成配图",
-  clue: "为这条线索生成配图",
-  claim: "为这个主张生成配图",
-  proof_chain: "为这条证据链生成配图",
-  organization: "为这个组织生成配图",
-};
-
-function clamp(text: string, max: number): string {
-  const trimmed = text.trim();
-  return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
-}
-
 export interface PlayImageWorldContext {
   readonly premise?: string;
   readonly worldContract?: string;
@@ -44,15 +27,15 @@ function renderImageWorldContext(input: PlayImageWorldInput): string {
   if (!input) return "";
   if (typeof input === "string") {
     const premise = input.trim();
-    return premise ? `世界设定（决定时代、场景与整体美术风格，必须贴合）：${clamp(premise, 600)}` : "";
+    return premise ? `世界设定：${premise}` : "";
   }
   const premise = input.premise?.trim();
   const worldContract = input.worldContract?.trim();
   const visualContract = input.visualContract?.trim();
   return [
-    premise ? `世界设定（决定时代、场景与整体美术风格，必须贴合）：${clamp(premise, 600)}` : "",
-    worldContract ? `世界契约（只遵守用户定义的规则，不要自行发明 RPG/数值/等级系统）：${clamp(worldContract, 700)}` : "",
-    visualContract ? `视觉契约（图片必须按这条表达语义）：${clamp(visualContract, 700)}` : "",
+    premise ? `世界设定：${premise}` : "",
+    worldContract ? `世界契约：${worldContract}` : "",
+    visualContract ? `视觉契约：${visualContract}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -66,13 +49,12 @@ export function buildPlayEntityImagePrompt(
   worldPremise?: PlayImageWorldInput,
 ): string {
   const worldContext = renderImageWorldContext(worldPremise);
-  const subject = SHOT_BY_TYPE[entity.type] ?? "为这个对象生成配图";
   const summary = entity.summary?.trim();
   return [
     worldContext,
-    subject,
+    `对象类型：${entity.type}`,
     `对象：${entity.label}`,
-    summary ? `细节：${clamp(summary, 400)}` : "",
+    summary ? `细节：${summary}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -81,8 +63,8 @@ export function buildPlaySceneImagePrompt(sceneText: string, worldPremise?: Play
   const worldContext = renderImageWorldContext(worldPremise);
   return [
     worldContext,
-    "为下面这一刻生成配图，捕捉当下的动作、氛围与情绪：",
-    clamp(sceneText, 900),
+    "当前场景：",
+    sceneText.trim(),
   ].filter(Boolean).join("\n");
 }
 

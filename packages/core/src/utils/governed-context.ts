@@ -4,7 +4,7 @@ export function buildGovernedMemoryEvidenceBlocks(
   contextPackage: ContextPackage,
   language?: "zh" | "en",
 ): {
-  readonly hookDebtBlock?: string;
+  readonly referencedHooksBlock?: string;
   readonly hooksBlock?: string;
   readonly summariesBlock?: string;
   readonly volumeSummariesBlock?: string;
@@ -16,8 +16,8 @@ export function buildGovernedMemoryEvidenceBlocks(
   const hookEntries = contextPackage.selectedContext.filter((entry) =>
     entry.source.startsWith("story/pending_hooks.md#"),
   );
-  const hookDebtEntries = contextPackage.selectedContext.filter((entry) =>
-    entry.source.startsWith("runtime/hook_debt#"),
+  const referencedHookEntries = contextPackage.selectedContext.filter((entry) =>
+    entry.source.startsWith("runtime/referenced_hook#"),
   );
   const summaryEntries = contextPackage.selectedContext.filter((entry) =>
     entry.source.startsWith("story/chapter_summaries.md#"),
@@ -37,10 +37,10 @@ export function buildGovernedMemoryEvidenceBlocks(
   );
 
   return {
-    hookDebtBlock: hookDebtEntries.length > 0
-      ? renderHookDebtBlock(
-          resolvedLanguage === "en" ? "Hook Debt Briefs" : "Hook Debt Briefs",
-          hookDebtEntries,
+    referencedHooksBlock: referencedHookEntries.length > 0
+      ? renderReferencedHooksBlock(
+          resolvedLanguage === "en" ? "Memo-referenced hooks" : "备忘引用伏笔",
+          referencedHookEntries,
         )
       : undefined,
     hooksBlock: hookEntries.length > 0
@@ -82,7 +82,7 @@ export function buildGovernedMemoryEvidenceBlocks(
   };
 }
 
-function renderHookDebtBlock(
+function renderReferencedHooksBlock(
   heading: string,
   entries: ContextPackage["selectedContext"],
 ): string {

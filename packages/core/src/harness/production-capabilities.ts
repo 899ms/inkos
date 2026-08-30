@@ -334,23 +334,29 @@ export function createProductionCapabilityRegistry(
     createFanficBookTool(environment.pipeline, environment.projectRoot, {
       defaultSkills: mergeActivatedSkillGuidance(
         environment.profileSkills?.("longform-novel") ?? [],
-        environment.skillActivations?.("inkos-story-import") ?? [],
+        environment.skillActivations?.("inkos-story-import", "inkos-fanfic-writing") ?? [],
       ),
       activeSkills: environment.activeSkills,
     }),
     createContinuationImportTool(environment.pipeline, environment.work?.id ?? null, environment.projectRoot, {
       defaultSkills: mergeActivatedSkillGuidance(
         environment.profileSkills?.("longform-novel") ?? [],
-        environment.skillActivations?.("inkos-story-import") ?? [],
+        environment.skillActivations?.("inkos-story-import", "inkos-continuation-writing") ?? [],
       ),
       activeSkills: environment.activeSkills,
     }),
     createSpinoffBookTool(environment.pipeline, environment.projectRoot, {
-      defaultSkills: environment.profileSkills?.("longform-novel"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        environment.profileSkills?.("longform-novel") ?? [],
+        environment.skillActivations?.("inkos-spinoff-writing") ?? [],
+      ),
       activeSkills: environment.activeSkills,
     }),
     createImitationBookTool(environment.pipeline, environment.projectRoot, {
-      defaultSkills: environment.profileSkills?.("longform-novel"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        environment.profileSkills?.("longform-novel") ?? [],
+        environment.skillActivations?.("inkos-imitation-writing") ?? [],
+      ),
       activeSkills: environment.activeSkills,
     }),
   ]);
@@ -481,9 +487,7 @@ async function normalizeToolResult(
     }
   }
   const observations = extractObservations(details);
-  const status = isError
-    ? "error"
-    : observations.some((observation) => observation.status !== "pass") ? "warning" : "success";
+  const status = isError ? "error" : "success";
   const summary = content.split("\n").map((line) => line.trim()).find(Boolean)
     ?? (status === "error" ? "Action failed." : "Action completed.");
   return ActionResultSchema.parse({
@@ -511,7 +515,6 @@ function extractObservations(details: unknown): Observation[] {
     return [ObservationSchema.parse({
       code: typeof record.category === "string" && record.category ? record.category : `review-${index + 1}`,
       kind: "soft",
-      status: "warning",
       summary: record.description,
       evidence: typeof record.suggestion === "string" && record.suggestion ? [record.suggestion] : [],
     })];

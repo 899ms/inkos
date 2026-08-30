@@ -83,7 +83,7 @@ export const statusCommand = new Command("status")
               const icon = ch.observations.length > 0 ? "!" : "+";
               log(`    [${icon}] Ch.${ch.number} "${ch.title}" | ${formatLengthCount(ch.wordCount, countingMode)} | ${ch.provenance}`);
               for (const observation of ch.observations) {
-                log(`        [${observation.status}] ${observation.code}: ${observation.summary}`);
+                log(`        [${observation.kind}] ${observation.code}: ${observation.summary}`);
               }
             }
           }

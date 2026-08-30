@@ -843,7 +843,6 @@ function migrateChapterMeta(value: unknown): ChapterMeta {
       ? record.auditIssues.filter((issue): issue is string => typeof issue === "string").map((issue, index) => ({
           code: `legacy-review-${index + 1}`,
           kind: "soft" as const,
-          status: "warning" as const,
           summary: issue,
           evidence: [],
         }))
@@ -852,7 +851,6 @@ function migrateChapterMeta(value: unknown): ChapterMeta {
     observations.push({
       code: "state-sync-required",
       kind: "hard",
-      status: "fail",
       summary: "Chapter body and derived story state require synchronization.",
       evidence: [],
     });

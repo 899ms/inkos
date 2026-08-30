@@ -24,7 +24,7 @@ export function makeForecastBranch(overrides: Partial<ForecastBranch> = {}): For
       { kind: "character", description: "主角人设锁强调不妥协，接受提议需要强动机铺垫。" },
     ],
     uncertainties: ["盟友是否会立即反目尚不确定"],
-    intentAlignment: { score: 62, rationale: "偏离作者意图中的复仇主线，但制造了新张力。" },
+    intentRationale: "偏离作者意图中的复仇主线，但制造了新张力。",
     ...overrides,
   };
 }
@@ -94,7 +94,7 @@ export function makeForecast(overrides: Partial<NarrativeForecast> = {}): Narrat
         branchId: "branch-2",
         title: "主角拒绝提议",
         premise: "假设主角当场拒绝并公开对手把柄。",
-        intentAlignment: { score: 88, rationale: "延续复仇主线，符合当前聚焦。" },
+        intentRationale: "延续复仇主线，符合当前聚焦。",
       }),
     ],
     ...overrides,

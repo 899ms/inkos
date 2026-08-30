@@ -30,7 +30,7 @@ export const reviewCommand = new Command("review")
           if (!opts.json) {
             log(`\n${book.title} · Ch.${chapter.number} "${chapter.title}" · ${formatLengthCount(chapter.wordCount, countingMode)}`);
             for (const observation of chapter.observations) {
-              log(`  [${observation.status}] ${observation.code}: ${observation.summary}`);
+              log(`  [${observation.kind}] ${observation.code}: ${observation.summary}`);
             }
           }
         }

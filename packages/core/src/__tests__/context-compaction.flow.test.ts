@@ -105,4 +105,32 @@ describe("context assembly mini-flow", () => {
       budgetTokens: 30,
     })).rejects.toBeInstanceOf(ProtectedContextOverflowError);
   });
+
+  it("compacts the complete historical middle only after the session budget is exceeded", async () => {
+    const profile = createBuiltInWorkProfileRegistry().require("workspace-default");
+    const history = "Earlier decision and tool outcome. ".repeat(200);
+    let receivedHistory = "";
+    const phases: string[] = [];
+    const transform = createHarnessContextTransform({
+      projectRoot: "/tmp",
+      work: null,
+      profile,
+      budgetTokens: 220,
+      conversationCompactor: async (request) => {
+        receivedHistory = request.history;
+        return "- The user approved the earlier decision.\n- The tool completed the artifact.";
+      },
+      onContextCompression: (event) => phases.push(event.phase),
+    });
+    const result = await transform([
+      { role: "user", content: history, timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: history }], timestamp: 2 },
+      { role: "user", content: "Apply that decision to the next chapter.", timestamp: 3 },
+    ] as never);
+
+    expect(receivedHistory).toContain("Earlier decision and tool outcome");
+    expect(JSON.stringify(result)).toContain("conversation_summary");
+    expect(JSON.stringify(result)).toContain("Apply that decision to the next chapter");
+    expect(phases).toEqual(["start", "end"]);
+  });
 });

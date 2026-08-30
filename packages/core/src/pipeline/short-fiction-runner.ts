@@ -347,7 +347,6 @@ async function produceShort(
     ...completionWarnings.map((warning): Observation => ({
       code: warning.startsWith("packaging") ? "package-generation" : "draft-review",
       kind: "soft",
-      status: "warning",
       summary: warning,
       evidence: [warning],
     })),
@@ -355,7 +354,6 @@ async function produceShort(
       ? [{
           code: "cover-generation",
           kind: "soft" as const,
-          status: "warning" as const,
           summary: coverArtifacts.coverError,
           evidence: [coverArtifacts.coverError],
         }]
@@ -563,7 +561,8 @@ function buildShortLengthObservations(
   language: ShortFictionLanguage,
 ): Observation[] {
   const spec = buildLengthSpec(target, language);
-  return draft.chapters.map((chapter) => createRangeObservation({
+  return draft.chapters.flatMap((chapter) => {
+    const observation = createRangeObservation({
     code: `chapter-${chapter.number}-length`,
     actual: countChapterLength(chapter.content, spec.countingMode),
     target: spec.target,
@@ -571,7 +570,9 @@ function buildShortLengthObservations(
     max: spec.hardMax,
     unit: spec.countingMode,
     evidence: `chapter ${chapter.number}: ${chapter.title}`,
-  }));
+    });
+    return observation ? [observation] : [];
+  });
 }
 
 async function generateCoverArtifact(input: {

@@ -12,25 +12,6 @@ export interface SpotFixPatchApplyResult {
   readonly touchedChars: number;
 }
 
-export function parseSpotFixPatches(raw: string): SpotFixPatch[] {
-  const normalized = raw.includes("=== PATCHES ===")
-    ? raw.slice(raw.indexOf("=== PATCHES ===") + "=== PATCHES ===".length)
-    : raw;
-
-  const patches: SpotFixPatch[] = [];
-  const regex = /--- PATCH(?:\s+\d+)? ---\s*TARGET_TEXT:\s*([\s\S]*?)\s*REPLACEMENT_TEXT:\s*([\s\S]*?)\s*--- END PATCH ---/g;
-
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(normalized)) !== null) {
-    patches.push({
-      targetText: trimField(match[1] ?? ""),
-      replacementText: trimField(match[2] ?? ""),
-    });
-  }
-
-  return patches.filter((patch) => patch.targetText.length > 0);
-}
-
 /**
  * Apply patches to original content. Uses best-effort per-patch strategy:
  * - Try exact match first
@@ -182,8 +163,4 @@ function mapNormalizedToOriginal(original: string, normalizedPos: number): numbe
   }
 
   return oi <= original.length ? oi : -1;
-}
-
-function trimField(value: string): string {
-  return value.replace(/^\s*\n/, "").replace(/\n\s*$/, "").trim();
 }

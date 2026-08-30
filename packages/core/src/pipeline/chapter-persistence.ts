@@ -40,7 +40,6 @@ export async function persistChapterArtifacts(params: {
     observations: params.auditResult.issues.map((issue, index) => ({
       code: `${issue.category || "review"}-${index + 1}`,
       kind: "soft" as const,
-      status: "warning" as const,
       summary: issue.description,
       evidence: issue.suggestion ? [issue.suggestion] : [],
     })),

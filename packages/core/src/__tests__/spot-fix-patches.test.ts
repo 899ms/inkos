@@ -1,34 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   applySpotFixPatches,
-  parseSpotFixPatches,
-  type SpotFixPatch,
 } from "../utils/spot-fix-patches.js";
 
 describe("spot-fix patches", () => {
-  it("parses patch blocks from the PATCHES section", () => {
-    const patches = parseSpotFixPatches([
-      "=== PATCHES ===",
-      "--- PATCH 1 ---",
-      "TARGET_TEXT:",
-      "原句一。",
-      "REPLACEMENT_TEXT:",
-      "新句一。",
-      "--- END PATCH ---",
-      "--- PATCH 2 ---",
-      "TARGET_TEXT:",
-      "原句二。",
-      "REPLACEMENT_TEXT:",
-      "新句二。",
-      "--- END PATCH ---",
-    ].join("\n"));
-
-    expect(patches).toEqual<SpotFixPatch[]>([
-      { targetText: "原句一。", replacementText: "新句一。" },
-      { targetText: "原句二。", replacementText: "新句二。" },
-    ]);
-  });
-
   it("applies a uniquely targeted patch while preserving untouched text", () => {
     const original = [
       "门轴轻轻响了一下。",

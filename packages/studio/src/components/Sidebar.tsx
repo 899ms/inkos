@@ -31,7 +31,6 @@ import {
   ScrollText,
   BookPlus,
   BookCopy,
-  Boxes,
   Feather,
   Wand2,
   FileInput,
@@ -82,7 +81,6 @@ interface Nav {
   toProjectSettings: () => void;
   toDaemon: () => void;
   toLogs: () => void;
-  toGenres: () => void;
   toStyle: () => void;
   toTranslation: () => void;
   toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => void;
@@ -566,12 +564,6 @@ export function Sidebar({ nav, activePage, sse, t }: {
             </span>
           </div>
           <div className="space-y-1">
-            <SidebarItem
-              label={t("create.genre")}
-              icon={<Boxes size={16} />}
-              active={activePage === "genres"}
-              onClick={nav.toGenres}
-            />
             <SidebarItem
               label={t("nav.config")}
               icon={<Settings size={16} />}

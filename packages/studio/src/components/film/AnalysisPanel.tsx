@@ -19,21 +19,6 @@ interface AnalysisReport {
   issues: Issue[];
 }
 
-interface ArcPoint {
-  nodeId: string;
-  score: number;
-}
-
-interface Arc {
-  endingId: string | null;
-  points: ArcPoint[];
-}
-
-interface EmotionArcs {
-  arcs: Arc[];
-  truncated: boolean;
-}
-
 interface PathDistribution {
   total: number;
   truncated: boolean;
@@ -43,35 +28,10 @@ interface PathDistribution {
 
 interface AnalysisData {
   report: AnalysisReport;
-  arcs: EmotionArcs;
   distribution: PathDistribution;
 }
 
 type Colors = ReturnType<typeof useColors>;
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const MAX_ARC_DISPLAY = 8;
-
-// A small tasteful palette for data-viz arc polylines (SVG stroke attributes
-// require actual color values, not Tailwind class names).
-const ARC_STROKE_COLORS = [
-  "hsl(220 70% 55%)",
-  "hsl(160 60% 45%)",
-  "hsl(330 65% 55%)",
-  "hsl(45 80% 50%)",
-  "hsl(270 60% 60%)",
-  "hsl(195 70% 45%)",
-  "hsl(15 75% 55%)",
-  "hsl(120 45% 45%)",
-] as const;
-
-const SVG_W = 480;
-const SVG_H = 160;
-const SVG_PAD_X = 20;
-const SVG_PAD_Y = 16;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -81,22 +41,6 @@ function levelClass(level: "error" | "warning" | "info"): string {
   if (level === "error") return "text-destructive";
   if (level === "warning") return "text-amber-500";
   return "text-muted-foreground";
-}
-
-function arcToPolylinePoints(arc: Arc): string {
-  const pts = arc.points;
-  if (pts.length === 0) return "";
-  const usableW = SVG_W - 2 * SVG_PAD_X;
-  const usableH = SVG_H - 2 * SVG_PAD_Y;
-  const xStep = pts.length === 1 ? 0 : usableW / (pts.length - 1);
-  return pts
-    .map((p, i) => {
-      const x = SVG_PAD_X + i * xStep;
-      // Map score from [-1,1] to [SVG_H - SVG_PAD_Y, SVG_PAD_Y]: positive = higher up
-      const y = SVG_PAD_Y + ((1 - p.score) / 2) * usableH;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
 }
 
 // ---------------------------------------------------------------------------
@@ -124,76 +68,6 @@ function IssuesList({ report, c }: { report: AnalysisReport; c: Colors }) {
             </li>
           ))}
         </ul>
-      )}
-    </div>
-  );
-}
-
-function EmotionArcChart({ arcs, c }: { arcs: EmotionArcs; c: Colors }) {
-  const displayArcs = arcs.arcs.slice(0, MAX_ARC_DISPLAY);
-  const overLimit = arcs.arcs.length > MAX_ARC_DISPLAY;
-  const baselineY = SVG_PAD_Y + (SVG_H - 2 * SVG_PAD_Y) / 2;
-
-  return (
-    <div data-testid="emotion-arc" className="border border-border rounded p-3">
-      <div className={`text-sm font-medium mb-2 ${c.muted}`}>{tr("情感曲线", "Emotion arcs")}</div>
-      {displayArcs.length === 0 ? (
-        <div className={`text-sm ${c.muted}`}>{tr("暂无可分析路径", "No paths to analyze")}</div>
-      ) : (
-        <>
-          <svg
-            width="100%"
-            viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-            aria-label={tr("情感曲线图", "Emotion arc chart")}
-            className="rounded bg-muted/10"
-            style={{ maxHeight: SVG_H }}
-          >
-            {/* Neutral baseline at score=0 */}
-            <line
-              x1={SVG_PAD_X}
-              y1={baselineY}
-              x2={SVG_W - SVG_PAD_X}
-              y2={baselineY}
-              stroke="currentColor"
-              strokeOpacity="0.18"
-              strokeWidth="1"
-              strokeDasharray="4 4"
-            />
-            {displayArcs.map((arc, idx) => {
-              const points = arcToPolylinePoints(arc);
-              if (!points) return null;
-              return (
-                <polyline
-                  key={idx}
-                  points={points}
-                  fill="none"
-                  stroke={ARC_STROKE_COLORS[idx % ARC_STROKE_COLORS.length]}
-                  strokeWidth="2"
-                  strokeLinejoin="round"
-                  strokeLinecap="round"
-                  opacity="0.85"
-                />
-              );
-            })}
-          </svg>
-          <div className="mt-2 flex flex-wrap gap-3">
-            {displayArcs.map((arc, idx) => (
-              <span key={idx} className="text-xs flex items-center gap-1.5">
-                <span
-                  className="inline-block w-4 h-0.5 rounded-full"
-                  style={{ background: ARC_STROKE_COLORS[idx % ARC_STROKE_COLORS.length] }}
-                />
-                <span className={c.muted}>{arc.endingId ?? tr("无结局", "No ending")}</span>
-              </span>
-            ))}
-          </div>
-          {(overLimit || arcs.truncated) && (
-            <div className={`text-xs mt-1 ${c.muted}`}>
-              {overLimit && tr(`仅显示前 ${MAX_ARC_DISPLAY} 条路径`, `Showing first ${MAX_ARC_DISPLAY} paths only`)}
-              {arcs.truncated && tr("（路径总数已超过枚举上限）", " (total paths exceed the enumeration limit)")}
-            </div>
-          )}
-        </>
       )}
     </div>
   );
@@ -309,7 +183,6 @@ export function AnalysisPanel({
   return (
     <div className="p-4 max-w-2xl space-y-4">
       <IssuesList report={data.report} c={c} />
-      <EmotionArcChart arcs={data.arcs} c={c} />
       <PathDistributionPanel distribution={data.distribution} c={c} />
     </div>
   );

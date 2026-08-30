@@ -19,18 +19,6 @@ describe("reviewStoryGraph new rules", () => {
     expect(codes(graph)).toContain("ENDING_UNREACHABLE");
   });
 
-  it("LINEAR_GRAPH: start+normal nodes+ending but no branch node", () => {
-    const graph = g({
-      nodes: [
-        { id: "s", type: "start", choices: [{ id: "c", text: "go", targetNodeId: "n1" }] },
-        { id: "n1", type: "normal", choices: [{ id: "c2", text: "continue", targetNodeId: "n2" }] },
-        { id: "n2", type: "normal", choices: [{ id: "c3", text: "end", targetNodeId: "e" }] },
-        { id: "e", type: "ending", choices: [] },
-      ],
-      endings: [{ id: "g1", nodeId: "e", title: "好", type: "good" }],
-    });
-    expect(codes(graph)).toContain("LINEAR_GRAPH");
-  });
 
   it("ISOLATED_NODE: a non-start node with no incoming edge gets UNREACHABLE (from gate) but NOT ISOLATED_NODE (Fix 2 dedup)", () => {
     const graph = g({
@@ -99,36 +87,6 @@ describe("reviewStoryGraph new rules", () => {
     expect(codes(graph)).toContain("ILLUSORY_BRANCH");
   });
 
-  it("LONG_LINEAR_CHAIN: chain of 5 single-choice normal nodes fires", () => {
-    const graph = g({
-      nodes: [
-        { id: "s", type: "start", choices: [{ id: "c0", text: "go", targetNodeId: "n1" }] },
-        { id: "n1", type: "normal", choices: [{ id: "c1", text: "next", targetNodeId: "n2" }] },
-        { id: "n2", type: "normal", choices: [{ id: "c2", text: "next", targetNodeId: "n3" }] },
-        { id: "n3", type: "normal", choices: [{ id: "c3", text: "next", targetNodeId: "n4" }] },
-        { id: "n4", type: "normal", choices: [{ id: "c4", text: "next", targetNodeId: "n5" }] },
-        { id: "n5", type: "normal", choices: [{ id: "c5", text: "end", targetNodeId: "e" }] },
-        { id: "e", type: "ending", choices: [] },
-      ],
-      endings: [{ id: "g1", nodeId: "e", title: "好", type: "good" }],
-    });
-    expect(codes(graph)).toContain("LONG_LINEAR_CHAIN");
-  });
-
-  it("LONG_LINEAR_CHAIN: chain of 4 single-choice normal nodes does NOT fire", () => {
-    const graph = g({
-      nodes: [
-        { id: "s", type: "start", choices: [{ id: "c0", text: "go", targetNodeId: "n1" }] },
-        { id: "n1", type: "normal", choices: [{ id: "c1", text: "next", targetNodeId: "n2" }] },
-        { id: "n2", type: "normal", choices: [{ id: "c2", text: "next", targetNodeId: "n3" }] },
-        { id: "n3", type: "normal", choices: [{ id: "c3", text: "next", targetNodeId: "n4" }] },
-        { id: "n4", type: "normal", choices: [{ id: "c4", text: "end", targetNodeId: "e" }] },
-        { id: "e", type: "ending", choices: [] },
-      ],
-      endings: [{ id: "g1", nodeId: "e", title: "好", type: "good" }],
-    });
-    expect(codes(graph)).not.toContain("LONG_LINEAR_CHAIN");
-  });
 
   it("truncated enumeration (>200 paths): no false GATED_UNREACHABLE or ENDING_UNREACHABLE (Fix 1)", () => {
     // 8 binary-branch nodes (b0..b7), each with 2 choices both targeting the next node.

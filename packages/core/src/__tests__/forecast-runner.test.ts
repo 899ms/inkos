@@ -118,18 +118,6 @@ describe("narrative forecast runner", () => {
     expect(await snapshotCanonicalFiles(bookDir)).toEqual(before);
   });
 
-  it("leaves no forecast files behind when the model output is invalid", async () => {
-    const chatSpy = vi.spyOn(
-      NarrativeForecastAgent.prototype as unknown as { chat: () => Promise<{ content: string; usage: object }> },
-      "chat",
-    ).mockResolvedValue({ content: "不是 JSON", usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } });
-
-    await expect(createNarrativeForecast(createOptions())).rejects.toThrow(/not valid JSON/);
-
-    expect(chatSpy).toHaveBeenCalledTimes(2);
-    expect(await exists(join(bookDir, "story", "runtime", "narrative-forecasts"))).toBe(false);
-  });
-
   it("rejects out-of-range branch counts and horizons before calling the model", async () => {
     const spy = stubAgent();
 

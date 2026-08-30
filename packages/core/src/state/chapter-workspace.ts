@@ -128,7 +128,7 @@ function userBriefPath(bookDir: string, chapterNumber: number): string {
 
 function planPath(bookDir: string, chapterNumber: number): string {
   assertChapterNumber(chapterNumber);
-  return join(bookDir, "story", "runtime", `chapter-${padChapter(chapterNumber)}.plan.md`);
+  return join(bookDir, "story", "runtime", `chapter-${padChapter(chapterNumber)}.intent.md`);
 }
 
 function versionsDir(bookDir: string, chapterNumber: number): string {

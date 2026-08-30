@@ -52,18 +52,9 @@ export interface StoredHook {
   readonly status: string;
   readonly lastAdvancedChapter: number;
   readonly expectedPayoff: string;
-  readonly payoffTiming?: string;
   readonly notes: string;
-  // Phase 7 — hook causality / promotion metadata.
   readonly dependsOn?: ReadonlyArray<string>;
   readonly paysOffInArc?: string;
-  readonly coreHook?: boolean;
-  readonly halfLifeChapters?: number;
-  readonly advancedCount?: number;
-  // Phase 7 hotfix 2 — whether the seed has been promoted into the live ledger
-  // (architect-time structural rules + consolidator-time advanced_count rule).
-  // Reviewer uses this to gate critical-severity escalation.
-  readonly promoted?: boolean;
 }
 
 export class MemoryDB {
@@ -320,7 +311,7 @@ export class MemoryDB {
       hook.status,
       hook.lastAdvancedChapter,
       hook.expectedPayoff,
-      hook.payoffTiming ?? "",
+      "",
       hook.notes,
     );
   }
@@ -330,23 +321,6 @@ export class MemoryDB {
     for (const hook of hooks) {
       this.upsertHook(hook);
     }
-  }
-
-  getActiveHooks(): ReadonlyArray<StoredHook> {
-    return this.db.prepare(
-      `SELECT
-         hook_id AS hookId,
-         start_chapter AS startChapter,
-         type,
-         status,
-         last_advanced_chapter AS lastAdvancedChapter,
-         expected_payoff AS expectedPayoff,
-         payoff_timing AS payoffTiming,
-         notes
-       FROM hooks
-       WHERE lower(status) NOT IN ('resolved', 'closed', '已回收', '已解决')
-       ORDER BY last_advanced_chapter DESC, start_chapter DESC, hook_id ASC`,
-    ).all() as unknown as ReadonlyArray<StoredHook>;
   }
 
   // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ const TEST_CLIENT: LLMClient = {
   provider: "openai",
   apiFormat: "chat",
   stream: false,
+  _piModel: { contextWindow: 21_280 },
 } as unknown as LLMClient;
 
 const ZERO_USAGE = {
@@ -33,34 +34,28 @@ describe("FanficCanonImporter", () => {
       .mockResolvedValueOnce({
         content: "片段2资料：TAIL_CANON_MARKER 是尾部关键正典。",
         usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce({
-        content: [
-          "=== SECTION: world_rules ===",
-          "尾部世界规则：TAIL_CANON_MARKER。",
-          "=== SECTION: character_profiles ===",
-          "| 角色 | 身份 | 性格底色 | 语癖/口头禅 | 说话风格 | 行为模式 | 关键关系 | 信息边界 |",
-          "|------|------|----------|-------------|----------|----------|----------|----------|",
-          "| 甲 | 主角 | 克制 | （素材未提及） | 冷静 | 查证 | 无 | 只知道片段信息 |",
-          "=== SECTION: key_events ===",
-          "| 序号 | 事件 | 涉及角色 | 对同人写作的约束 |",
-          "|------|------|----------|------------------|",
-          "| 1 | 尾部事件 | 甲 | 必须保留 TAIL_CANON_MARKER |",
-          "=== SECTION: power_system ===",
-          "（原作无明确力量体系）",
-          "=== SECTION: writing_style ===",
-          "句式克制。",
-        ].join("\n"),
-        usage: ZERO_USAGE,
       });
+    const submitSpy = vi.spyOn(
+      agent as unknown as { submitStructured: (...args: unknown[]) => Promise<unknown> },
+      "submitStructured",
+    ).mockResolvedValue({
+      result: {
+        worldRules: "尾部世界规则：TAIL_CANON_MARKER。",
+        characterProfiles: "| 甲 | 主角 | 克制 |",
+        keyEvents: "| 1 | 尾部事件 | 甲 | 必须保留 TAIL_CANON_MARKER |",
+        powerSystem: "（原作无明确力量体系）",
+        writingStyle: "句式克制。",
+      },
+      usage: ZERO_USAGE,
+    });
 
-    const source = `${"前段".repeat(25_000)}\nTAIL_CANON_MARKER`;
+    const source = `${"前段".repeat(600)}TAIL_CANON_MARKER`;
     const result = await agent.importFromText(source, "长原作", "canon");
 
-    expect(chatSpy).toHaveBeenCalledTimes(3);
+    expect(chatSpy).toHaveBeenCalledTimes(2);
     const secondChunkMessages = chatSpy.mock.calls[1]?.[0] as Array<{ role: string; content: string }>;
     expect(secondChunkMessages[1]?.content).toContain("TAIL_CANON_MARKER");
-    const finalMessages = chatSpy.mock.calls[2]?.[0] as Array<{ role: string; content: string }>;
+    const finalMessages = submitSpy.mock.calls[0]?.[0] as Array<{ role: string; content: string }>;
     expect(finalMessages[1]?.content).toContain("片段2资料：TAIL_CANON_MARKER");
     expect(finalMessages[0]?.content).not.toContain("已截断");
     expect(result.worldRules).toContain("TAIL_CANON_MARKER");

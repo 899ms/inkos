@@ -4,35 +4,17 @@ import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import { buildWriterSystemPrompt, type FanficContext } from "./writer-prompts.js";
 import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./settler-prompts.js";
-import { buildObserverSystemPrompt, buildObserverUserPrompt } from "./observer-prompts.js";
-import { parseSettlerDeltaOutput } from "./settler-delta-parser.js";
-import { parseSettlementOutput } from "./settler-parser.js";
+import { SettlementToolSchema } from "./settler-tool.js";
+import { ChapterDraftToolSchema } from "./writer-tool.js";
 import { readGenreProfile, readBookRules } from "./rules-reader.js";
-import {
-  detectCrossChapterRepetition,
-  detectParagraphLengthDrift,
-  normalizePostWriteSurface,
-  validatePostWrite,
-  type PostWriteViolation,
-} from "./post-write-validator.js";
-import { analyzeAITells } from "./ai-tells.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
-import type { RuntimeStateDelta } from "../models/runtime-state.js";
+import { RuntimeStateDeltaSchema, type RuntimeStateDelta } from "../models/runtime-state.js";
 import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js";
-import {
-  filterSummaries,
-  filterSubplots,
-  filterEmotionalArcs,
-} from "../utils/context-filter.js";
 import { buildGovernedMemoryEvidenceBlocks } from "../utils/governed-context.js";
 import {
-  buildGovernedCharacterMatrixWorkingSet,
   buildGovernedHookWorkingSet,
-  mergeCharacterMatrixMarkdown,
-  mergeTableMarkdownByKey,
 } from "../utils/governed-working-set.js";
-import { parseCreativeOutput } from "./writer-parser.js";
 import {
   buildRuntimeStateArtifacts,
   buildRuntimeStateArtifactsFromSnapshot,
@@ -40,9 +22,6 @@ import {
   type RuntimeStateArtifacts,
 } from "../state/runtime-state-store.js";
 import type { RuntimeStateSnapshot } from "../state/state-reducer.js";
-import { parsePendingHooksMarkdown } from "../utils/memory-retrieval.js";
-import { analyzeHookHealth } from "../utils/hook-health.js";
-import { buildEnglishVarianceBrief } from "../utils/long-span-fatigue.js";
 import {
   buildNarrativeIntentBrief,
   renderMemoAsNarrativeBlock,
@@ -110,14 +89,6 @@ export interface WriteChapterOutput {
   readonly updatedSubplots: string;
   readonly updatedEmotionalArcs: string;
   readonly updatedCharacterMatrix: string;
-  readonly postWriteErrors: ReadonlyArray<PostWriteViolation>;
-  readonly postWriteWarnings: ReadonlyArray<PostWriteViolation>;
-  readonly hookHealthIssues?: ReadonlyArray<{
-    readonly severity: "critical" | "warning" | "info";
-    readonly category: string;
-    readonly description: string;
-    readonly suggestion: string;
-  }>;
   readonly tokenUsage?: TokenUsage;
 }
 
@@ -144,7 +115,7 @@ export class WriterAgent extends BaseAgent {
     const placeholder = "(文件尚未创建)";
     const [
       volumeOutline, styleGuide, currentState, ledger, hooks,
-      chapterSummaries, subplotBoard, emotionalArcs, characterMatrix, styleProfileRaw,
+      chapterSummaries, subplotBoard, emotionalArcs, characterMatrix,
       fanficCanonRaw,
     ] = await Promise.all([
         readVolumeMap(bookDir, placeholder),
@@ -160,11 +131,8 @@ export class WriterAgent extends BaseAgent {
         this.readFileOrDefault(join(bookDir, "story/subplot_board.md")),
         this.readFileOrDefault(join(bookDir, "story/emotional_arcs.md")),
         readCharacterContext(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/style_profile.json")),
         this.readFileOrDefault(join(bookDir, "story/fanfic_canon.md")),
       ]);
-
-    const fingerprintChapters = await this.loadRecentChapters(bookDir, chapterNumber, 5);
 
     // Load genre profile + book rules
     const { profile: genreProfile } =
@@ -172,8 +140,6 @@ export class WriterAgent extends BaseAgent {
     const parsedBookRules = await readBookRules(bookDir);
     const bookRules = parsedBookRules?.rules ?? null;
     const bookRulesBody = parsedBookRules?.body ?? "";
-
-    const styleFingerprint = this.buildStyleFingerprint(styleProfileRaw);
 
     const hasFanficCanon = fanficCanonRaw !== "(文件尚未创建)";
     const resolvedLanguage = book.language ?? genreProfile.language;
@@ -183,13 +149,6 @@ export class WriterAgent extends BaseAgent {
       throw new Error("Writer requires governed chapter intent, memo, context package, and rule stack.");
     }
     const governedMemoryBlocks = buildGovernedMemoryEvidenceBlocks(input.contextPackage, resolvedLanguage);
-    const englishVarianceBrief = resolvedLanguage === "en"
-      ? await buildEnglishVarianceBrief({
-          bookDir,
-          chapterNumber,
-        })
-      : null;
-
     // Build fanfic context if fanfic_canon.md exists
     const fanficContext: FanficContext | undefined = hasFanficCanon && bookRules?.fanficMode
       ? {
@@ -201,7 +160,7 @@ export class WriterAgent extends BaseAgent {
 
     // ── Phase 1: Creative writing (temperature 0.7) ──
     const creativeSystemPrompt = await this.withPromptPackGuidance(buildWriterSystemPrompt(
-      book, genreProfile, bookRules, bookRulesBody, styleGuide, styleFingerprint,
+      book, genreProfile, bookRules, bookRulesBody, styleGuide,
       fanficContext, resolvedLanguage,
       resolvedLengthSpec,
     ), "longform.writer");
@@ -215,7 +174,6 @@ export class WriterAgent extends BaseAgent {
       externalContext: input.externalContext,
       lengthSpec: resolvedLengthSpec,
       language: book.language ?? genreProfile.language,
-      varianceBrief: englishVarianceBrief?.text,
       selectedEvidenceBlock: this.joinGovernedEvidenceBlocks(governedMemoryBlocks),
     });
 
@@ -226,16 +184,26 @@ export class WriterAgent extends BaseAgent {
       en: `Phase 1: creative writing for chapter ${chapterNumber}`,
     });
 
-    const creativeResponse = await this.chat(
+    const { result: creativeSubmission, usage: creativeUsage } = await this.submitStructured(
       [
         { role: "system", content: creativeSystemPrompt },
         { role: "user", content: creativeUserPrompt },
       ],
+      {
+        name: "submit_chapter_draft",
+        label: resolvedLanguage === "en" ? "Submit chapter draft" : "提交章节初稿",
+        description: resolvedLanguage === "en"
+          ? "Submit the complete chapter title and prose."
+          : "提交完整的章节标题和正文。",
+        parameters: ChapterDraftToolSchema,
+      },
       { temperature: creativeTemperature },
     );
-    const creativeUsage = creativeResponse.usage;
-
-    const creative = parseCreativeOutput(chapterNumber, creativeResponse.content, resolvedLengthSpec.countingMode);
+    const creative = {
+      title: creativeSubmission.title.trim(),
+      content: creativeSubmission.content.trim(),
+      wordCount: countChapterLength(creativeSubmission.content, resolvedLengthSpec.countingMode),
+    };
 
     // ── Phase 2: State settlement (temperature 0.3) ──
     this.logInfo(resolvedLanguage, {
@@ -245,43 +213,28 @@ export class WriterAgent extends BaseAgent {
     const filteredHooksForSettlement = buildGovernedHookWorkingSet({
       hooksMarkdown: hooks,
       contextPackage: input.contextPackage,
-      chapterIntent: input.chapterIntent,
-      chapterNumber,
       language: resolvedLanguage,
     });
-    const filteredSubplotsForSettlement = filterSubplots(subplotBoard);
-    const filteredArcsForSettlement = filterEmotionalArcs(emotionalArcs, chapterNumber);
-    const filteredMatrixForSettlement = buildGovernedCharacterMatrixWorkingSet({
-      matrixMarkdown: characterMatrix,
-      chapterIntent: input.chapterIntent,
-      contextPackage: input.contextPackage,
-      protagonistName: bookRules?.protagonist?.name,
-    });
-
     const settleResult = await this.settle({
       book,
-      genreProfile,
       bookRules,
+      language: resolvedLanguage,
       chapterNumber,
       title: creative.title,
       content: creative.content,
       currentState,
-      ledger: genreProfile.numericalSystem ? ledger : "",
+      ledger: ledger === placeholder ? "" : ledger,
       hooks: filteredHooksForSettlement,
-      chapterSummaries: filterSummaries(chapterSummaries, chapterNumber),
-      subplotBoard: filteredSubplotsForSettlement,
-      emotionalArcs: filteredArcsForSettlement,
-      characterMatrix: filteredMatrixForSettlement,
+      chapterSummaries,
+      subplotBoard,
+      emotionalArcs,
+      characterMatrix,
       volumeOutline,
       selectedEvidenceBlock: this.joinGovernedEvidenceBlocks(governedMemoryBlocks),
       chapterIntent: input.chapterIntent,
       contextPackage: input.contextPackage,
       ruleStack: input.ruleStack,
       validationFeedback: undefined,
-      originalHooks: hooks,
-      originalSubplots: subplotBoard,
-      originalEmotionalArcs: emotionalArcs,
-      originalCharacterMatrix: characterMatrix,
     });
     const settlement = settleResult.settlement;
     const settleUsage = settleResult.usage;
@@ -292,59 +245,6 @@ export class WriterAgent extends BaseAgent {
       chapterNumber,
     );
     const resolvedRuntimeStateDelta = runtimeStateArtifacts?.resolvedDelta ?? settlement.runtimeStateDelta;
-    const priorHookIds = new Set(parsePendingHooksMarkdown(hooks).map((hook) => hook.hookId));
-    const hookHealthIssues = resolvedRuntimeStateDelta
-      && (runtimeStateArtifacts?.snapshot ?? settlement.runtimeStateSnapshot)
-      ? analyzeHookHealth({
-          language: resolvedLanguage,
-          chapterNumber,
-          targetChapters: book.targetChapters,
-          hooks: (runtimeStateArtifacts?.snapshot ?? settlement.runtimeStateSnapshot)!.hooks.hooks,
-          delta: resolvedRuntimeStateDelta,
-          existingHookIds: [...priorHookIds],
-        })
-      : [];
-
-    // ── Post-write validation (regex + rule-based, zero LLM cost) ──
-    const surfaceNormalizedContent = normalizePostWriteSurface(creative.content, resolvedLanguage);
-    const surfaceNormalizedWordCount = countChapterLength(surfaceNormalizedContent, resolvedLengthSpec.countingMode);
-    const ruleViolations = [
-      ...validatePostWrite(surfaceNormalizedContent, genreProfile, bookRules, resolvedLanguage),
-      ...detectCrossChapterRepetition(surfaceNormalizedContent, fingerprintChapters, resolvedLanguage),
-      ...detectParagraphLengthDrift(surfaceNormalizedContent, fingerprintChapters, resolvedLanguage),
-    ];
-    const aiTellIssues = analyzeAITells(surfaceNormalizedContent, resolvedLanguage).issues;
-
-    const postWriteErrors = ruleViolations.filter(v => v.severity === "error");
-    const postWriteWarnings = ruleViolations.filter(v => v.severity === "warning");
-
-    if (ruleViolations.length > 0) {
-      this.logWarn(resolvedLanguage, {
-        zh: `后写校验：第${chapterNumber}章 ${postWriteErrors.length} 个错误，${postWriteWarnings.length} 个警告`,
-        en: `Post-write: ${postWriteErrors.length} errors, ${postWriteWarnings.length} warnings in chapter ${chapterNumber}`,
-      });
-      for (const v of ruleViolations) {
-        this.ctx.logger?.warn(`[${v.severity}] ${v.rule}: ${v.description}`);
-      }
-    }
-    if (aiTellIssues.length > 0) {
-      this.logWarn(resolvedLanguage, {
-        zh: `AI 味检查：第${chapterNumber}章发现 ${aiTellIssues.length} 个问题`,
-        en: `AI-tell check: ${aiTellIssues.length} issues in chapter ${chapterNumber}`,
-      });
-      for (const issue of aiTellIssues) {
-        this.ctx.logger?.warn(`[${issue.severity}] ${issue.category}: ${issue.description}`);
-      }
-    }
-    if (hookHealthIssues.length > 0) {
-      this.logWarn(resolvedLanguage, {
-        zh: `伏笔健康：第${chapterNumber}章发现 ${hookHealthIssues.length} 条警告`,
-        en: `Hook health: ${hookHealthIssues.length} warning(s) in chapter ${chapterNumber}`,
-      });
-      for (const issue of hookHealthIssues) {
-        this.ctx.logger?.warn(`[${issue.severity}] ${issue.category}: ${issue.description}`);
-      }
-    }
 
     // ── Merge into WriteChapterOutput ──
     const tokenUsage: TokenUsage = {
@@ -356,8 +256,8 @@ export class WriterAgent extends BaseAgent {
     return {
       chapterNumber,
       title: creative.title,
-      content: surfaceNormalizedContent,
-      wordCount: surfaceNormalizedWordCount,
+      content: creative.content,
+      wordCount: creative.wordCount,
       postSettlement: settlement.postSettlement,
       runtimeStateDelta: resolvedRuntimeStateDelta,
       runtimeStateSnapshot: runtimeStateArtifacts?.snapshot ?? settlement.runtimeStateSnapshot,
@@ -371,9 +271,6 @@ export class WriterAgent extends BaseAgent {
       updatedSubplots: settlement.updatedSubplots,
       updatedEmotionalArcs: settlement.updatedEmotionalArcs,
       updatedCharacterMatrix: settlement.updatedCharacterMatrix,
-      postWriteErrors,
-      postWriteWarnings,
-      hookHealthIssues,
       tokenUsage,
     };
   }
@@ -416,13 +313,13 @@ export class WriterAgent extends BaseAgent {
 
     const settleResult = await this.settle({
       book: input.book,
-      genreProfile,
       bookRules,
+      language: resolvedLanguage,
       chapterNumber: input.chapterNumber,
       title: input.title,
       content: input.content,
       currentState,
-      ledger: genreProfile.numericalSystem ? ledger : "",
+      ledger: ledger === "(文件尚未创建)" ? "" : ledger,
       hooks,
       chapterSummaries,
       subplotBoard,
@@ -436,10 +333,6 @@ export class WriterAgent extends BaseAgent {
       contextPackage: input.contextPackage,
       ruleStack: input.ruleStack,
       validationFeedback: input.validationFeedback,
-      originalHooks: hooks,
-      originalSubplots: subplotBoard,
-      originalEmotionalArcs: emotionalArcs,
-      originalCharacterMatrix: characterMatrix,
     });
     const settlement = settleResult.settlement;
     const runtimeStateArtifacts = await this.buildRuntimeStateArtifactsIfPresent(
@@ -473,16 +366,14 @@ export class WriterAgent extends BaseAgent {
       updatedSubplots: settlement.updatedSubplots,
       updatedEmotionalArcs: settlement.updatedEmotionalArcs,
       updatedCharacterMatrix: settlement.updatedCharacterMatrix,
-      postWriteErrors: [],
-      postWriteWarnings: [],
       tokenUsage: settleResult.usage,
     };
   }
 
   private async settle(params: {
     readonly book: BookConfig;
-    readonly genreProfile: GenreProfile;
     readonly bookRules: BookRules | null;
+    readonly language: "zh" | "en";
     readonly chapterNumber: number;
     readonly title: string;
     readonly content: string;
@@ -499,43 +390,27 @@ export class WriterAgent extends BaseAgent {
     readonly contextPackage?: ContextPackage;
     readonly ruleStack?: RuleStack;
     readonly validationFeedback?: string;
-    readonly originalHooks: string;
-    readonly originalSubplots: string;
-    readonly originalEmotionalArcs: string;
-    readonly originalCharacterMatrix: string;
   }): Promise<{
-    settlement: ReturnType<typeof parseSettlementOutput> & {
-      runtimeStateDelta?: RuntimeStateDelta;
-      runtimeStateSnapshot?: RuntimeStateSnapshot;
+    settlement: {
+      readonly postSettlement: string;
+      readonly runtimeStateDelta: RuntimeStateDelta;
+      readonly runtimeStateSnapshot?: RuntimeStateSnapshot;
+      readonly updatedState: string;
+      readonly updatedLedger: string;
+      readonly updatedHooks: string;
+      readonly chapterSummary: string;
+      readonly updatedSubplots: string;
+      readonly updatedEmotionalArcs: string;
+      readonly updatedCharacterMatrix: string;
     };
     usage: TokenUsage;
   }> {
-    // Phase 2a: Observer — extract all facts from the chapter
-    const resolvedLang = params.book.language ?? params.genreProfile.language;
-    const observerSystem = buildObserverSystemPrompt(params.book, params.genreProfile, resolvedLang);
-    const observerUser = buildObserverUserPrompt(params.chapterNumber, params.title, params.content, resolvedLang);
-
+    const resolvedLang = params.language;
     this.logInfo(resolvedLang, {
-      zh: `阶段 2a：提取第${params.chapterNumber}章事实`,
-      en: `Phase 2a: observing facts for chapter ${params.chapterNumber}`,
+      zh: `阶段 2：把第${params.chapterNumber}章事实投影到运行时状态`,
+      en: `Phase 2: projecting chapter ${params.chapterNumber} facts into runtime state`,
     });
-    const observerResponse = await this.chat(
-      [
-        { role: "system", content: observerSystem },
-        { role: "user", content: observerUser },
-      ],
-      { temperature: 0.5 },
-    );
-    const observations = observerResponse.content;
-
-    // Phase 2b: Reflector — merge observations into truth files
-    this.logInfo(resolvedLang, {
-      zh: "阶段 2b：把观察结果回写到真相文件",
-      en: "Phase 2b: reflecting observations into truth files",
-    });
-    const settlerSystem = buildSettlerSystemPrompt(
-      params.book, params.genreProfile, params.bookRules, resolvedLang,
-    );
+    const systemPrompt = buildSettlerSystemPrompt(params.book, params.bookRules, resolvedLang);
     const governedControlBlock = params.chapterIntent && params.contextPackage && params.ruleStack
       ? this.buildSettlerGovernedControlBlock(
           params.chapterIntent,
@@ -544,8 +419,7 @@ export class WriterAgent extends BaseAgent {
           resolvedLang,
         )
       : undefined;
-
-    const settlerUser = buildSettlerUserPrompt({
+    const userPrompt = buildSettlerUserPrompt({
       chapterNumber: params.chapterNumber,
       title: params.title,
       content: params.content,
@@ -557,30 +431,58 @@ export class WriterAgent extends BaseAgent {
       emotionalArcs: params.emotionalArcs,
       characterMatrix: params.characterMatrix,
       volumeOutline: params.volumeOutline,
-      observations,
       selectedEvidenceBlock: params.selectedEvidenceBlock,
       governedControlBlock,
       validationFeedback: params.validationFeedback,
       language: resolvedLang,
     });
-
-    const response = await this.chat(
+    const { result, usage } = await this.submitStructured(
       [
-        { role: "system", content: settlerSystem },
-        { role: "user", content: settlerUser },
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
       ],
+      {
+        name: "submit_runtime_state_delta",
+        label: resolvedLang === "en" ? "Submit runtime state delta" : "提交运行时状态变更",
+        description: resolvedLang === "en"
+          ? "Submit only chapter-grounded incremental state changes. The host owns the chapter number."
+          : "只提交正文有证据的增量状态变更；章节号由宿主持有。",
+        parameters: SettlementToolSchema,
+      },
       { temperature: 0.3 },
     );
+    const runtimeStateDelta = RuntimeStateDeltaSchema.parse({
+      chapter: params.chapterNumber,
+      currentStatePatch: result.currentStatePatch,
+      hookOps: {
+        upsert: result.hookOps?.upsert ?? [],
+        mention: result.hookOps?.mention ?? [],
+        resolve: result.hookOps?.resolve ?? [],
+        defer: result.hookOps?.defer ?? [],
+      },
+      newHookCandidates: result.newHookCandidates ?? [],
+      chapterSummary: result.chapterSummary
+        ? {
+            chapter: params.chapterNumber,
+            title: result.chapterSummary.title,
+            characters: result.chapterSummary.characters ?? "",
+            events: result.chapterSummary.events ?? "",
+            stateChanges: result.chapterSummary.stateChanges ?? "",
+            hookActivity: result.chapterSummary.hookActivity ?? "",
+            mood: result.chapterSummary.mood ?? "",
+            chapterType: result.chapterSummary.chapterType ?? "",
+          }
+        : undefined,
+      subplotOps: result.subplotOps ?? [],
+      emotionalArcOps: result.emotionalArcOps ?? [],
+      characterMatrixOps: result.characterMatrixOps ?? [],
+      notes: result.notes ?? [],
+    });
 
-    let mergedSettlement: ReturnType<typeof parseSettlementOutput> & {
-      runtimeStateDelta?: RuntimeStateDelta;
-      runtimeStateSnapshot?: RuntimeStateSnapshot;
-    };
-    try {
-      const deltaOutput = parseSettlerDeltaOutput(response.content);
-      mergedSettlement = {
-        postSettlement: deltaOutput.postSettlement,
-        runtimeStateDelta: deltaOutput.runtimeStateDelta,
+    return {
+      settlement: {
+        postSettlement: result.postSettlement,
+        runtimeStateDelta,
         updatedState: "",
         updatedLedger: "",
         updatedHooks: "",
@@ -588,36 +490,13 @@ export class WriterAgent extends BaseAgent {
         updatedSubplots: "",
         updatedEmotionalArcs: "",
         updatedCharacterMatrix: "",
-      };
-    } catch {
-      const settlement = parseSettlementOutput(response.content, params.genreProfile);
-      mergedSettlement = governedControlBlock
-        ? {
-            ...settlement,
-            updatedHooks: mergeTableMarkdownByKey(params.originalHooks, settlement.updatedHooks, [0]),
-            updatedSubplots: settlement.updatedSubplots
-              ? mergeTableMarkdownByKey(params.originalSubplots, settlement.updatedSubplots, [0])
-              : settlement.updatedSubplots,
-            updatedEmotionalArcs: settlement.updatedEmotionalArcs
-              ? mergeTableMarkdownByKey(params.originalEmotionalArcs, settlement.updatedEmotionalArcs, [0, 1])
-              : settlement.updatedEmotionalArcs,
-            updatedCharacterMatrix: settlement.updatedCharacterMatrix
-              ? mergeCharacterMatrixMarkdown(params.originalCharacterMatrix, settlement.updatedCharacterMatrix)
-              : settlement.updatedCharacterMatrix,
-          }
-        : settlement;
-    }
-
-    return {
-      settlement: mergedSettlement,
-      usage: response.usage,
+      },
+      usage,
     };
   }
-
   async saveChapter(
     bookDir: string,
     output: WriteChapterOutput,
-    numericalSystem: boolean = true,
     language: "zh" | "en" = "zh",
   ): Promise<void> {
     const chaptersDir = join(bookDir, "chapters");
@@ -700,7 +579,7 @@ export class WriterAgent extends BaseAgent {
       );
     }
 
-    if (numericalSystem) {
+    if (output.updatedLedger.trim()) {
       writes.push({ relativePath: join("story", "particle_ledger.md"), content: output.updatedLedger });
     }
 
@@ -720,7 +599,6 @@ export class WriterAgent extends BaseAgent {
     readonly externalContext?: string;
     readonly lengthSpec: LengthSpec;
     readonly language?: "zh" | "en";
-    readonly varianceBrief?: string;
     readonly selectedEvidenceBlock?: string;
   }): string {
     const language = params.language ?? "zh";
@@ -741,14 +619,7 @@ export class WriterAgent extends BaseAgent {
           : `## 用户方向（优先于模型默认，必须遵循）\n${renderNarrativeSelectedContext(directionEntries, language)}\n`)
       : "";
 
-    const diagnosticLines = params.ruleStack.sections.diagnostic.length > 0
-      ? params.ruleStack.sections.diagnostic.join(", ")
-      : "none";
-
     const lengthRequirementBlock = this.buildLengthRequirementBlock(params.lengthSpec, params.language ?? "zh");
-    const varianceBlock = params.varianceBrief
-      ? `\n${params.varianceBrief}\n`
-      : "";
     const selectedEvidenceBlock = params.selectedEvidenceBlock
       ? `\n${params.selectedEvidenceBlock}\n`
       : "";
@@ -770,9 +641,7 @@ ${selectedEvidenceBlock}
 ## Rule Stack
 - Hard: ${params.ruleStack.sections.hard.join(", ") || "(none)"}
 - Soft: ${params.ruleStack.sections.soft.join(", ") || "(none)"}
-- Diagnostic: ${diagnosticLines}
 
-${varianceBlock}
 ${lengthRequirementBlock}
 - Output only CHAPTER_TITLE and CHAPTER_CONTENT blocks`;
     }
@@ -791,9 +660,7 @@ ${selectedEvidenceBlock}
 ## 规则栈
 - 硬护栏：${params.ruleStack.sections.hard.join("、") || "(无)"}
 - 软约束：${params.ruleStack.sections.soft.join("、") || "(无)"}
-- 诊断规则：${diagnosticLines}
 
-${varianceBlock}
 ${lengthRequirementBlock}
 - 只输出 CHAPTER_TITLE、CHAPTER_CONTENT 两个区块`;
   }
@@ -822,7 +689,7 @@ ${trimmed}
       blocks.titleHistoryBlock,
       blocks.moodTrailBlock,
       blocks.canonBlock,
-      blocks.hookDebtBlock,
+      blocks.referencedHooksBlock,
       blocks.hooksBlock,
       blocks.summariesBlock,
       blocks.volumeSummariesBlock,
@@ -858,7 +725,6 @@ ${selectedContext || "- none"}
 ### Rule Stack
 - Hard guardrails: ${ruleStack.sections.hard.join(", ") || "(none)"}
 - Soft constraints: ${ruleStack.sections.soft.join(", ") || "(none)"}
-- Diagnostic rules: ${ruleStack.sections.diagnostic.join(", ") || "(none)"}
 
 ### Active Overrides
 ${overrides}\n`;
@@ -873,7 +739,6 @@ ${selectedContext || "- none"}
 ### 规则栈
 - 硬护栏：${ruleStack.sections.hard.join("、") || "(无)"}
 - 软约束：${ruleStack.sections.soft.join("、") || "(无)"}
-- 诊断规则：${ruleStack.sections.diagnostic.join("、") || "(无)"}
 
 ### 当前覆盖
 ${overrides}\n`;
@@ -889,34 +754,6 @@ ${overrides}\n`;
     return `要求：
 - 目标字数：${lengthSpec.target}字
 - 允许区间：${lengthSpec.softMin}-${lengthSpec.softMax}字`;
-  }
-
-  private async loadRecentChapters(
-    bookDir: string,
-    currentChapter: number,
-    count = 1,
-  ): Promise<string> {
-    const chaptersDir = join(bookDir, "chapters");
-    try {
-      const files = await readdir(chaptersDir);
-      const mdFiles = files
-        .filter((f) => f.endsWith(".md") && !f.startsWith("index"))
-        .sort()
-        .slice(-count);
-
-      if (mdFiles.length === 0) return "";
-
-      const contents = await Promise.all(
-        mdFiles.map(async (f) => {
-          const content = await readFile(join(chaptersDir, f), "utf-8");
-          return content;
-        }),
-      );
-
-      return contents.join("\n\n---\n\n");
-    } catch {
-      return "";
-    }
   }
 
   private async readFileOrDefault(path: string): Promise<string> {
@@ -1120,23 +957,6 @@ ${overrides}\n`;
     return undefined;
   }
 
-  private buildStyleFingerprint(styleProfileRaw: string): string | undefined {
-    if (!styleProfileRaw || styleProfileRaw === "(文件尚未创建)") return undefined;
-    try {
-      const profile = JSON.parse(styleProfileRaw);
-      const lines: string[] = [];
-      if (profile.avgSentenceLength) lines.push(`- 平均句长：${profile.avgSentenceLength}字`);
-      if (profile.sentenceLengthStdDev) lines.push(`- 句长标准差：${profile.sentenceLengthStdDev}`);
-      if (profile.avgParagraphLength) lines.push(`- 平均段落长度：${profile.avgParagraphLength}字`);
-      if (profile.paragraphLengthRange) lines.push(`- 段落长度范围：${profile.paragraphLengthRange.min}-${profile.paragraphLengthRange.max}字`);
-      if (profile.vocabularyDiversity) lines.push(`- 词汇多样性(TTR)：${profile.vocabularyDiversity}`);
-      if (profile.topPatterns?.length > 0) lines.push(`- 高频句式：${profile.topPatterns.join("、")}`);
-      if (profile.rhetoricalFeatures?.length > 0) lines.push(`- 修辞特征：${profile.rhetoricalFeatures.join("、")}`);
-      return lines.length > 0 ? lines.join("\n") : undefined;
-    } catch {
-      return undefined;
-    }
-  }
   private sanitizeFilename(title: string): string {
     return title
       .replace(/[/\\?%*:|"<>]/g, "")

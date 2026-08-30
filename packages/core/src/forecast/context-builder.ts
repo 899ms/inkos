@@ -1,15 +1,13 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { formatRecentSummaries, readSubplotBoard } from "../agents/planner-context.js";
+import { readSubplotBoard } from "../agents/planner-context.js";
 import { readCharacterContext, readStoryFrame, readVolumeMap } from "../utils/outline-paths.js";
 
 // Read-only view of the canonical book used as forecast input. Everything in
 // here MUST stay side-effect free: building a forecast context never creates
 // or repairs canonical files (that is why StateManager.loadControlDocuments,
 // which seeds defaults, is deliberately not used).
-
-const RECENT_SUMMARY_LIMIT = 8;
 
 export interface ForecastContextSections {
   readonly authorIntent: string;
@@ -79,7 +77,7 @@ export async function buildForecastContext(params: {
       storyFrame,
       volumeMap,
       recentChapterSummaries: chapterSummariesRaw.trim()
-        ? formatRecentSummaries(chapterSummariesRaw, baseChapter + 1, RECENT_SUMMARY_LIMIT)
+        ? chapterSummariesRaw.trim()
         : "",
       characterContext,
       subplotBoard,

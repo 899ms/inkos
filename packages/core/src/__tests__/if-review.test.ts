@@ -51,17 +51,6 @@ describe("reviewStoryGraph", () => {
     expect(report.issues.find((i) => i.code === "VARIABLE_UNUSED" && i.message.includes("gold"))).toBeUndefined();
   });
 
-  it("ENDING_VARIETY: >=2 endings all same type (info)", () => {
-    const graph = g({
-      nodes: [
-        { id: "s", type: "start", imageSlot: { prompt: "p", assetRef: "x" }, choices: [{ id: "a", text: "A", targetNodeId: "e1" }, { id: "b", text: "B", targetNodeId: "e2" }] },
-        { id: "e1", type: "ending", choices: [] },
-        { id: "e2", type: "ending", choices: [] },
-      ],
-      endings: [{ id: "g1", nodeId: "e1", title: "好1", type: "good" }, { id: "g2", nodeId: "e2", title: "好2", type: "good" }],
-    });
-    expect(codes(graph)).toContain("ENDING_VARIETY");
-  });
 
   it("IMAGE_MISSING: a non-ending node without an image (info)", () => {
     const graph = g({

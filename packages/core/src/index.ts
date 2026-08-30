@@ -5,9 +5,8 @@ export { type Observation, ObservationSchema } from "./models/observation.js";
 export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionConfig, type AgentLLMOverride, type ResearchSearchConfig, ProjectConfigSchema, LLMConfigSchema, AgentLLMOverrideSchema, DetectionConfigSchema, ResearchSearchConfigSchema } from "./models/project.js";
 export { type CurrentState, type ParticleLedger, type PendingHooks, type PendingHook, type LedgerEntry } from "./models/state.js";
 export { type GenreProfile, type ParsedGenreProfile, GenreProfileSchema, parseGenreProfile } from "./models/genre-profile.js";
-export { type BookRules, type ParsedBookRules, BookRulesSchema, parseBookRules, tryParseBookRulesFrontmatter } from "./models/book-rules.js";
+export { type BookRules, type ParsedBookRules, BookRulesSchema } from "./models/book-rules.js";
 export { type DetectionHistoryEntry, type DetectionStats } from "./models/detection.js";
-export { type StyleProfile } from "./models/style-profile.js";
 export { type LengthCountingMode, type LengthSpec, type LengthTelemetry, type LengthWarning, LengthCountingModeSchema, LengthSpecSchema, LengthTelemetrySchema, LengthWarningSchema } from "./models/length-governance.js";
 export {
   type RuntimeStateLanguage,
@@ -212,8 +211,6 @@ export {
   type PlannerUserMessageInput,
 } from "./agents/planner-prompts.js";
 export {
-  gatherPlanningMaterials,
-  type PlanningMaterials,
 } from "./utils/planning-materials.js";
 export {
   buildProxyFetchInit,
@@ -362,12 +359,6 @@ export {
   type PlannedEditTransaction,
 } from "./interaction/edit-controller.js";
 export {
-  parseDraftDirectives,
-  createDirectiveStreamFilter,
-  type ParsedDraftResponse,
-} from "./interaction/draft-directive-parser.js";
-
-export {
   SHORT_FICTION_DEFAULT_CHAPTERS,
   SHORT_FICTION_MIN_CHAPTERS,
   SHORT_FICTION_MAX_CHAPTERS,
@@ -381,7 +372,6 @@ export {
   ShortFictionWriterAgent,
   ShortFictionDraftReviewerAgent,
   ShortFictionPackagingAgent,
-  parseShortFictionBatchDraft,
   validateShortFictionDraftForFinal,
   renderShortFictionDraftMarkdown,
   type ShortFictionOutline,
@@ -413,7 +403,6 @@ export {
   FORECAST_DEFAULT_HORIZON,
   NarrativeForecastSchema,
   ForecastBranchSchema,
-  parseForecastModelOutput,
   type NarrativeForecast,
   type ForecastBranch,
   type ForecastBeat,
@@ -486,20 +475,12 @@ export { RadarAgent, type RadarResult, type RadarRecommendation } from "./agents
 export { FanqieRadarSource, QidianRadarSource, TextRadarSource, type RadarSource, type PlatformRankings, type RankingEntry } from "./agents/radar-source.js";
 export { readGenreProfile, readBookRules, listAvailableGenres, getBuiltinGenresDir } from "./agents/rules-reader.js";
 export { buildWriterSystemPrompt } from "./agents/writer-prompts.js";
-export { analyzeAITells, type AITellResult, type AITellIssue } from "./agents/ai-tells.js";
 export { analyzeSensitiveWords, type SensitiveWordResult, type SensitiveWordMatch } from "./agents/sensitive-words.js";
 export { detectAIContent, type DetectionResult } from "./agents/detector.js";
-export { analyzeStyle } from "./agents/style-analyzer.js";
 export { analyzeDetectionInsights } from "./agents/detection-insights.js";
-export { validatePostWrite, detectParagraphLengthDrift, detectParagraphShapeWarnings, detectDuplicateTitle, type PostWriteViolation } from "./agents/post-write-validator.js";
-export { ChapterAnalyzerAgent, type AnalyzeChapterInput, type AnalyzeChapterOutput } from "./agents/chapter-analyzer.js";
-export { parseWriterOutput, parseCreativeOutput, type ParsedWriterOutput, type CreativeOutput } from "./agents/writer-parser.js";
 export { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./agents/settler-prompts.js";
-export { parseSettlementOutput, type SettlementOutput } from "./agents/settler-parser.js";
-export { parseSettlerDeltaOutput, type SettlerDeltaOutput } from "./agents/settler-delta-parser.js";
 export { FanficCanonImporter, type FanficCanonOutput } from "./agents/fanfic-canon-importer.js";
 export { getFanficDimensionConfig, FANFIC_DIMENSIONS, type FanficDimensionConfig } from "./agents/fanfic-dimensions.js";
-export { buildCharacterVoiceProfiles } from "./agents/fanfic-prompt-sections.js";
 export * from "./prompts/index.js";
 
 // Utils
@@ -512,8 +493,6 @@ export {
   type ResearchPurpose,
   type ResearchReport,
 } from "./agents/researcher.js";
-export { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "./utils/context-filter.js";
-export { extractPOVFromOutline, filterMatrixByPOV, filterHooksByPOV } from "./utils/pov-filter.js";
 export { ConsolidatorAgent } from "./agents/consolidator.js";
 export { MemoryDB, type Fact, type StoredSummary } from "./state/memory-db.js";
 export { StateValidatorAgent } from "./agents/state-validator.js";
@@ -528,16 +507,7 @@ export { resolveEffectiveLLMConfig, type EffectiveLLMConfigResult, type Effectiv
 export { loadLLMEnvLayers, mergeEnvMaps, studioIgnoredEnv, cliOverlayEnv, legacyEnv, type LLMEnvLayers, type LLMEnvMap } from "./utils/llm-env.js";
 export type { ContextCompressionCallback, ContextCompressionCategory, ContextCompressionEvent, ContextCompressionPhase } from "./models/context-compression.js";
 export { computeAnalytics, type AnalyticsData, type TokenStats } from "./utils/analytics.js";
-export {
-  collectStaleHookDebt,
-  evaluateHookAdmission,
-  classifyHookDisposition,
-  type HookAdmissionCandidate,
-  type HookAdmissionDecision,
-  type HookDisposition,
-} from "./utils/hook-governance.js";
 export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./utils/hook-arbiter.js";
-export { analyzeHookHealth } from "./utils/hook-health.js";
 
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
@@ -690,15 +660,11 @@ export {
   enumerateRuntimePaths,
   type RuntimePath,
 } from "./interactive-film/paths.js";
-export {
-  emotionScore,
-  nodeEmotion,
-  analyzeEmotionalArcs,
-  analyzePathDistribution,
-} from "./interactive-film/emotion.js";
+export { analyzePathDistribution } from "./interactive-film/path-analysis.js";
 export { exportInk } from "./interactive-film/export-ink.js";
 export { buildPlayableHtml } from "./interactive-film/export-html.js";
 export { ingestMaterial, type IngestMaterialInput, type MaterialAsset } from "./materials/ingest.js";
 export { runWorkerAgent, type WorkerAgentOptions } from "./agent/worker-agent.js";
+export { compileStyleGuide } from "./agents/style-guide.js";
 export { LLM_API_FORMATS, isLLMApiFormat, toPiApi, type LLMApiFormat } from "./llm/api-format.js";
 export * from "./harness/index.js";

@@ -3,7 +3,6 @@ import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
-import { buildCharacterVoiceProfiles } from "./fanfic-prompt-sections.js";
 
 export interface FanficContext {
   readonly fanficCanon: string;
@@ -18,7 +17,6 @@ export function buildWriterSystemPrompt(
   bookRules: BookRules | null,
   bookRulesBody: string,
   styleGuide: string,
-  styleFingerprint?: string,
   fanficContext?: FanficContext,
   languageOverride?: "zh" | "en",
   lengthSpec?: LengthSpec,
@@ -34,9 +32,7 @@ export function buildWriterSystemPrompt(
         protagonistContract(bookRules, "en"),
         authorityBlock("Book rules", bookRulesBody),
         authorityBlock("Style guide", styleGuide),
-        authorityBlock("Style fingerprint", styleFingerprint),
         fanficAuthority(fanficContext, "en"),
-        outputContract(resolvedLength, "en"),
       ]
     : [
         `按已激活的专业 Skill 为当前${genreProfile.name}作品写一章。平台：${book.platform}。`,
@@ -46,9 +42,7 @@ export function buildWriterSystemPrompt(
         protagonistContract(bookRules, "zh"),
         authorityBlock("本书规则", bookRulesBody),
         authorityBlock("文风指南", styleGuide),
-        authorityBlock("文风指纹", styleFingerprint),
         fanficAuthority(fanficContext, "zh"),
-        outputContract(resolvedLength, "zh"),
       ];
   return sections.filter(Boolean).join("\n\n");
 }
@@ -97,24 +91,7 @@ function fanficAuthority(context: FanficContext | undefined, language: "zh" | "e
   const deviations = context.allowedDeviations.length > 0
     ? context.allowedDeviations.map((item) => `- ${item}`).join("\n")
     : (language === "en" ? "- none" : "- 无");
-  const voiceProfiles = buildCharacterVoiceProfiles(context.fanficCanon);
   return language === "en"
-    ? `## Fanfic authority\nMode: ${context.fanficMode}\nAllowed deviations:\n${deviations}\n\n## Source canon\n${context.fanficCanon}${voiceProfiles}`
-    : `## 同人权威\n模式：${context.fanficMode}\n允许偏离：\n${deviations}\n\n## 原作正典\n${context.fanficCanon}${voiceProfiles}`;
-}
-
-function outputContract(spec: LengthSpec, language: "zh" | "en"): string {
-  return language === "en"
-    ? `## Output contract
-Return only these blocks:
-=== CHAPTER_TITLE ===
-<title without a Chapter N prefix>
-=== CHAPTER_CONTENT ===
-<complete chapter prose within ${spec.softMin}-${spec.softMax} words>`
-    : `## 输出协议
-只返回以下区块：
-=== CHAPTER_TITLE ===
-<不含“第N章”前缀的标题>
-=== CHAPTER_CONTENT ===
-<${spec.softMin}-${spec.softMax} 字的完整章节正文>`;
+    ? `## Fanfic authority\nMode: ${context.fanficMode}\nAllowed deviations:\n${deviations}\n\n## Source canon\n${context.fanficCanon}`
+    : `## 同人权威\n模式：${context.fanficMode}\n允许偏离：\n${deviations}\n\n## 原作正典\n${context.fanficCanon}`;
 }

@@ -629,34 +629,6 @@ describe("chat message actions", () => {
       .find((execution) => execution.id === "direct-short_run-1");
   }
 
-  it("sends a chat message while a production task is running without aborting the task", async () => {
-    const store = createTestStore();
-    const sessionId = await setupRunningTaskSession(store);
-
-    fetchJson.mockClear();
-    fetchJson.mockResolvedValueOnce({ response: "任务还在跑。", session: { sessionId, sessionKind: "short" } });
-
-    await store.getState().sendMessage(sessionId, "写得怎么样了？");
-
-    // 发送没有被挡、也没有调用 abort 接口
-    const calledPaths = fetchJson.mock.calls.map(([path]) => path);
-    expect(calledPaths).toContain("/agent");
-    expect(calledPaths).not.toContain(`/sessions/${sessionId}/abort`);
-    // 单连接原则：旧的任务恢复连接被换成新连接
-    expect(fakeEventSources).toHaveLength(2);
-    expect(fakeEventSources[0]?.closed).toBe(true);
-    expect(fakeEventSources[1]?.closed).toBe(false);
-    // 聊天轮结束后任务仍在跑：isStreaming 保持 true、连接保持、任务卡还在 running
-    expect(store.getState().sessions[sessionId]).toMatchObject({ isStreaming: true, isChatStreaming: false });
-    expect(store.getState().sessions[sessionId]?.stream).not.toBeNull();
-    expect(findTaskExecution(store, sessionId)).toMatchObject({ status: "running" });
-    // 聊天回复正常写入
-    expect(store.getState().sessions[sessionId]?.messages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: "任务还在跑。",
-    });
-  });
-
   it("keeps the task stream open when the chat round completes while the task is still running", async () => {
     const store = createTestStore();
     const sessionId = await setupRunningTaskSession(store);

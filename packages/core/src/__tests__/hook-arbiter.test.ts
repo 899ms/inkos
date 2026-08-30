@@ -159,7 +159,7 @@ describe("arbitrateRuntimeStateDeltaHooks", () => {
     ]);
   });
 
-  it("rejects structurally incomplete candidates without inventing content", () => {
+  it("accepts a schema-valid candidate without host semantic scoring", () => {
     const result = arbitrateRuntimeStateDeltaHooks({
       hooks: [],
       delta: createDelta({
@@ -171,9 +171,11 @@ describe("arbitrateRuntimeStateDeltaHooks", () => {
       }),
     });
 
-    expect(result.resolvedDelta.hookOps.upsert).toEqual([]);
+    expect(result.resolvedDelta.hookOps.upsert).toEqual([
+      expect.objectContaining({ hookId: "hook", type: "mystery" }),
+    ]);
     expect(result.decisions).toEqual([
-      expect.objectContaining({ action: "rejected", reason: "missing_payoff_signal" }),
+      expect.objectContaining({ action: "created", reason: "admit" }),
     ]);
   });
 });

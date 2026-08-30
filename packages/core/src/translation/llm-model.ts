@@ -1,8 +1,28 @@
 import type { LLMClient } from "../llm/provider.js";
-import { runWorkerAgent } from "../agent/worker-agent.js";
+import { runWorkerAgentTool } from "../agent/worker-agent.js";
+import { Type } from "@sinclair/typebox";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import type { TranslationGlossaryTerm, TranslationModelPort, TranslationSegment } from "./types.js";
+
+const TranslationResultToolSchema = Type.Object({
+  chapterTitle: Type.Optional(Type.String()),
+  segments: Type.Array(Type.Object({
+    index: Type.Integer({ minimum: 0 }),
+    target: Type.String(),
+    notes: Type.Optional(Type.String()),
+  })),
+  glossary: Type.Optional(Type.Array(Type.Object({
+    source: Type.String(),
+    target: Type.String(),
+    note: Type.Optional(Type.String()),
+  }))),
+});
+
+const TranslationReviewToolSchema = Type.Object({
+  summary: Type.String(),
+  issues: Type.Array(Type.String()),
+});
 
 export function createLLMTranslationModel(input: {
   readonly client: LLMClient;
@@ -13,12 +33,12 @@ export function createLLMTranslationModel(input: {
 }): TranslationModelPort {
   return {
     async translateSegments(request) {
-      const response = await runWorkerAgent(input.client, input.model, appendActivatedSkillGuidance([
+      const parsed = await runWorkerAgentTool(input.client, input.model, appendActivatedSkillGuidance([
         {
           role: "system",
           content: [
             "Translate the chapter title and all segments with the activated translation Skill.",
-            "Return JSON only: {\"chapterTitle\":\"...\",\"segments\":[{\"index\":1,\"target\":\"...\",\"notes\":\"optional\"}],\"glossary\":[{\"source\":\"...\",\"target\":\"...\",\"note\":\"optional\"}]}",
+            "Submit the complete translation through the translation result tool.",
           ].join("\n"),
         },
         {
@@ -34,8 +54,12 @@ export function createLLMTranslationModel(input: {
             })),
           }, null, 2),
         },
-      ], input.activatedSkills), { temperature: 0.2, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
-      const parsed = parseJsonObject(response.content);
+      ], input.activatedSkills), {
+        name: "submit_translation",
+        label: "Submit translation",
+        description: "Submit translated segments and glossary updates.",
+        parameters: TranslationResultToolSchema,
+      }, { temperature: 0.2, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
       return {
         ...(typeof parsed.chapterTitle === "string" && parsed.chapterTitle.trim()
           ? { chapterTitle: parsed.chapterTitle.trim() }
@@ -45,12 +69,12 @@ export function createLLMTranslationModel(input: {
       };
     },
     async reviewChapter(request) {
-      const response = await runWorkerAgent(input.client, input.model, appendActivatedSkillGuidance([
+      const parsed = await runWorkerAgentTool(input.client, input.model, appendActivatedSkillGuidance([
         {
           role: "system",
           content: [
             "Review the translation with the activated translation Skill.",
-            "Return JSON only: {\"summary\":\"...\",\"issues\":[\"...\"]}. An empty issues array is valid.",
+            "Submit the review summary and concrete issues through the review result tool. An empty issues array is valid.",
           ].join("\n"),
         },
         {
@@ -67,8 +91,12 @@ export function createLLMTranslationModel(input: {
             })),
           }, null, 2),
         },
-      ], input.activatedSkills), { temperature: 0.1, maxTokens: 4096, signal: input.signal });
-      const parsed = parseJsonObject(response.content);
+      ], input.activatedSkills), {
+        name: "submit_translation_review",
+        label: "Submit translation review",
+        description: "Submit the translation review.",
+        parameters: TranslationReviewToolSchema,
+      }, { temperature: 0.1, maxTokens: 4096, signal: input.signal });
       return {
         summary: typeof parsed.summary === "string" ? parsed.summary : "Translation review completed.",
         issues: Array.isArray(parsed.issues) ? parsed.issues.filter((issue): issue is string => typeof issue === "string") : [],
@@ -116,26 +144,4 @@ function parseGlossary(value: unknown): ReadonlyArray<TranslationGlossaryTerm> {
       ...(typeof record.note === "string" && record.note.trim() ? { note: record.note.trim() } : {}),
     }];
   });
-}
-
-function parseJsonObject(raw: string): Record<string, unknown> {
-  const trimmed = stripFence(raw.trim());
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  } catch {
-    // Try extracting the first object below.
-  }
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    const parsed = JSON.parse(trimmed.slice(start, end + 1)) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  }
-  throw new Error("Translation model did not return a JSON object.");
-}
-
-function stripFence(raw: string): string {
-  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(raw);
-  return match ? match[1]!.trim() : raw;
 }

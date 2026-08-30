@@ -1,5 +1,4 @@
 import type {
-  ActiveOverride,
   ChapterTrace,
   ContextPackage,
   RuleStack,
@@ -10,15 +9,6 @@ import {
   RuleStackSchema,
 } from "../models/input-governance.js";
 import type { PlanChapterOutput } from "../agents/planner.js";
-
-const MAX_OVERRIDE_REASON_CHARS = 80;
-
-function truncateForOverrideReason(value: string): string {
-  const collapsed = value.replace(/\s+/g, " ").trim();
-  return collapsed.length > MAX_OVERRIDE_REASON_CHARS
-    ? `${collapsed.slice(0, MAX_OVERRIDE_REASON_CHARS - 1)}…`
-    : collapsed;
-}
 
 /**
  * Compose the per-chapter rule stack used by writer / continuity / reviser
@@ -34,33 +24,7 @@ function truncateForOverrideReason(value: string): string {
  * the model prompt. Removing the function would require a much larger
  * prompt refactor; making it real fixes the lie at the source.
  */
-export function buildGovernedRuleStack(plan: PlanChapterOutput, chapterNumber: number): RuleStack {
-  const activeOverrides: ActiveOverride[] = [];
-
-  // L4 → L3: per-chapter prohibitions narrow the planning layer for this
-  // chapter only. mustAvoid items come from rules-reader prohibitions +
-  // current_focus avoid section (planner.collectMustAvoid).
-  for (const item of plan.intent.mustAvoid) {
-    activeOverrides.push({
-      from: "L4",
-      to: "L3",
-      target: `chapter:${chapterNumber}/mustAvoid`,
-      reason: truncateForOverrideReason(item),
-    });
-  }
-
-  // L4 → L3: planner-issued style emphasis is also a per-chapter override
-  // on the planning layer. Style emphasis surfaces things like POV tightness
-  // or character-conflict focus that the writer must honor this chapter.
-  for (const item of plan.intent.styleEmphasis) {
-    activeOverrides.push({
-      from: "L4",
-      to: "L3",
-      target: `chapter:${chapterNumber}/styleEmphasis`,
-      reason: truncateForOverrideReason(item),
-    });
-  }
-
+export function buildGovernedRuleStack(): RuleStack {
   return RuleStackSchema.parse({
     layers: [
       { id: "L1", name: "hard_facts", precedence: 100, scope: "global" },
@@ -72,14 +36,13 @@ export function buildGovernedRuleStack(plan: PlanChapterOutput, chapterNumber: n
       // Phase 5 authoritative source names (was: story_bible, volume_outline).
       hard: ["story_frame", "current_state", "book_rules", "roles"],
       soft: ["author_intent", "current_focus", "volume_map"],
-      diagnostic: ["anti_ai_checks", "continuity_audit", "style_regression_checks"],
     },
     overrideEdges: [
       { from: "L4", to: "L3", allowed: true, scope: "current_chapter" },
       { from: "L4", to: "L2", allowed: false, scope: "current_chapter" },
       { from: "L4", to: "L1", allowed: false, scope: "current_chapter" },
     ],
-    activeOverrides,
+    activeOverrides: [],
   });
 }
 
@@ -94,10 +57,10 @@ export function buildGovernedTrace(params: {
   readonly retrieval?: ChapterTrace["retrieval"];
 }): ChapterTrace {
   const protectedEntries = params.contextPackage.selectedContext.filter((entry) =>
-    isProtectedContextSource(entry.source),
+    isProtectedContextSource(entry),
   );
   const compressibleEntries = params.contextPackage.selectedContext.filter((entry) =>
-    !isProtectedContextSource(entry.source),
+    !isProtectedContextSource(entry),
   );
   const protectedTokens = sumContextTokens(protectedEntries);
   const compressibleTokens = sumContextTokens(compressibleEntries);
@@ -123,7 +86,9 @@ export function buildGovernedTrace(params: {
   });
 }
 
-export function isProtectedContextSource(source: string): boolean {
+export function isProtectedContextSource(input: string | ContextPackage["selectedContext"][number]): boolean {
+  if (typeof input !== "string" && input.protection) return input.protection === "protected";
+  const source = typeof input === "string" ? input : input.source;
   return source === "runtime/chapter_memo"
     || source === "story/current_focus.md"
     || source === "story/author_intent.md"
@@ -137,7 +102,7 @@ export function isProtectedContextSource(source: string): boolean {
     || source === "story/fanfic_canon.md"
     || source.startsWith("story/current_state.md")
     || source.startsWith("story/pending_hooks.md#")
-    || source.startsWith("runtime/hook_debt#");
+    || source.startsWith("runtime/referenced_hook#");
 }
 
 function sumContextTokens(entries: ReadonlyArray<ContextPackage["selectedContext"][number]>): number {

@@ -39,7 +39,7 @@ const forecast: NarrativeForecast = {
       },
       risks: [{ kind: "continuity", description: "关键物证可能被清理" }],
       uncertainties: ["是否存在副本"],
-      intentAlignment: { score: 75, rationale: "符合谨慎调查的作者意图" },
+      intentRationale: "符合谨慎调查的作者意图",
     },
     {
       branchId: "branch-2",
@@ -50,7 +50,7 @@ const forecast: NarrativeForecast = {
       projectedChanges: { characters: [], relationships: [], world: [], hooks: [] },
       risks: [{ kind: "causality", description: "站长反应需要合理铺垫" }],
       uncertainties: [],
-      intentAlignment: { score: 82, rationale: "兼顾安全和推进速度" },
+      intentRationale: "兼顾安全和推进速度",
     },
   ],
 };

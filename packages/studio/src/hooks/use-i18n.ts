@@ -264,24 +264,6 @@ const strings = {
   "doctor.someFailed": { zh: "部分检查失败 — 请查看配置", en: "Some checks failed — review configuration" },
 
   // Genre extras
-  "genre.createNew": { zh: "创建新题材", en: "Create New Genre" },
-  "genre.name": { zh: "名称", en: "Name" },
-  "genre.editGenre": { zh: "编辑", en: "Edit" },
-  "genre.deleteGenre": { zh: "删除", en: "Delete" },
-  "genre.confirmDelete": { zh: "确认删除此题材？", en: "Delete this genre?" },
-  "genre.chapterTypes": { zh: "章节类型", en: "Chapter Types" },
-  "genre.fatigueWords": { zh: "疲劳词", en: "Fatigue Words" },
-  "genre.numericalSystem": { zh: "数值系统", en: "Numerical System" },
-  "genre.powerScaling": { zh: "力量等级", en: "Power Scaling" },
-  "genre.eraResearch": { zh: "时代研究", en: "Era Research" },
-  "genre.pacingRule": { zh: "节奏规则", en: "Pacing Rule" },
-  "genre.rules": { zh: "规则", en: "Rules" },
-  "genre.saveChanges": { zh: "保存更改", en: "Save Changes" },
-  "genre.cancel": { zh: "取消", en: "Cancel" },
-  "genre.copyToProject": { zh: "复制到项目", en: "Copy to Project" },
-  "genre.selectHint": { zh: "选择题材查看详情", en: "Select a genre to view details" },
-  "genre.commaSeparated": { zh: "逗号分隔", en: "comma-separated" },
-  "genre.rulesMd": { zh: "规则（Markdown）", en: "Rules (Markdown)" },
 
   // Config extras
   "config.modelRouting": { zh: "模型路由", en: "Model Routing" },

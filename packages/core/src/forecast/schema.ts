@@ -38,13 +38,6 @@ export const ForecastProjectedChangesSchema = z.object({
 });
 export type ForecastProjectedChanges = z.infer<typeof ForecastProjectedChangesSchema>;
 
-export const ForecastIntentAlignmentSchema = z.object({
-  // 0-100: how well the branch matches author_intent / current_focus.
-  score: z.number().min(0).max(100),
-  rationale: z.string().min(1),
-});
-export type ForecastIntentAlignment = z.infer<typeof ForecastIntentAlignmentSchema>;
-
 export const ForecastBranchSchema = z.object({
   branchId: z.string().regex(/^branch-\d+$/),
   title: z.string().min(1),
@@ -54,7 +47,7 @@ export const ForecastBranchSchema = z.object({
   projectedChanges: ForecastProjectedChangesSchema,
   risks: z.array(ForecastRiskSchema),
   uncertainties: z.array(z.string()),
-  intentAlignment: ForecastIntentAlignmentSchema,
+  intentRationale: z.string().min(1),
 });
 export type ForecastBranch = z.infer<typeof ForecastBranchSchema>;
 
@@ -97,41 +90,3 @@ export const ForecastModelOutputSchema = z.object({
   branches: z.array(ForecastModelBranchSchema).min(FORECAST_MIN_BRANCHES).max(FORECAST_MAX_BRANCHES),
 });
 export type ForecastModelOutput = z.infer<typeof ForecastModelOutputSchema>;
-
-/**
- * Parse and validate the raw model response for a forecast run. Tolerates a
- * code fence, surrounding prose and trailing commas; anything else is a hard
- * error so an invalid response never reaches disk.
- */
-export function parseForecastModelOutput(raw: string): ForecastModelOutput {
-  const jsonSlice = extractJsonObject(stripCodeFence(raw.trim()));
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(sanitizeJson(jsonSlice));
-  } catch (error) {
-    throw new Error(`narrative forecast model output is not valid JSON: ${String(error)}`);
-  }
-  try {
-    return ForecastModelOutputSchema.parse(parsed);
-  } catch (error) {
-    throw new Error(`narrative forecast model output failed schema validation: ${String(error)}`);
-  }
-}
-
-function stripCodeFence(value: string): string {
-  const fenced = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fenced?.[1]?.trim() ?? value;
-}
-
-function extractJsonObject(value: string): string {
-  const start = value.indexOf("{");
-  const end = value.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return value;
-  return value.slice(start, end + 1);
-}
-
-function sanitizeJson(value: string): string {
-  return value
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
-    .replace(/,\s*([}\]])/g, "$1");
-}

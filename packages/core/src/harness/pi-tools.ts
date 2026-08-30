@@ -93,7 +93,7 @@ function renderActionResultForAgent(result: ActionResult): string {
   }
   if (result.observations.length > 0) {
     lines.push("Observations:", ...result.observations.map((observation) => (
-      `- [${observation.kind}/${observation.status}] ${observation.code}: ${observation.summary}`
+      `- [${observation.kind}] ${observation.code}: ${observation.summary}`
     )));
   }
   if (result.nextActions.length > 0) {

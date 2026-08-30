@@ -633,7 +633,7 @@ function renderEntityRoster(entities: ReadonlyArray<PlayEntity>, language: "zh" 
   const header = isEn
     ? "Current entity roster (reuse these ids; do not recreate the same person/thing):"
     : "当前实体名册（复用这些 id；不要把同一个人/物换新 id 重建）：";
-  const lines = entities.slice(0, 40).map((entity) => {
+  const lines = entities.map((entity) => {
     const detail = [entity.summary, entity.status ? `${isEn ? "status" : "状态"}: ${entity.status}` : ""]
       .filter(Boolean)
       .join(isEn ? "; " : "；");
@@ -643,8 +643,7 @@ function renderEntityRoster(entities: ReadonlyArray<PlayEntity>, language: "zh" 
 }
 
 function clampRosterText(value: string): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  return compact.length > 120 ? `${compact.slice(0, 117)}...` : compact;
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function renderStateBrief(input: {

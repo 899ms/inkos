@@ -150,10 +150,7 @@ export function buildRuntimeStateArtifactsFromSnapshot(params: {
     snapshot: next,
     resolvedDelta,
     currentStateMarkdown: renderCurrentStateProjection(next.currentState, params.language),
-    // Pass the chapter number so the projection can tag stale / blocked hooks.
-    hooksMarkdown: renderHooksProjection(next.hooks, params.language, {
-      currentChapter: resolvedDelta.chapter,
-    }),
+    hooksMarkdown: renderHooksProjection(next.hooks, params.language),
     chapterSummariesMarkdown: renderChapterSummariesProjection(next.chapterSummaries, params.language),
   };
 }
@@ -208,7 +205,6 @@ export async function loadNarrativeMemorySeed(bookDir: string): Promise<Narrativ
         status: hook.status,
         lastAdvancedChapter: hook.lastAdvancedChapter,
         expectedPayoff: hook.expectedPayoff,
-        payoffTiming: hook.payoffTiming,
         notes: hook.notes,
       })),
   };

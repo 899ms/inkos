@@ -29,7 +29,7 @@ export async function reviewChapterDraft(params: {
   readonly book: Pick<{ genre: string }, "genre">;
   readonly bookDir: string;
   readonly chapterNumber: number;
-  readonly output: Pick<WriteChapterOutput, "content" | "postWriteErrors">;
+  readonly output: Pick<WriteChapterOutput, "content">;
   readonly controlInput?: ChapterReviewControlInput;
   readonly lengthSpec: LengthSpec;
   readonly initialUsage: ChapterReviewUsage;
@@ -42,14 +42,10 @@ export async function reviewChapterDraft(params: {
       options?: ChapterReviewControlInput & { readonly temperature?: number },
     ) => Promise<AuditResult>;
   };
-  readonly normalize: (content: string) => string;
   readonly assertNotEmpty: (content: string) => void;
   readonly addUsage: (left: ChapterReviewUsage, right?: ChapterReviewUsage) => ChapterReviewUsage;
-  readonly analyzeAITells: (content: string) => { issues: ReadonlyArray<AuditIssue> };
-  readonly analyzeSensitiveWords: (content: string) => { issues: ReadonlyArray<AuditIssue> };
-  readonly runPostWriteChecks: (content: string) => ReadonlyArray<AuditIssue>;
 }): Promise<ChapterReviewResult> {
-  const content = params.normalize(params.output.content);
+  const content = params.output.content;
   params.assertNotEmpty(content);
   const wordCount = countChapterLength(content, params.lengthSpec.countingMode);
   let modelReview: AuditResult;
@@ -83,16 +79,13 @@ export async function reviewChapterDraft(params: {
         severity: "warning",
         category: "length-budget",
         description: `Chapter length ${wordCount} is outside ${params.lengthSpec.hardMin}-${params.lengthSpec.hardMax}.`,
-        suggestion: `Revise the underdeveloped or redundant scenes toward ${params.lengthSpec.target}.`,
+        suggestion: `If this configured range remains desired, adjust length toward ${params.lengthSpec.target} while preserving the chapter's established content.`,
       }]
     : [];
   const review: AuditResult = {
     ...modelReview,
     issues: [
       ...modelReview.issues,
-      ...params.analyzeAITells(content).issues,
-      ...params.analyzeSensitiveWords(content).issues,
-      ...params.runPostWriteChecks(content),
       ...lengthIssues,
     ],
   };

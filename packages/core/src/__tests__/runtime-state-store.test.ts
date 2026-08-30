@@ -116,55 +116,6 @@ describe("runtime-state-store memory helpers", () => {
     ]);
   });
 
-  it("normalizes dormant and confirmed hook lifecycle terms from markdown projections", async () => {
-    root = await mkdtemp(join(tmpdir(), "inkos-runtime-hook-status-"));
-    const bookDir = join(root, "book");
-    const storyDir = join(bookDir, "story");
-    const chaptersDir = join(bookDir, "chapters");
-    await mkdir(storyDir, { recursive: true });
-    await mkdir(chaptersDir, { recursive: true });
-
-    await Promise.all([
-      writeFile(
-        join(chaptersDir, "index.json"),
-        JSON.stringify([{ number: 1, title: "Ch1" }]),
-        "utf-8",
-      ),
-      writeFile(
-        join(storyDir, "pending_hooks.md"),
-        [
-          "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | notes |",
-          "| --- | --- | --- | --- | --- | --- | --- |",
-          "| dormant-seed | 1 | evidence | 未激活 | 0 | 后续揭开封条日期 | 休眠种子，不应当成正在进行 |",
-          "| waiting-seed | 1 | evidence | 待启动 | 0 | 后续揭开压力曲线 | 未来种子，不应当成正在进行 |",
-          "| confirmed-hit | 1 | evidence | confirmed_hit | 1 | 已确认压力曲线异常 | 本章已命中，不应退回 open |",
-          "",
-        ].join("\n"),
-        "utf-8",
-      ),
-      writeFile(
-        join(storyDir, "chapter_summaries.md"),
-        [
-          "| chapter | title | characters | events | stateChanges | hookActivity | mood | chapterType |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- |",
-          "| 1 | Ch1 | 夜班巡检员 | 发现工具箱。 | 种下压力异常。 | confirmed-hit advanced | tense | opening |",
-          "",
-        ].join("\n"),
-        "utf-8",
-      ),
-    ]);
-
-    const snapshot = await loadRuntimeStateSnapshot(bookDir);
-
-    expect(snapshot.hooks.hooks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ hookId: "dormant-seed", status: "deferred" }),
-        expect.objectContaining({ hookId: "waiting-seed", status: "deferred" }),
-        expect.objectContaining({ hookId: "confirmed-hit", status: "progressing" }),
-      ]),
-    );
-  });
-
   it("prefers structured snapshot state over stale markdown snapshots for fact history rebuild", async () => {
     root = await mkdtemp(join(tmpdir(), "inkos-runtime-state-snapshot-"));
     const bookDir = join(root, "book");
@@ -249,7 +200,7 @@ describe("runtime-state-store memory helpers", () => {
         [
           "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | notes |",
           "| --- | --- | --- | --- | --- | --- | --- |",
-          "| H012 | 0 | mystery | 暂缓 | 0 | Explain the clock drift. | Sun Yuzhen owns the clock. |",
+          "| H012 | 0 | mystery | deferred | 0 | Explain the clock drift. | Sun Yuzhen owns the clock. |",
           "",
         ].join("\n"),
         "utf-8",

@@ -90,7 +90,7 @@ InkOS 1.8.0 converges the Chat Agent and every production workflow on one pi-age
   <img src="assets/play-item-warcraft.png" width="420" alt="InkOS Play item image example">
 </p>
 
-**Native English novel writing now supported！** — 10 built-in English genre profiles with dedicated pacing rules, fatigue word lists, and audit dimensions. Set `--lang en` and go.
+**Native English creation is supported** — set `--lang en`; professional methodology comes from the active Skill rather than hard-coded genre scoring rules.
 
 ## Quick Start
 
@@ -259,7 +259,7 @@ English is the default for English genre profiles. Pick a genre and go:
 
 ```bash
 inkos book create --title "The Last Delver" --genre litrpg     # LitRPG novel (English by default)
-inkos write next my-book          # Write next chapter (full pipeline: draft → audit → revise)
+inkos write next my-book          # Write and persist the next chapter; review and revision remain explicit actions
 inkos status                      # Check status
 inkos review list my-book         # Review drafts
 inkos review approve-all my-book  # Batch approve
@@ -317,9 +317,9 @@ InkOS creates the world, characters, items, evidence, relationships, current sce
 
 ---
 
-## English Genre Profiles
+## English Creation Metadata
 
-InkOS ships with 10 English-native genre profiles. Each includes genre-specific rules, pacing, fatigue word detection, and audit dimensions:
+InkOS ships with lightweight metadata for common English serial-fiction genres. Creative method comes from Skills and the user's Work constraints:
 
 | Genre | Key Mechanics |
 |-------|--------------|
@@ -336,8 +336,6 @@ InkOS ships with 10 English-native genre profiles. Each includes genre-specific 
 
 Also supports 5 Chinese web novel genres (xuanhuan, xianxia, urban, horror, other) for bilingual creators.
 
-Every genre includes a **fatigue word list** (e.g., "delve", "tapestry", "testament", "intricate", "pivotal" for LitRPG) — the auditor flags these automatically so your prose doesn't read like every other AI-generated novel.
-
 ---
 
 ## Key Features
@@ -350,11 +348,9 @@ Studio Chat is not just a Q&A box. It can create long-form books, run Short, gen
 
 Play maintains a durable interactive world state: characters, locations, items, evidence, relationships, time, current scene, HUD, and images. It is not a hard-coded RPG system. A cultivation world may use rarity and realms; a romance story may use emotional stages; a detective story may use evidence lifecycle and credibility. The rules come from the user's world contract and stay in the world state.
 
-### 37-Dimension Audit + De-AI-ification
+### Qualitative Review + Explicit Revision
 
-The Continuity Auditor agent checks every draft across 37 dimensions: character memory, resource continuity, hook payoff, outline adherence, narrative pacing, emotional arcs, and more. Built-in AI-tell detection automatically catches "LLM voice" — overused words, monotonous sentence patterns, excessive summarization. The default long-form write cycle now runs at most one automatic revision pass; unresolved critical findings are kept in the result for human review or later commands.
-
-De-AI-ification rules are baked into the Writer agent's prompts: fatigue word lists, banned patterns, style fingerprint injection — reducing AI traces at the source. `revise --mode anti-detect` runs dedicated anti-detection rewriting on existing chapters.
+The reviewer compares the artifact with user intent, canon, current state, chapter planning, and the activated review Skill. It returns concrete observations with evidence and repair direction. Review never scores, rejects, or automatically rewrites prose; revision is an explicit action with a traceable artifact revision.
 
 ### Style Cloning
 
@@ -395,7 +391,7 @@ This generates `story/runtime/chapter-XXXX.intent.md`, `context.json`, `rule-sta
 
 ### Fan Fiction
 
-`inkos fanfic init --from source.txt --mode canon` creates a fanfic book from source material. Four modes: canon (faithful continuation), au (alternate universe), ooc (out of character), cp (ship-focused). Includes a canon importer, fanfic-specific audit dimensions, and information boundary controls to keep lore consistent.
+`inkos fanfic init --from source.txt --mode canon` creates a fanfic book from source material. Four modes: canon, au, ooc, and cp. The typed canon importer and fanfic Skill preserve source facts and information boundaries.
 
 ### Multi-Model Routing
 
@@ -442,7 +438,6 @@ Long-form chapters are produced by multiple agents in sequence:
 | **Writer** | Produces prose from the composed context (length-governed, dialogue-driven) |
 | **Observer** | Over-extracts 9 categories of facts from the chapter text (characters, locations, resources, relationships, emotions, information, hooks, time, physical state) |
 | **Reflector** | Outputs a JSON delta (not full markdown); code-layer applies Zod schema validation then immutable write |
-| **Normalizer** | Single-pass compress/expand only when the chapter clearly leaves the hard length range |
 | **Continuity Auditor** | Validates the draft against structured state, control docs, and chapter context |
 | **Reviser** | Applies an explicit revision request from the user, Agent, or persisted review observations and atomically records the new version |
 
@@ -485,7 +480,7 @@ That means briefs, outline nodes, book rules, and current requests are no longer
 
 The Writer agent has ~25 universal writing rules (character craft, narrative technique, logical consistency, language constraints, de-AI-ification), applicable to all genres.
 
-On top of that, each genre has dedicated rules (prohibitions, language constraints, pacing, audit dimensions), and each book has its own `book_rules.md` (protagonist personality, numerical caps, custom prohibitions), `story_bible.md` (worldbuilding), `author_intent.md` (long-horizon direction), and `current_focus.md` (near-term steering). `volume_outline.md` still acts as the default plan, but in v2 input governance it no longer automatically overrides the current chapter intent.
+Each Work carries its own readable `book_rules.md`, typed `book_rules.json`, `outline/story_frame.md`, `outline/volume_map.md`, `author_intent.md`, and `current_focus.md`. The current instruction and explicit Work constraints govern each action; the outline is supporting context rather than an automatic override.
 
 ## Usage Modes
 
@@ -566,7 +561,7 @@ The first image is a local Studio screenshot. The other images are real local ou
 | `inkos radar scan` | Scan market / trend inputs for new-book direction |
 | `inkos fanfic init` | Create a fanfic book from source material (`--from`, `--mode canon/au/ooc/cp`) |
 | `inkos short run` | Generate a standalone short-fiction package |
-| `inkos eval [id]` | Generate a quality evaluation report (`--json`, chapter ranges) |
+| `inkos audit [id] [chapter]` | Generate qualitative review observations |
 | `inkos consolidate [id]` | Consolidate chapter summaries for long-book context control |
 | `inkos forecast create/show/select` | Create, re-check, and select non-canonical long-form branches; selection saves a candidate plan only |
 | `inkos interact` | External-agent / CLI natural-language entry (`--json`, `--message`, `--book`) |

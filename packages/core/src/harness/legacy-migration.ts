@@ -314,7 +314,7 @@ async function readLegacyMetadata(
 
 async function firstMarkdownTitle(root: string): Promise<string | undefined> {
   const inventory = await listRegularFiles(root);
-  for (const file of inventory.files.filter((path) => path.endsWith(".md")).slice(0, 12)) {
+  for (const file of inventory.files.filter((path) => path.endsWith(".md"))) {
     const raw = await readFile(join(root, file), "utf-8").catch(() => "");
     const heading = /^#\s+(.+?)\s*$/mu.exec(raw)?.[1]?.trim();
     if (heading) return heading;

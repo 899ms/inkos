@@ -2,8 +2,7 @@ import { z } from "zod";
 
 export const ChapterMemoSchema = z.object({
   chapter: z.number().int().min(1),
-  goal: z.string().min(1).max(50),
-  isGoldenOpening: z.boolean().default(false),
+  goal: z.string().min(1),
   body: z.string().min(1),
   threadRefs: z.array(z.string()).default([]),
 });
@@ -13,11 +12,6 @@ export type ChapterMemo = z.infer<typeof ChapterMemoSchema>;
 export const ChapterIntentSchema = z.object({
   chapter: z.number().int().min(1),
   goal: z.string().min(1),
-  outlineNode: z.string().optional(),
-  arcContext: z.string().optional(),
-  mustKeep: z.array(z.string()).default([]),
-  mustAvoid: z.array(z.string()).default([]),
-  styleEmphasis: z.array(z.string()).default([]),
 });
 
 export type ChapterIntent = z.infer<typeof ChapterIntentSchema>;
@@ -26,6 +20,7 @@ export const ContextSourceSchema = z.object({
   source: z.string().min(1),
   reason: z.string().min(1),
   excerpt: z.string().optional(),
+  protection: z.enum(["protected", "compressible"]).optional(),
 });
 
 export type ContextSource = z.infer<typeof ContextSourceSchema>;
@@ -70,7 +65,6 @@ export type ActiveOverride = z.infer<typeof ActiveOverrideSchema>;
 export const RuleStackSectionsSchema = z.object({
   hard: z.array(z.string()).default([]),
   soft: z.array(z.string()).default([]),
-  diagnostic: z.array(z.string()).default([]),
 });
 
 export type RuleStackSections = z.infer<typeof RuleStackSectionsSchema>;
@@ -80,7 +74,6 @@ export const RuleStackSchema = z.object({
   sections: RuleStackSectionsSchema.default({
     hard: [],
     soft: [],
-    diagnostic: [],
   }),
   overrideEdges: z.array(OverrideEdgeSchema).default([]),
   activeOverrides: z.array(ActiveOverrideSchema).default([]),

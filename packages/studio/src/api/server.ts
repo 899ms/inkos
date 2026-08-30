@@ -127,7 +127,6 @@ import {
   reviewStoryGraph,
   exportInk,
   buildPlayableHtml,
-  analyzeEmotionalArcs,
   analyzePathDistribution,
   generateNodeImage,
   defaultNodeImageDeps,
@@ -1090,7 +1089,7 @@ function classifyAgentFailure(message: string): AgentFailureKind {
     return "llm";
   }
   if (
-    /PlannerParseError|Architect output missing|required sections|missing YAML frontmatter|frontmatter delimiters|parseMemo|Book creation artifact is incomplete|Short-hit draft is incomplete|工具执行失败|执行失败|sub_agent|tool execution|RUNTIME_STATE_DELTA|JSON parse|解析失败/i.test(text)
+    /Book creation artifact is incomplete|Short-hit draft is incomplete|工具执行失败|执行失败|sub_agent|tool execution|解析失败/i.test(text)
   ) {
     return "internal";
   }
@@ -2894,24 +2893,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
-  // --- Genres ---
-
-  app.get("/api/v1/genres", async (c) => {
-    const { listAvailableGenres, readGenreProfile } = await import("@actalk/inkos-core");
-    const rawGenres = await listAvailableGenres(root);
-    const genres = await Promise.all(
-      rawGenres.map(async (g) => {
-        try {
-          const { profile } = await readGenreProfile(root, g.id);
-          return { ...g, language: profile.language ?? "zh" };
-        } catch {
-          return { ...g, language: "zh" };
-        }
-      }),
-    );
-    return c.json({ genres });
-  });
-
   // --- Book Create ---
 
   app.post("/api/v1/books/create", async (c) => {
@@ -3273,7 +3254,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // Pointer shims that the runtime no longer treats as authoritative. The
   // GET handler tags them with `legacy: true` so the UI can surface that the
   // edits won't land where the user expects.
-  const LEGACY_SHIM_FILES = new Set(["story_bible.md", "book_rules.md"]);
+  const LEGACY_SHIM_FILES = new Set(["story_bible.md"]);
   const RUNTIME_DIAGNOSTIC_FILE_RE = /^runtime\/chapter-\d{4}\.(?:intent\.md|plan\.md|context\.json|rule-stack\.yaml|trace\.json)$/;
 
   /**
@@ -3337,23 +3318,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     // can warn users their edits won't reach the runtime.
     // Hotfix: only tag as legacy when the book actually HAS the new layout.
     // Pre-Phase-5 books use story_bible/book_rules as the authoritative source.
-    const { isNewLayoutBook, tryParseBookRulesFrontmatter } = await import("@actalk/inkos-core");
+    const { isNewLayoutBook } = await import("@actalk/inkos-core");
     const legacy = LEGACY_SHIM_FILES.has(file) && await isNewLayoutBook(bookDir);
 
     try {
       const content = await readFile(resolved, "utf-8");
-      // Files like outline/story_frame.md carry a YAML frontmatter block of
-      // structured fields (protagonist / genreLock / prohibitions / ...). Parse
-      // it here so the UI can render those as friendly cards instead of dumping
-      // raw YAML at the reader. `content` stays raw so the editor round-trips it
-      // unchanged; `body` is the prose with the frontmatter stripped.
-      const parsed = tryParseBookRulesFrontmatter(content);
-      const structured = parsed ? { frontmatter: parsed.rules, body: parsed.body } : {};
       const runtimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(file);
       return c.json({
         file,
         content,
-        ...structured,
         ...(legacy ? { legacy: true } : {}),
         ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
       });
@@ -5592,37 +5565,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
-  // --- Genre detail + copy ---
-
-  app.get("/api/v1/genres/:id", async (c) => {
-    const genreId = c.req.param("id");
-    try {
-      const { readGenreProfile } = await import("@actalk/inkos-core");
-      const { profile, body } = await readGenreProfile(root, genreId);
-      return c.json({ profile, body });
-    } catch (e) {
-      return c.json({ error: String(e) }, 404);
-    }
-  });
-
-  app.post("/api/v1/genres/:id/copy", async (c) => {
-    const genreId = c.req.param("id");
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-    try {
-      const { getBuiltinGenresDir } = await import("@actalk/inkos-core");
-      const { mkdir: mkdirFs, copyFile } = await import("node:fs/promises");
-      const builtinDir = getBuiltinGenresDir();
-      const projectGenresDir = join(root, "genres");
-      await mkdirFs(projectGenresDir, { recursive: true });
-      await copyFile(join(builtinDir, `${genreId}.md`), join(projectGenresDir, `${genreId}.md`));
-      return c.json({ ok: true, path: `genres/${genreId}.md` });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   // --- Model overrides ---
 
   app.get("/api/v1/project/model-overrides", async (c) => {
@@ -5715,29 +5657,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
-  // --- AIGC Detection ---
-
-  app.post("/api/v1/books/:id/detect/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-
-    try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      const { analyzeAITells } = await import("@actalk/inkos-core");
-      const result = analyzeAITells(content);
-      return c.json({ chapterNumber: chapterNum, ...result });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   // --- Truth file edit ---
 
   app.put("/api/v1/books/:id/truth/:file{.+}", async (c) => {
@@ -5748,9 +5667,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!resolved) {
       return c.json({ error: "Invalid truth file" }, 400);
     }
-    // Legacy pointer shims are read-only in new-layout books: writing
-    // story_bible.md or book_rules.md does nothing at runtime (the pipeline
-    // reads outline/ instead). For pre-Phase-5 books these ARE authoritative.
+    // Legacy story_bible pointer shims are read-only in new-layout books.
     if (LEGACY_SHIM_FILES.has(file)) {
       const { isNewLayoutBook } = await import("@actalk/inkos-core");
       if (await isNewLayoutBook(bookDir)) {
@@ -5768,6 +5685,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const { dirname: dirnameFs } = await import("node:path");
     await mkdirFs(dirnameFs(resolved), { recursive: true });
     await writeFileFs(resolved, content, "utf-8");
+    if (file === "book_rules.md") {
+      const { rm } = await import("node:fs/promises");
+      await rm(join(bookDir, "story", "book_rules.json"), { force: true });
+    }
     return c.json({ ok: true });
   });
 
@@ -5867,32 +5788,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
-  // --- Detect All chapters ---
-
-  app.post("/api/v1/books/:id/detect-all", async (c) => {
-    const id = c.req.param("id");
-    const bookDir = state.bookDir(id);
-
-    try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const mdFiles = files.filter((f) => f.endsWith(".md") && /^\d{4}/.test(f)).sort();
-      const { analyzeAITells } = await import("@actalk/inkos-core");
-
-      const results = await Promise.all(
-        mdFiles.map(async (f) => {
-          const num = parseInt(f.slice(0, 4), 10);
-          const content = await readFile(join(chaptersDir, f), "utf-8");
-          const result = analyzeAITells(content);
-          return { chapterNumber: num, filename: f, ...result };
-        }),
-      );
-      return c.json({ bookId: id, results });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   // --- Detect Stats ---
 
   app.get("/api/v1/books/:id/detect/stats", async (c) => {
@@ -5908,104 +5803,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
-  // --- Genre Create ---
-
-  app.post("/api/v1/genres/create", async (c) => {
-    const body = await c.req.json<{
-      id: string; name: string; language?: string;
-      chapterTypes?: string[]; fatigueWords?: string[];
-      numericalSystem?: boolean; powerScaling?: boolean; eraResearch?: boolean;
-      pacingRule?: string; satisfactionTypes?: string[]; auditDimensions?: number[];
-      body?: string;
-    }>();
-
-    if (!body.id || !body.name) {
-      return c.json({ error: "id and name are required" }, 400);
-    }
-    if (/[/\\\0]/.test(body.id) || body.id.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${body.id}"`);
-    }
-
-    const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
-    const genresDir = join(root, "genres");
-    await mkdirFs(genresDir, { recursive: true });
-
-    const frontmatter = [
-      "---",
-      `name: ${yamlScalar(body.name)}`,
-      `id: ${yamlScalar(body.id)}`,
-      `language: ${yamlScalar(body.language ?? "zh")}`,
-      `chapterTypes: ${JSON.stringify(body.chapterTypes ?? [])}`,
-      `fatigueWords: ${JSON.stringify(body.fatigueWords ?? [])}`,
-      `numericalSystem: ${body.numericalSystem ?? false}`,
-      `powerScaling: ${body.powerScaling ?? false}`,
-      `eraResearch: ${body.eraResearch ?? false}`,
-      `pacingRule: ${yamlScalar(body.pacingRule ?? "")}`,
-      `satisfactionTypes: ${JSON.stringify(body.satisfactionTypes ?? [])}`,
-      `auditDimensions: ${JSON.stringify(body.auditDimensions ?? [])}`,
-      "---",
-      "",
-      body.body ?? "",
-    ].join("\n");
-
-    await writeFileFs(join(genresDir, `${body.id}.md`), frontmatter, "utf-8");
-    return c.json({ ok: true, id: body.id });
-  });
-
-  // --- Genre Edit ---
-
-  app.put("/api/v1/genres/:id", async (c) => {
-    const genreId = c.req.param("id");
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-
-    const body = await c.req.json<{ profile: Record<string, unknown>; body: string }>();
-    const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
-    const genresDir = join(root, "genres");
-    await mkdirFs(genresDir, { recursive: true });
-
-    const p = body.profile;
-    const frontmatter = [
-      "---",
-      `name: ${yamlScalar(p.name ?? genreId)}`,
-      `id: ${yamlScalar(p.id ?? genreId)}`,
-      `language: ${yamlScalar(p.language ?? "zh")}`,
-      `chapterTypes: ${JSON.stringify(p.chapterTypes ?? [])}`,
-      `fatigueWords: ${JSON.stringify(p.fatigueWords ?? [])}`,
-      `numericalSystem: ${p.numericalSystem ?? false}`,
-      `powerScaling: ${p.powerScaling ?? false}`,
-      `eraResearch: ${p.eraResearch ?? false}`,
-      `pacingRule: ${yamlScalar(p.pacingRule ?? "")}`,
-      `satisfactionTypes: ${JSON.stringify(p.satisfactionTypes ?? [])}`,
-      `auditDimensions: ${JSON.stringify(p.auditDimensions ?? [])}`,
-      "---",
-      "",
-      body.body ?? "",
-    ].join("\n");
-
-    await writeFileFs(join(genresDir, `${genreId}.md`), frontmatter, "utf-8");
-    return c.json({ ok: true, id: genreId });
-  });
-
-  // --- Genre Delete (project-level only) ---
-
-  app.delete("/api/v1/genres/:id", async (c) => {
-    const genreId = c.req.param("id");
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-
-    const filePath = join(root, "genres", `${genreId}.md`);
-    try {
-      const { rm } = await import("node:fs/promises");
-      await rm(filePath);
-      return c.json({ ok: true, id: genreId });
-    } catch (e) {
-      return c.json({ error: `Genre "${genreId}" not found in project` }, 404);
-    }
-  });
-
   // --- Style Analyze ---
 
   app.post("/api/v1/style/analyze", async (c) => {
@@ -6013,9 +5810,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!text?.trim()) return c.json({ error: "text is required" }, 400);
 
     try {
-      const { analyzeStyle } = await import("@actalk/inkos-core");
-      const profile = analyzeStyle(text, sourceName ?? "unknown");
-      return c.json(profile);
+      const { compileStyleGuide } = await import("@actalk/inkos-core");
+      const config = await loadCurrentProjectConfig();
+      const guide = await compileStyleGuide({
+        client: createLLMClient(config.llm),
+        model: config.llm.model,
+        projectRoot: root,
+        referenceText: text,
+        sourceName: sourceName ?? "unknown",
+        language: inferLanguage(text) === "en" ? "en" : "zh",
+      });
+      return c.json({ guide });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -6642,7 +6447,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) return c.json({ error: { code: "INVALID_ID", message: `invalid project id: ${id}` } }, 400);
     const graph = await loadStoryGraph(root, id);
     if (!graph) return c.json({ error: { code: "NOT_FOUND", message: `story graph not found for ${id}` } }, 404);
-    return c.json({ report: reviewStoryGraph(graph), arcs: analyzeEmotionalArcs(graph), distribution: analyzePathDistribution(graph) });
+    return c.json({ report: reviewStoryGraph(graph), distribution: analyzePathDistribution(graph) });
   });
 
   app.get("/api/v1/projects/:id/export/json", async (c) => {

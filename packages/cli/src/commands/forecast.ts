@@ -173,7 +173,7 @@ export function parseForecastSelectArgs(args: ReadonlyArray<string>): {
 
 function formatBranchLines(forecast: NarrativeForecast): string[] {
   return forecast.branches.map((branch) =>
-    `- ${branch.branchId} "${branch.title}" — intent fit ${branch.intentAlignment.score}/100, ${branch.risks.length} risk(s)`);
+    `- ${branch.branchId} "${branch.title}" — ${branch.risks.length} risk(s)`);
 }
 
 function parseBoundedInteger(

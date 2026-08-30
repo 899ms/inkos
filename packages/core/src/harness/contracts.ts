@@ -123,7 +123,7 @@ export const ActionObservationSchema = ObservationSchema;
 export type ActionObservation = Observation;
 
 export const ActionResultSchema = z.object({
-  status: z.enum(["success", "warning", "error"]),
+  status: z.enum(["success", "error"]),
   summary: z.string().min(1),
   content: z.string().optional(),
   nextActions: z.array(HarnessIdSchema).default([]),

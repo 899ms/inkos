@@ -73,7 +73,7 @@ InkOS 1.8.0 把“Chat Agent 调工具”和“各类作品管线”收敛成一
 
 ### 主要创作形态
 
-**长篇小说** — 从创作简报建书，生成世界观、角色、卷纲、章节意图，按“写作 → 审稿 → 必要修订 → 状态结算”推进。上下文按 protected / compressible 分层组织，避免长书越写越乱。
+**长篇小说** — 从创作简报建书，生成世界观、角色、卷纲和章节意图；写作、审稿、修订、状态结算都是可独立调用、可追溯的 Harness action。上下文按 protected / compressible 分层组织，避免长书越写越乱。
 
 **剧情多线推演** — 在写下一章前，基于当前正史生成 2-5 条彼此隔离的未来分支，并在 Studio Chat 中横向比较章节节拍、人物决定、预计变化、风险和作者意图匹配度。采用分支只会保存 `selected-branch-plan.md` 候选计划，不会修改正文、大纲或正史状态；正史变化后旧推演会标记为过期。
 
@@ -355,7 +355,7 @@ Play 维护一个可持续推进的世界状态：角色、地点、物品、证
 
 连续性审查会从角色记忆、物资连续性、伏笔回收、大纲偏离、叙事节奏和情感弧线等维度记录具体 observation。内置 AI 痕迹检测会标出高频词、句式单调和过度总结等可修订位置。observation 是可追溯的创作反馈，不会把章节改写成“通过/失败”状态；用户或 Agent 可据此显式发起修订。
 
-去 AI 味规则内置于写手 agent 的 prompt 层——词汇疲劳词表、禁用句式、文风指纹注入，从源头减少 AI 生成痕迹。`revise --mode anti-detect` 可对已有章节做专门的反检测改写。
+去 AI 味由可替换的 `inkos-story-deslop` Skill 提供语义方法；需要时显式调用 `revise --mode anti-detect`，不会由隐藏词表自动改稿。
 
 ### 文风仿写
 
@@ -444,12 +444,11 @@ InkOS 以 pi-agent harness 作为统一认知与工具调用内核：Agent 理�
 | **写手 Writer**       | 基于编排后的精简上下文生成正文（字数治理 + 对话引导）                                      |
 | **观察者 Observer**    | 从正文中过度提取 9 类事实（角色、位置、资源、关系、情感、信息、伏笔、时间、物理状态）                      |
 | **反射器 Reflector**   | 输出 JSON delta（而非全量 markdown），由代码层做 Zod schema 校验后 immutable 写入    |
-| **归一化器 Normalizer** | 仅在正文明显偏离 hard range 时单 pass 压缩/扩展                                 |
-| **连续性审计员 Auditor**  | 对照结构化状态、控制文档和章节上下文验证草稿，执行连续性与质量检查                                 |
+| **审稿 Agent**  | 对照用户意图、正典、状态、章节计划和审稿 Skill，返回有证据的定性观察                                 |
 | **修订者 Reviser**     | 接受用户、Agent 或审查 observation 给出的明确修改目标，生成并原子落盘新版本                         |
 
 
-章节正文和故事状态通过硬校验后原子落盘；连续性与写作质量问题作为 observation 保存在章节记录中。修订是独立的显式动作，完成后会生成新的 observation 与可追溯版本。
+章节正文和故事状态作为同一组产物原子落盘；审稿意见作为 observation 保存在章节记录中，不改变正文完成态。修订是独立的显式动作，完成后生成新的 observation 与可追溯版本。
 
 ### 长期记忆
 
@@ -585,7 +584,7 @@ Studio 里的「开放世界」和「分支互动」是交互式创作入口。�
 | `inkos radar scan`                          | 扫描平台趋势                                                                                     |
 | `inkos fanfic init`                         | 从原作素材创建同人书（`--from`、`--mode canon/au/ooc/cp`）                                              |
 | `inkos short run`                           | 生成独立短篇包（正文、简介卖点、封面提示词、可选封面图）                                                               |
-| `inkos eval [id]`                           | 生成质量评估报告（支持 `--json`、章节范围）                                                                 |
+| `inkos audit [id] [chapter]`                | 生成有证据的定性审稿观察                                                                                   |
 | `inkos consolidate [id]`                    | 归并长篇章节摘要，降低长书上下文压力                                                                         |
 | `inkos forecast create/show/select`          | 生成、核验并选择长篇的非正史剧情分支；选择只保存候选计划，不修改正史                                                        |
 | `inkos interact`                            | 外部 agent / CLI 自然语言入口（`--json`、`--message`、`--book`）                                       |

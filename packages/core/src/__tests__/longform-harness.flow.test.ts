@@ -41,7 +41,7 @@ describe("long-form harness mini-flow", () => {
       finalWordCount: output.wordCount,
       lengthWarnings: [],
       loadChapterIndex: () => state.loadChapterIndex("novel"),
-      saveChapter: () => writer.saveChapter(bookDir, output, false, "en"),
+      saveChapter: () => writer.saveChapter(bookDir, output, "en"),
       saveTruthFiles: async () => undefined,
       saveChapterIndex: (index) => state.saveChapterIndex("novel", index),
       markBookActiveIfNeeded: async () => undefined,
@@ -117,12 +117,8 @@ describe("long-form harness mini-flow", () => {
       lengthSpec: buildLengthSpec(9, "en"),
       initialUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       auditor: { auditChapter: async () => { throw new Error("review stream idle"); } },
-      normalize: (content) => content,
       assertNotEmpty: () => undefined,
       addUsage: (left) => left,
-      analyzeAITells: () => ({ issues: [] }),
-      analyzeSensitiveWords: () => ({ issues: [] }),
-      runPostWriteChecks: () => [],
     });
     expect({
       content: result.content,
@@ -181,7 +177,5 @@ function chapterOutput(chapterNumber: number): WriteChapterOutput {
     updatedSubplots: "",
     updatedEmotionalArcs: "",
     updatedCharacterMatrix: "",
-    postWriteErrors: [],
-    postWriteWarnings: [],
   };
 }

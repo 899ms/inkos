@@ -90,7 +90,7 @@ describe("session transcript restore", () => {
     expect(restored[0]).toMatchObject({ role: "user", content: "hi" });
   });
 
-  it("恢复 agent 上下文时把 committed toolResult 折叠为历史摘要", async () => {
+  it("恢复 committed 工具轮次的原生 pi 消息", async () => {
     await appendTranscriptEvent(projectRoot, {
       type: "request_started",
       version: 1,
@@ -159,16 +159,12 @@ describe("session transcript restore", () => {
     const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s1");
 
     const body = JSON.stringify(restored);
-    expect(restored).toHaveLength(1);
-    expect(restored[0]).toMatchObject({
-      role: "system",
-      content: expect.stringContaining("历史状态摘要"),
-    });
+    expect(restored.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
     expect(body).toContain("read");
     expect(body).toContain("资料");
-    expect(body).not.toContain("sig");
-    expect(body).not.toContain("\"toolCall\"");
-    expect(body).not.toContain("\"toolResult\"");
+    expect(body).toContain("sig");
+    expect(body).toContain("\"toolCall\"");
+    expect(body).toContain("\"toolResult\"");
     expect(body).not.toContain(TOOL_RESULT_BRIDGE_TEXT);
   });
 
@@ -248,7 +244,7 @@ describe("session transcript restore", () => {
     expect(sessionBody).not.toContain("LEGACY_PRIVATE_SKILL_THINKING");
   });
 
-  it("恢复 agent 上下文时把历史工具回合折叠为 system 摘要而不是继续回放工具消息", async () => {
+  it("恢复完整历史工具回合与自然对话", async () => {
     await appendTranscriptEvent(projectRoot, {
       type: "request_started",
       version: 1,
@@ -377,14 +373,13 @@ describe("session transcript restore", () => {
     const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s1", "book");
     const body = JSON.stringify(restored);
 
-    expect(restored.map((message) => message.role)).toEqual(["system", "user", "assistant"]);
-    expect(body).toContain("历史状态摘要");
+    expect(restored.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user", "assistant"]);
     expect(body).toContain("sub_agent");
     expect(body).toContain("Chapter 12 written.");
     expect(body).toContain("哪里节奏慢");
     expect(body).toContain("第 7 章后半段节奏慢");
-    expect(body).not.toContain("\"toolCall\"");
-    expect(body).not.toContain("\"toolResult\"");
+    expect(body).toContain("\"toolCall\"");
+    expect(body).toContain("\"toolResult\"");
     expect(body).not.toContain("[Tool results]");
   });
 
@@ -471,7 +466,7 @@ describe("session transcript restore", () => {
     expect(body).not.toContain("\"toolResult\"");
   });
 
-  it("恢复 agent 上下文时只保留最近 12 条自然对话", async () => {
+  it("恢复完整已提交自然对话，不在持久化层截断", async () => {
     let seq = 1;
     for (let i = 1; i <= 15; i++) {
       const requestId = `r${i}`;
@@ -513,15 +508,12 @@ describe("session transcript restore", () => {
       return typeof content === "string" ? content : "";
     });
 
-    expect(restored).toHaveLength(12);
-    expect(restoredText).not.toContain("自然对话 1");
-    expect(restoredText).not.toContain("自然对话 2");
-    expect(restoredText).not.toContain("自然对话 3");
-    expect(restoredText).toContain("自然对话 4");
+    expect(restored).toHaveLength(15);
+    expect(restoredText).toContain("自然对话 1");
     expect(restoredText).toContain("自然对话 15");
   });
 
-  it("恢复 agent 上下文时只保留最近 8 条工具摘要", async () => {
+  it("恢复完整已提交工具轮次，交给 pi transformContext 按预算压缩", async () => {
     let seq = 1;
     for (let i = 1; i <= 10; i++) {
       const requestId = `tool-${i}`;
@@ -590,18 +582,12 @@ describe("session transcript restore", () => {
     }
 
     const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s1", "book");
-    const content = String((restored[0] as any).content);
-    const lines = content.split("\n");
-
-    expect(restored).toHaveLength(1);
-    expect(content).toContain("历史状态摘要");
-    expect(lines.some((line) => /工具结果 1$/.test(line))).toBe(false);
-    expect(lines.some((line) => /工具结果 2$/.test(line))).toBe(false);
-    expect(lines.some((line) => /工具结果 3$/.test(line))).toBe(true);
-    expect(lines.some((line) => /工具结果 10$/.test(line))).toBe(true);
+    expect(restored).toHaveLength(20);
+    expect(JSON.stringify(restored)).toContain("工具结果 1");
+    expect(JSON.stringify(restored)).toContain("工具结果 10");
   });
 
-  it("恢复中断工具轮次时只保留历史摘要和后续自然输入", async () => {
+  it("恢复已提交工具轮次和后续自然输入，不预先截断", async () => {
     await appendTranscriptEvent(projectRoot, {
       type: "request_started",
       version: 1,
@@ -729,12 +715,11 @@ describe("session transcript restore", () => {
     const restored = await restoreAgentMessagesFromTranscript(projectRoot, "s1");
 
     const body = JSON.stringify(restored);
-    expect(restored.map((message) => message.role)).toEqual(["system", "user"]);
-    expect(body).toContain("历史状态摘要");
+    expect(restored.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user"]);
     expect(body).toContain("资料");
     expect(body).toContain("继续");
-    expect(body).not.toContain("\"toolCall\"");
-    expect(body).not.toContain("\"toolResult\"");
+    expect(body).toContain("\"toolCall\"");
+    expect(body).toContain("\"toolResult\"");
     expect(body).not.toContain(TOOL_RESULT_BRIDGE_TEXT);
   });
 

@@ -1,11 +1,7 @@
 import { BaseAgent } from "./base.js";
-import type { GenreProfile } from "../models/genre-profile.js";
-import type { BookRules } from "../models/book-rules.js";
-import type { FanficMode } from "../models/book.js";
 import type { ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import { readGenreProfile, readBookLanguage, readBookRules } from "./rules-reader.js";
 import { readFile, readdir } from "node:fs/promises";
-import { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "../utils/context-filter.js";
 import { buildGovernedMemoryEvidenceBlocks } from "../utils/governed-context.js";
 import {
   readVolumeMap,
@@ -13,6 +9,7 @@ import {
   readCurrentStateWithFallback,
 } from "../utils/outline-paths.js";
 import { join } from "node:path";
+import { ChapterReviewToolSchema } from "./review-tool.js";
 
 export interface AuditResult {
   readonly issues: ReadonlyArray<AuditIssue>;
@@ -35,59 +32,6 @@ export interface AuditIssue {
 }
 
 type PromptLanguage = "zh" | "en";
-
-function normalizeRepairScope(value: unknown): AuditIssue["repairScope"] {
-  if (value === "local" || value === "structural" || value === "unknown") return value;
-  return undefined;
-}
-
-function containsChinese(text: string): boolean {
-  return /[\u4e00-\u9fff]/u.test(text);
-}
-
-function resolveGenreLabel(genreId: string, profileName: string, language: PromptLanguage): string {
-  if (language === "zh" || !containsChinese(profileName)) {
-    return profileName;
-  }
-
-  if (genreId === "other") {
-    return "general";
-  }
-
-  return genreId.replace(/[_-]+/g, " ");
-}
-
-function joinLocalized(items: ReadonlyArray<string>, language: PromptLanguage): string {
-  return items.join(language === "en" ? ", " : "、");
-}
-
-function buildReviewConfiguration(
-  gp: GenreProfile,
-  bookRules: BookRules | null,
-  language: PromptLanguage,
-  hasParentCanon: boolean,
-  fanficMode?: FanficMode,
-): string {
-  const words = bookRules?.fatigueWordsOverride && bookRules.fatigueWordsOverride.length > 0
-    ? bookRules.fatigueWordsOverride
-    : gp.fatigueWords;
-  const custom = bookRules?.additionalAuditDimensions ?? [];
-  const era = [bookRules?.eraConstraints?.period, bookRules?.eraConstraints?.region].filter(Boolean);
-  const values = {
-    profileDimensionIds: gp.auditDimensions,
-    customDimensions: custom,
-    fatigueWords: words,
-    payoffTypes: gp.satisfactionTypes,
-    eraResearch: gp.eraResearch || bookRules?.eraConstraints?.enabled === true,
-    era,
-    parentCanon: hasParentCanon,
-    fanficMode: fanficMode ?? null,
-    allowedFanficDeviations: bookRules?.allowedDeviations ?? [],
-  };
-  return language === "en"
-    ? `Apply the activated review Skill to this runtime configuration:\n${JSON.stringify(values)}`
-    : `按已激活的审稿 Skill 解释并应用以下运行时配置：\n${JSON.stringify(values)}`;
-}
 
 export class ContinuityAuditor extends BaseAgent {
   get name(): string {
@@ -145,8 +89,6 @@ export class ContinuityAuditor extends BaseAgent {
       readBookLanguage(bookDir),
     ]);
     const parsedRules = await readBookRules(bookDir);
-    const bookRules = parsedRules?.rules ?? null;
-
     // Fallback: use book_rules body when style_guide.md doesn't exist.
     // Phase 5 hotfix 2: parsedRules.body is only populated for legacy
     // book_rules.md sources — story_frame.md frontmatter yields an empty
@@ -159,85 +101,55 @@ export class ContinuityAuditor extends BaseAgent {
 
     const resolvedLanguage = bookLanguage ?? gp.language;
     const isEnglish = resolvedLanguage === "en";
-    const fanficMode = hasFanficCanon ? (bookRules?.fanficMode as FanficMode | undefined) : undefined;
-    const reviewConfiguration = buildReviewConfiguration(gp, bookRules, resolvedLanguage, hasParentCanon, fanficMode);
-    const genreLabel = resolveGenreLabel(genreId, gp.name, resolvedLanguage);
-
-    const protagonistBlock = bookRules?.protagonist
-      ? isEnglish
-        ? `\n\nProtagonist lock: ${bookRules.protagonist.name}; personality locks: ${joinLocalized(bookRules.protagonist.personalityLock, resolvedLanguage)}; behavioral constraints: ${joinLocalized(bookRules.protagonist.behavioralConstraints, resolvedLanguage)}.`
-        : `\n主角人设锁定：${bookRules.protagonist.name}，${bookRules.protagonist.personalityLock.join("、")}，行为约束：${bookRules.protagonist.behavioralConstraints.join("、")}`
-      : "";
-
-    const searchNote = gp.eraResearch
-      ? isEnglish
-        ? "\n\nYou have web-search capability (search_web / fetch_url). For real-world eras, people, events, geography, or policies, you must verify with search_web instead of relying on memory. Cross-check at least 2 sources."
-        : "\n\n你有联网搜索能力（search_web / fetch_url）。对于涉及真实年代、人物、事件、地理、政策的内容，你必须用search_web核实，不可凭记忆判断。至少对比2个来源交叉验证。"
-      : "";
-
     const systemPromptBase = isEnglish
-      ? `Audit this ${genreLabel} chapter against the activated review skill and the supplied governed context. Review structure and delivery; prose-surface notes are info only. ALL OUTPUT MUST BE IN ENGLISH.${protagonistBlock}${searchNote}
+      ? `Audit this chapter against the activated review Skill and the supplied governed context. ALL OUTPUT MUST BE IN ENGLISH.
 
 Do not estimate chapter length; the host computes it. Use only concrete evidence.
-${reviewConfiguration}
 
-Return JSON only:
-{"issues":[{"severity":"critical|warning|info","repair_scope":"local|structural|unknown","category":"dimension name","description":"evidence-backed issue","suggestion":"actionable repair"}],"summary":"one-sentence conclusion"}
-An empty issues array is valid.`
-      : `按已激活的审稿 Skill 和输入的权威上下文审查这篇${gp.name}章节，只审结构与交付；文字表面问题只能记为 info。${protagonistBlock}${searchNote}
+Submit concrete issues and a concise summary through the review result tool. An empty issues array is valid.`
+      : `按已激活的审稿 Skill 和输入的权威上下文审查本章。
 
 不要估算章节字数，宿主会确定性计算。只报告有证据的问题。
-${reviewConfiguration}
 
-只返回 JSON：
-{"issues":[{"severity":"critical|warning|info","repair_scope":"local|structural|unknown","category":"审查维度名称","description":"有证据的具体问题","suggestion":"可执行修复"}],"summary":"一句话结论"}
-issues 为空是合法结果。`;
+通过审稿结果工具提交具体问题和简短结论；issues 为空是合法结果。`;
     const systemPrompt = await this.withPromptPackGuidance(systemPromptBase, "longform.auditor");
 
-    const ledgerBlock = gp.numericalSystem
+    const ledgerBlock = ledger !== "(文件不存在)" && ledger.trim().length > 0
       ? isEnglish
         ? `\n## Resource Ledger\n${ledger}`
         : `\n## 资源账本\n${ledger}`
       : "";
-
-    // Smart context filtering for auditor — same logic as writer
-    const bookRulesForFilter = parsedRules?.rules ?? null;
-    const filteredSubplots = filterSubplots(subplotBoard);
-    const filteredArcs = filterEmotionalArcs(emotionalArcs, chapterNumber);
-    const filteredMatrix = filterCharacterMatrix(characterMatrix, volumeOutline, bookRulesForFilter?.protagonist?.name);
-    const filteredSummaries = filterSummaries(chapterSummaries, chapterNumber);
-    const filteredHooks = filterHooks(hooks);
 
     const governedMemoryBlocks = options?.contextPackage
       ? buildGovernedMemoryEvidenceBlocks(options.contextPackage, resolvedLanguage)
       : undefined;
 
     const hooksBlock = governedMemoryBlocks?.hooksBlock
-      ?? (filteredHooks !== "(文件不存在)"
+      ?? (hooks !== "(文件不存在)"
         ? isEnglish
-          ? `\n## Pending Hooks\n${filteredHooks}\n`
-          : `\n## 伏笔池\n${filteredHooks}\n`
+          ? `\n## Pending Hooks\n${hooks}\n`
+          : `\n## 伏笔池\n${hooks}\n`
         : "");
-    const subplotBlock = filteredSubplots !== "(文件不存在)"
+    const subplotBlock = subplotBoard !== "(文件不存在)"
       ? isEnglish
-        ? `\n## Subplot Board\n${filteredSubplots}\n`
-        : `\n## 支线进度板\n${filteredSubplots}\n`
+        ? `\n## Subplot Board\n${subplotBoard}\n`
+        : `\n## 支线进度板\n${subplotBoard}\n`
       : "";
-    const emotionalBlock = filteredArcs !== "(文件不存在)"
+    const emotionalBlock = emotionalArcs !== "(文件不存在)"
       ? isEnglish
-        ? `\n## Emotional Arcs\n${filteredArcs}\n`
-        : `\n## 情感弧线\n${filteredArcs}\n`
+        ? `\n## Emotional Arcs\n${emotionalArcs}\n`
+        : `\n## 情感弧线\n${emotionalArcs}\n`
       : "";
-    const matrixBlock = filteredMatrix !== "(文件不存在)"
+    const matrixBlock = characterMatrix !== "(文件不存在)"
       ? isEnglish
-        ? `\n## Character Interaction Matrix\n${filteredMatrix}\n`
-        : `\n## 角色交互矩阵\n${filteredMatrix}\n`
+        ? `\n## Character Interaction Matrix\n${characterMatrix}\n`
+        : `\n## 角色交互矩阵\n${characterMatrix}\n`
       : "";
     const summariesBlock = governedMemoryBlocks?.summariesBlock
-      ?? (filteredSummaries !== "(文件不存在)"
+      ?? (chapterSummaries !== "(文件不存在)"
         ? isEnglish
-          ? `\n## Chapter Summaries (for pacing checks)\n${filteredSummaries}\n`
-          : `\n## 章节摘要（用于节奏检查）\n${filteredSummaries}\n`
+          ? `\n## Chapter Summaries\n${chapterSummaries}\n`
+          : `\n## 章节摘要\n${chapterSummaries}\n`
         : "");
     const volumeSummariesBlock = governedMemoryBlocks?.volumeSummariesBlock ?? "";
 
@@ -299,52 +211,28 @@ ${chapterContent}`;
     ];
     const chatOptions = { temperature: options?.temperature ?? 0.3 };
 
-    // Use web search for fact verification when eraResearch is enabled
-    const response = gp.eraResearch
-      ? await this.chatWithSearch(chatMessages, chatOptions)
-      : await this.chat(chatMessages, chatOptions);
-
-    const result = this.parseAuditResult(response.content, resolvedLanguage);
-    return { ...result, tokenUsage: response.usage };
-  }
-
-  private parseAuditResult(content: string, language: PromptLanguage): AuditResult {
-    // Try multiple JSON extraction strategies (handles small/local models)
-
-    // Strategy 1: Find balanced JSON object (not greedy)
-    const balanced = this.extractBalancedJson(content);
-    if (balanced) {
-      const result = this.tryParseAuditJson(balanced, language);
-      if (result) return result;
-    }
-
-    // Strategy 2: Try the whole content as JSON (some models output pure JSON)
-    const trimmed = content.trim();
-    if (trimmed.startsWith("{")) {
-      const result = this.tryParseAuditJson(trimmed, language);
-      if (result) return result;
-    }
-
-    // Strategy 3: Look for ```json code blocks
-    const codeBlockMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-    if (codeBlockMatch) {
-      const result = this.tryParseAuditJson(codeBlockMatch[1]!.trim(), language);
-      if (result) return result;
-    }
-
+    const { result, usage } = await this.submitStructured(
+      chatMessages,
+      {
+        name: "submit_chapter_review",
+        label: isEnglish ? "Submit chapter review" : "提交章节审稿",
+        description: isEnglish
+          ? "Submit evidence-backed observations only."
+          : "只提交有证据的审稿观察。",
+        parameters: ChapterReviewToolSchema,
+      },
+      chatOptions,
+    );
     return {
-      parseFailed: true,
-      issues: [{
-        severity: "warning",
-        category: "review-unavailable",
-        description: language === "en"
-          ? "Audit output format was invalid and could not be parsed as JSON."
-          : "审稿输出格式异常，无法解析为 JSON",
-        suggestion: language === "en"
-          ? "The model may not support reliable structured output. Try a stronger model or inspect the API response format."
-          : "可能是模型不支持结构化输出。尝试换一个更大的模型，或检查 API 返回格式。",
-      }],
-      summary: language === "en" ? "Audit output parsing failed" : "审稿输出解析失败",
+      issues: result.issues.map((issue) => ({
+        severity: issue.severity,
+        category: issue.category,
+        description: issue.description,
+        suggestion: issue.suggestion,
+        repairScope: issue.repairScope,
+      })),
+      summary: result.summary,
+      tokenUsage: usage,
     };
   }
 
@@ -373,7 +261,6 @@ ${selectedContext || "- none"}
 ### Rule Stack
 - Hard guardrails: ${ruleStack.sections.hard.join(", ") || "(none)"}
 - Soft constraints: ${ruleStack.sections.soft.join(", ") || "(none)"}
-- Diagnostic rules: ${ruleStack.sections.diagnostic.join(", ") || "(none)"}
 
 ### Active Overrides
 ${overrides}\n`
@@ -386,42 +273,9 @@ ${selectedContext || "- none"}
 ### 规则栈
 - 硬护栏：${ruleStack.sections.hard.join("、") || "(无)"}
 - 软约束：${ruleStack.sections.soft.join("、") || "(无)"}
-- 诊断规则：${ruleStack.sections.diagnostic.join("、") || "(无)"}
 
 ### 当前覆盖
 ${overrides}\n`;
-  }
-
-  private extractBalancedJson(text: string): string | null {
-    const start = text.indexOf("{");
-    if (start === -1) return null;
-    let depth = 0;
-    for (let i = start; i < text.length; i++) {
-      if (text[i] === "{") depth++;
-      if (text[i] === "}") depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-    return null;
-  }
-
-  private tryParseAuditJson(json: string, language: PromptLanguage = "zh"): AuditResult | null {
-    try {
-      const parsed = JSON.parse(json);
-      return {
-        issues: Array.isArray(parsed.issues)
-	          ? parsed.issues.map((i: Record<string, unknown>) => ({
-	              severity: (i.severity as string) ?? "warning",
-	              category: (i.category as string) ?? (language === "en" ? "Uncategorized" : "未分类"),
-	              description: (i.description as string) ?? "",
-	              suggestion: (i.suggestion as string) ?? "",
-	              repairScope: normalizeRepairScope(i.repair_scope ?? i.repairScope),
-	            }))
-          : [],
-        summary: String(parsed.summary ?? ""),
-      };
-    } catch {
-      return null;
-    }
   }
 
   private async loadPreviousChapter(bookDir: string, currentChapter: number): Promise<string> {

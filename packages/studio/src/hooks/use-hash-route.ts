@@ -16,7 +16,6 @@ export type HashRoute =
   | { page: "truth"; bookId: string }
   | { page: "daemon" }
   | { page: "logs" }
-  | { page: "genres" }
   | { page: "style" }
   | { page: "translation" }
   | { page: "import"; tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" }
