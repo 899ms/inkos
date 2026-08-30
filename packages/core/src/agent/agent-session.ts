@@ -195,6 +195,7 @@ const agentSessionQueues = new Map<string, Promise<void>>();
 function removeCachedAgent(key: string, cancelRunningEpisode = false): boolean {
   const entry = agentCache.get(key);
   if (!entry) return false;
+  if (entry.currentEpisode && !cancelRunningEpisode) return false;
   if (cancelRunningEpisode && entry.currentEpisode) {
     try {
       entry.harnessRuntime.finishEpisode(entry.currentEpisode, "cancelled");
@@ -227,7 +228,7 @@ function ensureCleanupTimer(): void {
   cleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of agentCache) {
-      if (now - entry.lastActive > CACHE_TTL_MS) {
+      if (entry.currentEpisode === null && now - entry.lastActive > CACHE_TTL_MS) {
         removeCachedAgent(id);
       }
     }
@@ -1220,6 +1221,7 @@ async function runAgentSessionUnlocked(
     if (episodeFinished) return;
     cached!.harnessRuntime.finishEpisode(episodeHandle, status);
     episodeFinished = true;
+    cached!.currentEpisode = null;
   };
 
   let parentUuid: string | null = null;

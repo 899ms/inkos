@@ -44,7 +44,7 @@ export class StateValidatorAgent extends BaseAgent {
       : "用中文回答。";
 
     const systemPrompt = `Validate the derived truth projection against the current chapter and supplied authority using the activated long-writing Skill. ${langInstruction}
-Do not rewrite the chapter or silently resolve contradictory sources. Submit whether reconciliation is required and the concrete evidence through the validation tool.`;
+Do not rewrite the chapter or silently resolve contradictory sources. Set reconciliationRequired=true only when a different truth projection can resolve the mismatch; a contradiction inside the chapter or between authorities remains an observation and does not authorize another settlement pass. Submit the decision and concrete evidence through the validation tool.`;
 
     const authorityBlock = this.buildAuthorityContextBlock(authorityContext);
 
