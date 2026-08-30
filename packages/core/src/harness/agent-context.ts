@@ -1,7 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { UserMessage } from "@mariozechner/pi-ai";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { estimateTextTokens } from "../llm/provider.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import {
@@ -12,21 +10,7 @@ import {
   type SemanticContextCompiler,
 } from "./context-compiler.js";
 import type { WorkManifest, WorkProfile } from "./contracts.js";
-import { loadWorkManifest, workDirectory } from "./work-store.js";
-
-const PROFILE_CONTEXT_FILES: Readonly<Record<string, ReadonlyArray<string>>> = {
-  "longform-novel": ["source/book.json", "source/story/author_intent.md", "source/story/current_focus.md"],
-  "interactive-film": ["source/story-graph.json"],
-  "interactive-world": ["source/world.json"],
-  translation: ["source/manifest.json", "source/glossary.json"],
-};
-
-const PROTECTED_CONTEXT_FILES = new Set([
-  "source/book.json",
-  "source/story/author_intent.md",
-  "source/story/current_focus.md",
-  "source/glossary.json",
-]);
+import { loadWorkManifest } from "./work-store.js";
 
 export interface ConversationCompactionRequest {
   readonly history: string;
@@ -52,7 +36,7 @@ export function createHarnessContextTransform(input: {
     async load(request) {
       const work = request.work;
       if (!work) return [];
-      const fragments: ContextFragment[] = [{
+      return [{
         id: "work-identity",
         source: "current Work",
         protection: "protected",
@@ -66,26 +50,13 @@ export function createHarnessContextTransform(input: {
           status: work.status,
           lineage: work.lineage,
           metadata: work.metadata,
+          artifacts: work.artifacts.map((artifact) => ({
+            id: artifact.id,
+            kind: artifact.kind,
+            currentRevisionId: artifact.currentRevisionId,
+          })),
         }),
       }];
-      for (const relativePath of PROFILE_CONTEXT_FILES[request.profile.id] ?? []) {
-        let content = "";
-        try {
-          content = await readFile(join(workDirectory(request.projectRoot, work.id), relativePath), "utf-8");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-        if (!content.trim()) continue;
-        fragments.push({
-          id: relativePath.replaceAll("/", "-"),
-          source: relativePath,
-          protection: PROTECTED_CONTEXT_FILES.has(relativePath) ? "protected" : "compressible",
-          priority: PROTECTED_CONTEXT_FILES.has(relativePath) ? 90 : 50,
-          pointer: `works/${work.id}/${relativePath}`,
-          content,
-        });
-      }
-      return fragments;
     },
   });
 

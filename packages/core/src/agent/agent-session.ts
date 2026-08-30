@@ -13,7 +13,6 @@ import type {
   Message,
   SimpleStreamOptions,
   ToolResultMessage,
-  UserMessage,
 } from "@mariozechner/pi-ai";
 import type { PipelineRunner } from "../pipeline/runner.js";
 import {
@@ -53,7 +52,6 @@ import {
 } from "../skills/index.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { PlayStore } from "../play/play-store.js";
-import { isLlmStubEnabled, stubAgentStream } from "./llm-stub.js";
 import {
   assistantInvokesSkill,
   createUseSkillTool,
@@ -611,7 +609,6 @@ async function compileHarnessContextText(input: {
   readonly maxTokens: number;
   readonly signal?: AbortSignal;
 }): Promise<string> {
-  if (isLlmStubEnabled()) return "Compacted context for the active task.";
   const worker = new Agent({
     initialState: {
       model: input.model,
@@ -776,33 +773,6 @@ function extractThinkingFromAssistant(msg: AssistantMessage): string {
 }
 
 /**
- * Convert plain `{ role, content }` messages (from BookSession disk storage)
- * back into pi-agent AgentMessage format so they can be loaded into an Agent.
- */
-function plainToAgentMessages(
-  plain: Array<{ role: string; content: string }>,
-): AgentMessage[] {
-  return plain.map((m) => {
-    const ts = Date.now();
-    if (m.role === "user") {
-      return { role: "user", content: m.content, timestamp: ts } satisfies UserMessage;
-    }
-    // For stored assistant messages we only have the text.
-    // Re-wrap as a minimal AssistantMessage with a single TextContent.
-    return {
-      role: "assistant",
-      content: [{ type: "text", text: m.content }],
-      api: "anthropic-messages",
-      provider: "anthropic",
-      model: "unknown",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      stopReason: "stop",
-      timestamp: ts,
-    } satisfies AssistantMessage;
-  });
-}
-
-/**
  * Flatten the Agent's in-memory messages to plain `{ role, content }` pairs
  * suitable for BookSession persistence.
  */
@@ -885,22 +855,20 @@ function isAbortLike(error: unknown): boolean {
  *
  * If the session already exists in the cache, reuses the Agent (with its full
  * in-memory message history including tool calls). Otherwise creates a new
- * Agent, optionally restoring messages from `initialMessages`.
+ * Agent from the canonical session transcript.
  */
 export async function runAgentSession(
   config: AgentSessionConfig,
   userMessage: string,
-  initialMessages?: Array<{ role: string; content: string }>,
 ): Promise<AgentSessionResult> {
   return runInAgentSessionQueue(config.projectRoot, config.sessionId, () =>
-    runAgentSessionUnlocked(config, userMessage, initialMessages)
+    runAgentSessionUnlocked(config, userMessage)
   );
 }
 
 async function runAgentSessionUnlocked(
   config: AgentSessionConfig,
   userMessage: string,
-  initialMessages?: Array<{ role: string; content: string }>,
 ): Promise<AgentSessionResult> {
   const { sessionId, language, pipeline, projectRoot, onEvent, onContextCompression } = config;
   // Normalize at the entry point so downstream comparisons, closures, and
@@ -1005,11 +973,7 @@ async function runAgentSessionUnlocked(
       ),
       language,
     );
-    const initialAgentMessages = restoredMessages.length > 0
-      ? restoredMessages
-      : initialMessages && initialMessages.length > 0
-        ? plainToAgentMessages(initialMessages)
-        : [];
+    const initialAgentMessages = restoredMessages;
     let terminalToolResultTail = false;
     const turnSkills = new Map<string, ActivatedSkillGuidance>(
       skillResolution.usedSkills.map((skill) => [skill.id, { skill, resources: [] }]),
@@ -1173,7 +1137,6 @@ async function runAgentSessionUnlocked(
           terminalToolResultTail = false;
           return localAssistantStopStream(streamModel);
         }
-        if (isLlmStubEnabled()) return stubAgentStream(streamModel, context);
         return config.stream === false
           ? guardedPiNonStreaming(streamModel, context, options, config.proxyUrl)
           : guardedPiStream(streamModel, context, options);

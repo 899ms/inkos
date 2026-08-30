@@ -120,7 +120,6 @@ export const WorkProfileSchema = z.object({
   capabilityIds: z.array(HarnessIdSchema).min(1),
   requiredSkillIds: z.array(HarnessIdSchema),
   recommendedSkillIds: z.array(HarnessIdSchema),
-  contextRecipes: z.record(HarnessIdSchema, HarnessIdSchema),
   artifactKinds: z.array(HarnessIdSchema),
   confirmation: ConfirmationPolicySchema,
 }).strict();

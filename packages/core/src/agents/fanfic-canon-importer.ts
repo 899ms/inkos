@@ -13,13 +13,6 @@ export interface FanficCanonOutput {
   readonly fullDocument: string;
 }
 
-const MODE_LABELS: Record<FanficMode, string> = {
-  canon: "原作向（严格遵守原作设定）",
-  au: "AU/平行世界（世界规则可改，角色保留）",
-  ooc: "OOC（角色性格可偏离原作）",
-  cp: "CP（以配对关系为核心）",
-};
-
 export class FanficCanonImporter extends BaseAgent {
   get name(): string {
     return "fanfic-canon-importer";
@@ -29,19 +22,19 @@ export class FanficCanonImporter extends BaseAgent {
     sourceText: string,
     sourceName: string,
     fanficMode: FanficMode,
+    language: "zh" | "en" = "zh",
   ): Promise<FanficCanonOutput> {
-    const source = await this.prepareSourceText(sourceText, sourceName);
-
-    const modeLabel = MODE_LABELS[fanficMode];
-
-    const systemPrompt = `按已激活的导入 Skill 从用户素材编译同人正典。模式：${modeLabel}。只记录素材支持的事实；缺失信息标为“素材未提及”。${source.compiled ? "输入是带片段编号的语义资料包，引用其中证据。" : ""}
-
-通过结果工具分别提交世界规则、角色档案、关键事件、力量体系和写作风格。各字段使用可直接写入正典文档的 Markdown。`;
+    const source = await this.prepareSourceText(sourceText, sourceName, language);
+    const systemPrompt = language === "en"
+      ? `Compile source-grounded fan-fiction canon with the activated import and fan-fiction Skills. Mode: ${fanficMode}. Submit all canonical sections through the result tool.${source.compiled ? " The input is a traceable semantic source package." : ""}`
+      : `按已激活的导入与同人 Skills 编译有来源依据的同人正典。模式：${fanficMode}。通过结果工具提交全部正典小节。${source.compiled ? "输入是可追溯的语义资料包。" : ""}`;
 
     const { result } = await this.submitStructured(
       [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `以下是原作《${sourceName}》的素材：\n\n${source.text}` },
+        { role: "user", content: language === "en"
+          ? `Source material for "${sourceName}":\n\n${source.text}`
+          : `原作《${sourceName}》素材：\n\n${source.text}` },
       ],
       {
         name: "submit_fanfic_canon",
@@ -61,33 +54,40 @@ export class FanficCanonImporter extends BaseAgent {
       throw new Error("Fanfic canon compiler returned an empty required section.");
     }
 
+    const headings = language === "en"
+      ? ["Fan-fiction Canon", "World Rules", "Character Profiles", "Key Event Timeline", "Power System", "Source Style", "Source", "Material", "Mode"]
+      : ["同人正典", "世界规则", "角色档案", "关键事件时间线", "力量体系", "原作写作风格", "来源", "素材", "同人模式"];
     const fullDocument = [
-      `# 同人正典（《${sourceName}》）`,
+      `# ${headings[0]}（${sourceName}）`,
       "",
-      "## 世界规则",
+      `## ${headings[1]}`,
       worldRules,
       "",
-      "## 角色档案",
+      `## ${headings[2]}`,
       characterProfiles,
       "",
-      "## 关键事件时间线",
+      `## ${headings[3]}`,
       keyEvents,
       "",
-      "## 力量体系",
+      `## ${headings[4]}`,
       powerSystem,
       "",
-      "## 原作写作风格",
+      `## ${headings[5]}`,
       writingStyle,
       "",
-      "## 来源",
-      `- 素材：${sourceName}`,
-      `- 同人模式：${fanficMode}`,
+      `## ${headings[6]}`,
+      `- ${headings[7]}: ${sourceName}`,
+      `- ${headings[8]}: ${fanficMode}`,
     ].join("\n");
 
     return { worldRules, characterProfiles, keyEvents, powerSystem, writingStyle, fullDocument };
   }
 
-  private async prepareSourceText(sourceText: string, sourceName: string): Promise<{ readonly text: string; readonly compiled: boolean }> {
+  private async prepareSourceText(
+    sourceText: string,
+    sourceName: string,
+    language: "zh" | "en",
+  ): Promise<{ readonly text: string; readonly compiled: boolean }> {
     const budget = semanticInputBudget(this.ctx.client, { reservedOutputTokens: 16_384 });
     if (budget === undefined || estimateTextTokens(sourceText) <= budget) {
       return { text: sourceText, compiled: false };
@@ -100,13 +100,15 @@ export class FanficCanonImporter extends BaseAgent {
         [
           {
             role: "system",
-            content: "按已激活的导入 Skill 把完整原作片段编译为可追溯 Markdown 资料包；片段编号由输入提供。",
+            content: language === "en"
+              ? "Compile the complete source chunk into a traceable Markdown evidence package with the activated import Skill."
+              : "按已激活的导入 Skill，把完整原作片段编译为可追溯 Markdown 资料包。",
           },
           {
             role: "user",
             content: [
-              `原作：《${sourceName}》`,
-              `片段：${index + 1}/${chunks.length}`,
+              language === "en" ? `Source: ${sourceName}` : `原作：${sourceName}`,
+              language === "en" ? `Chunk: ${index + 1}/${chunks.length}` : `片段：${index + 1}/${chunks.length}`,
               "",
               chunks[index],
             ].join("\n"),
@@ -122,9 +124,11 @@ export class FanficCanonImporter extends BaseAgent {
     return {
       compiled: true,
       text: [
-        `# 《${sourceName}》语义资料包`,
+        language === "en" ? `# ${sourceName} semantic source package` : `# 《${sourceName}》语义资料包`,
         "",
-        "以下内容由 InkOS 逐段读取完整原作素材后压缩生成，用于后续正典抽取。它不是原文截断。",
+        language === "en"
+          ? "Compiled from every source chunk for traceable canon extraction."
+          : "逐段读取完整原作素材后编译，用于可追溯正典抽取。",
         "",
         ...notes,
       ].join("\n"),

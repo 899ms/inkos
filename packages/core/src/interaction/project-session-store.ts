@@ -44,17 +44,8 @@ export async function resolveSessionActiveBook(
   projectRoot: string,
   session: InteractionSession,
 ): Promise<string | undefined> {
-  const bookIds = (await listWorkManifests(projectRoot, "longform-novel"))
-    .map((work) => work.id)
-    .sort();
-
-  if (session.activeBookId && bookIds.includes(session.activeBookId)) {
-    return session.activeBookId;
-  }
-
-  if (bookIds.length === 1) {
-    return bookIds[0];
-  }
-
-  return undefined;
+  if (!session.activeBookId) return undefined;
+  const work = (await listWorkManifests(projectRoot, "longform-novel"))
+    .find((candidate) => candidate.id === session.activeBookId);
+  return work?.id;
 }

@@ -21,7 +21,6 @@ import {
   normalizePlayMode,
   normalizeRequestedIntent,
   appendInteractionMessage,
-  appendInteractionEvent,
 } from "../index.js";
 
 describe("interaction models", () => {
@@ -204,29 +203,5 @@ describe("interaction models", () => {
     }]);
   });
 
-  it("appends interaction events in timestamp order", () => {
-    const session = InteractionSessionSchema.parse({
-      sessionId: "session-4",
-      projectRoot: "/tmp/project",
-      messages: [],
-      events: [],
-    });
-
-    const next = appendInteractionEvent(session, {
-      kind: "task.completed",
-      timestamp: 2,
-      status: "completed",
-      bookId: "harbor",
-      detail: "Completed write_next for harbor.",
-    });
-
-    expect(next.events).toEqual([{
-      kind: "task.completed",
-      timestamp: 2,
-      status: "completed",
-      bookId: "harbor",
-      detail: "Completed write_next for harbor.",
-    }]);
-  });
 
 });

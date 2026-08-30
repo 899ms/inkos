@@ -74,7 +74,6 @@ export function builtInWorkProfiles(): ReadonlyArray<WorkProfile> {
     description: "description" in input ? input.description : "",
     requiredSkillIds: "requiredSkillIds" in input ? input.requiredSkillIds : [],
     recommendedSkillIds: "recommendedSkillIds" in input ? input.recommendedSkillIds : [],
-    contextRecipes: {},
     confirmation: {
       inferredMutation: "execute",
       explicitRecoverableMutation: "execute",

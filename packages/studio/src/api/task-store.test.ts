@@ -78,7 +78,7 @@ describe("Studio task snapshots", () => {
     });
   });
 
-  it("treats a corrupt snapshot as unavailable instead of crashing session restore", async () => {
+  it("surfaces a corrupt snapshot instead of silently dropping task state", async () => {
     const path = studioTaskSnapshotPath(root, "session-3");
     await saveStudioTaskSnapshot(root, {
       version: 1,
@@ -95,7 +95,7 @@ describe("Studio task snapshots", () => {
     });
     await writeFile(path, "{broken", "utf-8");
 
-    await expect(loadStudioTaskSnapshot(root, "session-3")).resolves.toBeNull();
+    await expect(loadStudioTaskSnapshot(root, "session-3")).rejects.toThrow();
     await expect(readFile(path, "utf-8")).resolves.toBe("{broken");
   });
 });

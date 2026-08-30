@@ -64,37 +64,6 @@ describe("CLI mini-flows", () => {
     });
   });
 
-  it("routes natural language through Pi and preserves an explicit Work binding", async () => {
-    run(["init"]);
-    await saveWorkManifest(projectDir, createWorkManifest({
-      id: "harbor",
-      title: "Harbor",
-      profileId: "longform-novel",
-      language: "en",
-    }));
-    const unbound = JSON.parse(run(["interact", "--json", "--message", "Discuss the premise first"]));
-    const bound = JSON.parse(run([
-      "interact",
-      "--json",
-      "--book",
-      "harbor",
-      "--message",
-      "Review the current direction",
-    ]));
-
-    expect({
-      unboundKind: unbound.session.sessionKind,
-      unboundRequest: unbound.request,
-      boundBook: bound.session.bookId ?? bound.session.activeBookId,
-      boundKind: bound.session.sessionKind,
-    }).toEqual({
-      unboundKind: "chat",
-      unboundRequest: undefined,
-      boundBook: "harbor",
-      boundKind: "book",
-    });
-  });
-
   function run(args: string[]): string {
     return execFileSync("node", [cliEntry, ...args], {
       cwd: projectDir,
@@ -103,7 +72,6 @@ describe("CLI mini-flows", () => {
       env: {
         ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("INKOS_"))),
         HOME: projectDir,
-        INKOS_AGENT_LLM_STUB: "1",
       },
     });
   }

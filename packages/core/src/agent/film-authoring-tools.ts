@@ -15,10 +15,6 @@ import {
 } from "../interactive-film/authoring-tools.js";
 import { StoryNodeSchema, type StoryNode } from "../interactive-film/graph-schema.js";
 import { StoryNodeContentToolSchema, StoryStructureToolSchema } from "../interactive-film/tool-schemas.js";
-import { writeCharacterFacts } from "../interactive-film/memory-link.js";
-import { MemoryDB } from "../state/memory-db.js";
-import { join } from "node:path";
-import { workDirectory } from "../harness/work-store.js";
 import { generateNodeImage, defaultNodeImageDeps, type NodeImageDeps } from "../interactive-film/node-image.js";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "./skill-tool.js";
@@ -154,12 +150,6 @@ export function createUpsertCharactersTool(projectRoot: string, projectId: strin
           : undefined,
       }));
       const { rev } = await applyGraphDelta({ projectRoot, projectId, delta: buildUpsertCharactersDelta(chars) });
-      const db = new MemoryDB(join(workDirectory(projectRoot, projectId), "source"));
-      try {
-        writeCharacterFacts(db, chars, rev);
-      } finally {
-        db.close();
-      }
       return textResult(`Upserted ${chars.length} character(s) (rev ${rev}).`, { kind: "graph_updated", rev });
     },
   };

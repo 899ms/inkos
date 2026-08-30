@@ -782,7 +782,6 @@ export async function deriveBookSessionFromTranscript(
     playMode,
     title,
     messages,
-    events: [],
     createdAt,
     updatedAt,
   });

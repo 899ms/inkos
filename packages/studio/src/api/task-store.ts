@@ -51,12 +51,16 @@ function isExecutionStatus(value: unknown): value is StudioTaskExecutionStatus {
   return value === "running" || value === "processing" || value === "completed" || value === "error";
 }
 
-function parseStudioTaskSnapshot(value: unknown): StudioTaskSnapshot | null {
-  if (!isRecord(value) || value.version !== 1) return null;
-  if (typeof value.sessionId !== "string" || typeof value.requestedIntent !== "string") return null;
-  if (value.sourceRequestId !== undefined && typeof value.sourceRequestId !== "string") return null;
-  if (typeof value.updatedAt !== "number") return null;
-  if (!isRecord(value.execution)) return null;
+function parseStudioTaskSnapshot(value: unknown): StudioTaskSnapshot {
+  if (!isRecord(value) || value.version !== 1) throw new Error("Invalid Studio task snapshot version.");
+  if (typeof value.sessionId !== "string" || typeof value.requestedIntent !== "string") {
+    throw new Error("Invalid Studio task snapshot identity.");
+  }
+  if (value.sourceRequestId !== undefined && typeof value.sourceRequestId !== "string") {
+    throw new Error("Invalid Studio task sourceRequestId.");
+  }
+  if (typeof value.updatedAt !== "number") throw new Error("Invalid Studio task updatedAt.");
+  if (!isRecord(value.execution)) throw new Error("Invalid Studio task execution.");
 
   const execution = value.execution;
   if (
@@ -65,9 +69,9 @@ function parseStudioTaskSnapshot(value: unknown): StudioTaskSnapshot | null {
     || typeof execution.label !== "string"
     || !isExecutionStatus(execution.status)
     || typeof execution.startedAt !== "number"
-  ) return null;
+  ) throw new Error("Invalid Studio task execution identity.");
   if (execution.logs !== undefined && (!Array.isArray(execution.logs) || execution.logs.some((log) => typeof log !== "string"))) {
-    return null;
+    throw new Error("Invalid Studio task execution logs.");
   }
 
   return value as unknown as StudioTaskSnapshot;
@@ -100,8 +104,9 @@ export async function loadStudioTaskSnapshot(
   await writeQueues.get(path)?.catch(() => undefined);
   try {
     return parseStudioTaskSnapshot(JSON.parse(await readFile(path, "utf-8")));
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 

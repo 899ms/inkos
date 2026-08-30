@@ -20,7 +20,6 @@ import {
   type OnStreamProgress,
 } from "../llm/provider.js";
 import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
-import { isLlmStubEnabled, stubChatCompletion } from "./llm-stub.js";
 import { toPiApi } from "../llm/api-format.js";
 
 export interface WorkerAgentOptions {
@@ -311,10 +310,6 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   options: WorkerAgentOptions = {},
 ): Promise<Static<TParameters>> {
   options.signal?.throwIfAborted();
-  if (isLlmStubEnabled()) {
-    const response = stubChatCompletion(messages, modelId);
-    return Value.Parse(resultTool.parameters, JSON.parse(response.content)) as Static<TParameters>;
-  }
   if (!client._piModel) {
     throw new Error("Structured worker tools require a resolved Pi model");
   }

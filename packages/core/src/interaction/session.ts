@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ExecutionStateSchema, InteractionEventSchema, type InteractionEvent } from "./events.js";
+import { ExecutionStateSchema } from "./events.js";
 import { assertSafeBookId, isSafeBookId } from "../utils/book-id.js";
 
 export const SessionKindSchema = z.enum(["chat", "work", "book-create", "book", "short", "play", "script", "storyboard", "interactive-film", "edit", "interactive-film-authoring"]);
@@ -9,8 +9,7 @@ export type PlayMode = z.infer<typeof PlayModeSchema>;
 
 // TUI confirmations persist the already-validated action envelope returned by
 // propose_action. The action and payload are revalidated against the current
-// action schemas when the user confirms, so older sessions remain loadable as
-// the production action catalog evolves.
+// action schemas when the user confirms.
 export const PendingProposedActionSchema = z.object({
   action: z.string().min(1),
   targetSessionKind: SessionKindSchema,
@@ -71,7 +70,6 @@ export const InteractionSessionSchema = z.object({
   activeBookId: z.string().min(1).optional(),
   activeChapterNumber: z.number().int().min(1).optional(),
   messages: z.array(InteractionMessageSchema).default([]),
-  events: z.array(InteractionEventSchema).default([]),
   pendingProposedAction: PendingProposedActionSchema.optional(),
   currentExecution: ExecutionStateSchema.optional(),
 }).strict();
@@ -90,7 +88,6 @@ export const BookSessionSchema = z.object({
   playMode: PlayModeSchema.optional(),
   title: z.string().nullable().default(null),
   messages: z.array(InteractionMessageSchema).default([]),
-  events: z.array(InteractionEventSchema).default([]),
   currentExecution: ExecutionStateSchema.optional(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
@@ -121,7 +118,6 @@ export function createBookSession(
     ...(options?.playMode ? { playMode: options.playMode } : {}),
     title: null,
     messages: [],
-    events: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -157,15 +153,5 @@ export function appendInteractionMessage(
   return {
     ...session,
     messages: [...session.messages, message].sort((left, right) => left.timestamp - right.timestamp),
-  };
-}
-
-export function appendInteractionEvent(
-  session: InteractionSession,
-  event: InteractionEvent,
-): InteractionSession {
-  return {
-    ...session,
-    events: [...session.events, event],
   };
 }

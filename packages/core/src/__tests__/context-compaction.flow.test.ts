@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,7 +11,6 @@ import {
   createWorkManifest,
   loadWorkManifest,
   saveWorkManifest,
-  workDirectory,
   type ContextFragment,
 } from "../harness/index.js";
 
@@ -22,7 +21,7 @@ describe("context assembly mini-flow", () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  it("reloads current Work context and keeps protected material outside semantic compilation", async () => {
+  it("reloads Work identity while leaving domain source selection to capabilities", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-context-flow-"));
     roots.push(root);
     const profile = createBuiltInWorkProfileRegistry().require("longform-novel");
@@ -33,10 +32,6 @@ describe("context assembly mini-flow", () => {
       language: "en",
     });
     await saveWorkManifest(root, work);
-    const storyDir = join(workDirectory(root, work.id), "source", "story");
-    await mkdir(storyDir, { recursive: true });
-    await writeFile(join(storyDir, "author_intent.md"), "Keep the witness alive.");
-    await writeFile(join(storyDir, "current_focus.md"), "Interrogate the forged ledger.");
     const transform = createHarnessContextTransform({ projectRoot: root, work, profile, budgetTokens: 8_000 });
 
     const first = await transform([{ role: "user", content: "status", timestamp: 1 }] as never);
@@ -49,12 +44,12 @@ describe("context assembly mini-flow", () => {
     expect({
       firstHasOldTitle: firstContext.content.includes('"title":"Before"'),
       secondHasNewTitle: secondContext.content.includes('"title":"After"'),
-      includesTaskFiles: ["author_intent.md", "current_focus.md"].every((name) => secondContext.content.includes(name)),
+      includesDomainSourceText: secondContext.content.includes("author_intent.md") || secondContext.content.includes("current_focus.md"),
       messageCount: second.length,
     }).toEqual({
       firstHasOldTitle: true,
       secondHasNewTitle: true,
-      includesTaskFiles: true,
+      includesDomainSourceText: false,
       messageCount: 2,
     });
 

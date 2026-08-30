@@ -19,16 +19,6 @@ function createSession(): InteractionSession {
       { role: "user", content: "continue current book", timestamp: 1 },
       { role: "assistant", content: "Working on chapter 12.", timestamp: 2 },
     ],
-    events: [
-      {
-        kind: "task.started",
-        timestamp: 3,
-        status: "writing",
-        bookId: "harbor",
-        chapterNumber: 12,
-        detail: "Preparing chapter 12.",
-      },
-    ],
   };
 }
 

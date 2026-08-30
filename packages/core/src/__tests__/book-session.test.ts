@@ -12,7 +12,6 @@ describe("BookSession", () => {
         sessionId: "123-abc",
         bookId: "my-book",
         messages: [],
-        events: [],
         createdAt: 1000,
         updatedAt: 1000,
       };
@@ -26,7 +25,6 @@ describe("BookSession", () => {
         sessionId: "123-abc",
         bookId: null,
         messages: [],
-        events: [],
         createdAt: 1000,
         updatedAt: 1000,
       };
@@ -34,7 +32,7 @@ describe("BookSession", () => {
       expect(result.bookId).toBeNull();
     });
 
-    it("defaults empty arrays", () => {
+    it("defaults an empty message list", () => {
       const raw = {
         sessionId: "123-abc",
         bookId: null,
@@ -43,7 +41,6 @@ describe("BookSession", () => {
       };
       const result = BookSessionSchema.parse(raw);
       expect(result.messages).toEqual([]);
-      expect(result.events).toEqual([]);
     });
   });
 

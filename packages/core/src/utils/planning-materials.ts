@@ -17,15 +17,6 @@ async function readFileOrDefault(path: string): Promise<string> {
   }
 }
 
-async function readBriefFile(path: string): Promise<string> {
-  try {
-    return await readFile(path, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
-}
-
 async function readPreviousEndingExcerpt(
   bookDir: string,
   chapterNumber: number,
@@ -78,7 +69,7 @@ export async function loadPlanningSeedMaterials(params: {
     readFileOrDefault(sourcePaths.authorIntent),
     readFileOrDefault(sourcePaths.currentFocus),
     readPreviousEndingExcerpt(params.bookDir, params.chapterNumber),
-    readBriefFile(sourcePaths.brief),
+    readFileOrDefault(sourcePaths.brief),
   ]);
 
   return {

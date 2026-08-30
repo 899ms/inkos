@@ -17,7 +17,6 @@ import { getEndpoint } from "./providers/index.js";
 import { lookupModel } from "./providers/lookup.js";
 import { fetchWithProxy } from "../utils/proxy-fetch.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
-import { isLlmStubEnabled, stubChatCompletion } from "../agent/llm-stub.js";
 import { createLeadingThinkTagStripper, stripLeadingThinkBlock } from "./think-tag-stripper.js";
 import {
   agentTrajectoryHeaders,
@@ -1442,7 +1441,6 @@ export async function chatCompletion(
     readonly retry?: boolean;
   },
 ): Promise<LLMResponse> {
-  if (isLlmStubEnabled()) return Promise.resolve(stubChatCompletion(messages, model));
   const resolved = {
     temperature: clampTemperatureForModel(
       client.service,

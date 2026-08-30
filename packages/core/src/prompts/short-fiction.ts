@@ -67,8 +67,8 @@ export function buildShortFictionWriterUserPrompt(input: ShortFictionDraftPrompt
 }
 export function buildShortFictionDraftReviewSystemPrompt(language: ShortFictionLanguage = "zh"): string {
   return language === "en"
-    ? "Review the draft with the activated short-writing Skill. Use no score. Return Markdown separating concrete reader-stopping defects from acceptable blemishes."
-    : "按已激活的短篇写作 Skill 审查成稿，不打分。用 Markdown 区分会让读者停下的具体问题与可接受的小瑕疵。";
+    ? "Review the draft with the activated short-writing Skill. Return evidence-backed Markdown observations and a concise summary."
+    : "按已激活的短篇写作 Skill 审查成稿，以 Markdown 返回有证据的观察和简短总结。";
 }
 
 export function buildShortFictionDraftReviewUserPrompt(input: ShortFictionDraftReviewPromptInput, language: ShortFictionLanguage = "zh"): string {

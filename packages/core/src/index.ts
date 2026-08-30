@@ -3,11 +3,9 @@ export { type BookConfig, type Platform, type Genre, type BookStatus, type Fanfi
 export { type ChapterMeta, ChapterMetaSchema } from "./models/chapter.js";
 export { type Observation, ObservationSchema } from "./models/observation.js";
 export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionConfig, type AgentLLMOverride, type ResearchSearchConfig, ProjectConfigSchema, LLMConfigSchema, AgentLLMOverrideSchema, DetectionConfigSchema, ResearchSearchConfigSchema } from "./models/project.js";
-export { type CurrentState, type ParticleLedger, type PendingHooks, type PendingHook, type LedgerEntry } from "./models/state.js";
-export { type GenreProfile, type ParsedGenreProfile, GenreProfileSchema, parseGenreProfile } from "./models/genre-profile.js";
 export { type BookRules, type ParsedBookRules, BookRulesSchema } from "./models/book-rules.js";
 export { type DetectionHistoryEntry, type DetectionStats } from "./models/detection.js";
-export { type LengthCountingMode, type LengthSpec, type LengthTelemetry, type LengthWarning, LengthCountingModeSchema, LengthSpecSchema, LengthTelemetrySchema, LengthWarningSchema } from "./models/length-governance.js";
+export { type LengthCountingMode, type LengthSpec, type LengthTelemetry, LengthCountingModeSchema, LengthSpecSchema, LengthTelemetrySchema } from "./models/length-governance.js";
 export {
   type RuntimeStateLanguage,
   type StateManifest,
@@ -222,10 +220,8 @@ export {
 export {
   ExecutionStatusSchema,
   ExecutionStateSchema,
-  InteractionEventSchema,
   type ExecutionStatus,
   type ExecutionState,
-  type InteractionEvent,
   isTerminalExecutionStatus,
 } from "./interaction/events.js";
 export {
@@ -237,7 +233,6 @@ export {
   type InteractionSession,
   bindActiveBook,
   appendInteractionMessage,
-  appendInteractionEvent,
   BookSessionSchema,
   SessionKindSchema,
   PlayModeSchema,
@@ -312,14 +307,8 @@ export {
 } from "./interaction/edit-controller.js";
 export {
   SHORT_FICTION_DEFAULT_CHAPTERS,
-  SHORT_FICTION_MIN_CHAPTERS,
-  SHORT_FICTION_MAX_CHAPTERS,
   SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
-  SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
-  SHORT_FICTION_MAX_CHARS_PER_CHAPTER,
   SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER,
-  SHORT_FICTION_EN_MIN_WORDS_PER_CHAPTER,
-  SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER,
   ShortFictionOutlineAgent,
   ShortFictionWriterAgent,
   ShortFictionDraftReviewerAgent,
@@ -422,7 +411,7 @@ export { ContinuityAuditor, type AuditResult, type AuditIssue } from "./agents/c
 export { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseOutput, type ReviseMode } from "./agents/reviser.js";
 export { RadarAgent, type RadarResult, type RadarRecommendation } from "./agents/radar.js";
 export { FanqieRadarSource, QidianRadarSource, TextRadarSource, type RadarSource, type PlatformRankings, type RankingEntry } from "./agents/radar-source.js";
-export { readGenreProfile, readBookRules, listAvailableGenres, getBuiltinGenresDir } from "./agents/rules-reader.js";
+export { readBookRules } from "./agents/rules-reader.js";
 export { buildWriterSystemPrompt } from "./agents/writer-prompts.js";
 export { detectAIContent, type DetectionResult } from "./agents/detector.js";
 export { analyzeDetectionInsights } from "./agents/detection-insights.js";
@@ -440,12 +429,11 @@ export {
   type ResearchPurpose,
   type ResearchReport,
 } from "./agents/researcher.js";
-export { MemoryDB, type Fact } from "./state/memory-db.js";
 export { StateValidatorAgent } from "./agents/state-validator.js";
 export { createInitialRuntimeState, loadRuntimeStateSnapshot, buildRuntimeStateArtifacts, saveRuntimeStateSnapshot, type RuntimeStateArtifacts } from "./state/runtime-state-store.js";
 export { splitChapters, type SplitChapter } from "./utils/chapter-splitter.js";
 export * from "./translation/index.js";
-export { countChapterLength, resolveLengthCountingMode, formatLengthCount, buildLengthSpec, defaultChapterLength, DEFAULT_CHAPTER_LENGTH_ZH, DEFAULT_CHAPTER_LENGTH_EN, isOutsideSoftRange, isOutsideHardRange, type LengthLanguage } from "./utils/length-metrics.js";
+export { countChapterLength, resolveLengthCountingMode, formatLengthCount, buildLengthSpec, defaultChapterLength, DEFAULT_CHAPTER_LENGTH_ZH, DEFAULT_CHAPTER_LENGTH_EN, type LengthLanguage } from "./utils/length-metrics.js";
 export { createLogger, createStderrSink, createJsonLineSink, nullSink, type Logger, type LogSink, type LogLevel, type LogEntry } from "./utils/logger.js";
 export { loadProjectConfig, GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH, isApiKeyOptionalForEndpoint } from "./utils/config-loader.js";
 export { resolveEffectiveLLMConfig, LLMConfigurationError, type EffectiveLLMConfigResult, type EffectiveLLMDiagnostics, type LLMConfigCliOverrides, type LLMConfigMode, type LLMConsumer, type LLMValueSource } from "./utils/effective-llm-config.js";
@@ -455,7 +443,7 @@ export { computeAnalytics, type AnalyticsData, type TokenStats } from "./utils/a
 export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./utils/hook-arbiter.js";
 
 // Pipeline
-export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
+export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type ReviseResult, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
 export { Scheduler, type SchedulerConfig } from "./pipeline/scheduler.js";
 export { detectChapter, loadDetectionHistory, type DetectChapterResult } from "./pipeline/detection-runner.js";
 export { runScriptCreation, runStoryboardCreation, runInteractiveFilmCreation, createStoryboardAssetsManifest, type ScriptCreationRunOptions, type ScriptCreationRunResult, type StoryboardAssetsManifest, type StoryboardCreationRunOptions, type StoryboardCreationRunResult, type InteractiveFilmCreationRunOptions, type InteractiveFilmCreationRunResult, type StoryboardImageAsset, type StoryboardImageAssetVariant } from "./pipeline/script-storyboard-runner.js";
@@ -593,7 +581,6 @@ export {
   buildConnectChoiceDelta,
   buildUpsertCharactersDelta,
 } from "./interactive-film/authoring-tools.js";
-export { writeCharacterFacts, readCharacterVoices } from "./interactive-film/memory-link.js";
 export { summarizeStoryGraph, buildFilmAuthoringContext } from "./interactive-film/film-context.js";
 export {
   generateNodeImage,

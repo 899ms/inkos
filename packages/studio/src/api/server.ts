@@ -11,8 +11,6 @@ import {
   createLogger,
   computeAnalytics,
   loadProjectConfig,
-  loadProjectSession,
-  resolveSessionActiveBook,
   listBookSessions,
   loadBookSession,
   appendManualSessionMessages,
@@ -498,10 +496,6 @@ function hasSuccessfulToolExec(
     exec.tool.split("__").at(-1) === tool.split("__").at(-1)
     && exec.status === "completed"
   );
-}
-
-function hasSuccessfulToolResult(execs: ReadonlyArray<CollectedToolExec>): boolean {
-  return execs.some((exec) => exec.status === "completed");
 }
 
 function normalizeStudioSessionKind(value: unknown, fallback: SessionKind): SessionKind {
@@ -4096,17 +4090,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // --- Agent chat ---
 
-  app.get("/api/v1/interaction/session", async (c) => {
-    const session = await loadProjectSession(root);
-    const activeBookId = await resolveSessionActiveBook(root, session);
-    return c.json({
-      session: activeBookId && session.activeBookId !== activeBookId
-        ? { ...session, activeBookId }
-        : session,
-      activeBookId,
-    });
-  });
-
   // Play worlds are created and advanced by the play_start / play_step agent
   // tools (worldId === sessionId). The HUD only needs to read a run's state,
   // so just the run-detail endpoint remains; the old save-slot list/create
@@ -5019,7 +5002,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           const error = "Book creation artifact is incomplete on disk.";
           bookCreateStatus.set(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error });
-          return null;
+          throw new Error(error);
         }
 
         try {
@@ -5086,7 +5069,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
         await refreshBookSessionFromTranscript();
         const createdBookId = await finalizeCreatedBook();
-        if (requestedIntent || createdBookId || hasSuccessfulToolResult(collectedToolExecs)) {
+        if (requestedIntent || createdBookId || hasSuccessfulToolOwnedResponse(collectedToolExecs)) {
           const responseSessionKind = bookSession.sessionKind ?? sessionKind;
           broadcast("agent:complete", { instruction, activeBookId, sessionId: bookSession.sessionId, sessionKind: responseSessionKind });
           return c.json({

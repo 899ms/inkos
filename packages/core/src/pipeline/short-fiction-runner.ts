@@ -1,17 +1,11 @@
 import { Buffer } from "node:buffer";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { AgentContext } from "../agents/base.js";
 import {
   SHORT_FICTION_DEFAULT_CHAPTERS,
   SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
   SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER,
-  SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER,
-  SHORT_FICTION_EN_MIN_WORDS_PER_CHAPTER,
-  SHORT_FICTION_MAX_CHAPTERS,
-  SHORT_FICTION_MAX_CHARS_PER_CHAPTER,
-  SHORT_FICTION_MIN_CHAPTERS,
-  SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
   ShortFictionDraftReviewerAgent,
   ShortFictionOutlineAgent,
   ShortFictionPackagingAgent,
@@ -33,9 +27,8 @@ import {
   type CoverProviderPreset,
 } from "../llm/cover-providers.js";
 import { loadSecrets } from "../llm/secrets.js";
-import { createRangeObservation, type Observation } from "../models/observation.js";
+import type { Observation } from "../models/observation.js";
 import { ProjectConfigSchema } from "../models/project.js";
-import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath as projectPath } from "../utils/posix-path.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
@@ -120,14 +113,9 @@ export async function runShortFictionProduction(
       ? safeSegment(slugify(options.title))
       : undefined;
 
-  // A stable storyId lets a re-run resume from disk instead of redoing finished
-  // work — a transient failure in a late stage used to throw the whole short
-  // away (orphaning outline/drafts). If it already finished, return it as-is.
-  if (
-    providedStoryId
-    && await projectFileExists(root, join(shortWorkBaseDir(providedStoryId), "final", "full.md"))
-  ) {
-    return buildShortRunResult(providedStoryId, shortWorkBaseDir(providedStoryId), [], {});
+  if (providedStoryId) {
+    const completed = await loadCompletedShortRun(root, providedStoryId, options.cover !== false);
+    if (completed) return completed;
   }
 
   try {
@@ -144,35 +132,44 @@ export async function runShortFictionProduction(
   }
 }
 
+async function loadCompletedShortRun(
+  root: string,
+  storyId: string,
+  requireCover: boolean,
+): Promise<ShortFictionRunResult | null> {
+  const baseDir = shortWorkBaseDir(storyId);
+  const required = [
+    join(baseDir, "outline", "v001.md"),
+    join(baseDir, "drafts", "v001", "draft.json"),
+    join(baseDir, "final", "full.md"),
+    join(baseDir, "final", "short-story.json"),
+    join(baseDir, "final", "sales-package.json"),
+    join(baseDir, "final", "sales-package.md"),
+    join(baseDir, "final", "cover-prompt.md"),
+  ];
+  if (!(await Promise.all(required.map((path) => projectFileExists(root, path)))).every(Boolean)) return null;
+  if (await projectFileExists(root, join(baseDir, "reviews", "package-warning.md"))) return null;
+  const png = join(baseDir, "final", "cover.png");
+  const jpg = join(baseDir, "final", "cover.jpg");
+  const coverImagePath = await projectFileExists(root, png)
+    ? projectPath(png)
+    : await projectFileExists(root, jpg)
+      ? projectPath(jpg)
+      : undefined;
+  if (requireCover && !coverImagePath) return null;
+  return buildShortRunResult(storyId, baseDir, [], { coverImagePath });
+}
+
 async function produceShort(
   options: ShortFictionRunOptions,
   root: string,
   providedStoryId: string | undefined,
 ): Promise<ShortFictionRunResult> {
   const language = options.language ?? "zh";
-  const chapterCount = boundedInteger(
-    options.chapterCount,
-    SHORT_FICTION_DEFAULT_CHAPTERS,
-    "chapterCount",
-    SHORT_FICTION_MIN_CHAPTERS,
-    SHORT_FICTION_MAX_CHAPTERS,
-  );
-  // charsPerChapter is the language's native unit: zh chars (900-1200) or en words (600-800).
+  const chapterCount = positiveInteger(options.chapterCount, SHORT_FICTION_DEFAULT_CHAPTERS, "chapterCount");
   const charsPerChapter = language === "en"
-    ? boundedInteger(
-        options.charsPerChapter,
-        SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER,
-        "charsPerChapter",
-        SHORT_FICTION_EN_MIN_WORDS_PER_CHAPTER,
-        SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER,
-      )
-    : boundedInteger(
-        options.charsPerChapter,
-        SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
-        "charsPerChapter",
-        SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
-        SHORT_FICTION_MAX_CHARS_PER_CHAPTER,
-      );
+    ? positiveInteger(options.charsPerChapter, SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER, "charsPerChapter")
+    : positiveInteger(options.charsPerChapter, SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER, "charsPerChapter");
 
   // Resume the current outline from disk when this Work already exists.
   const resumedOutline = providedStoryId
@@ -302,6 +299,7 @@ async function produceShort(
         draft: finalDraft,
         language,
       });
+      await rm(safeChildPath(root, join(baseDir, "reviews", "package-warning.md")), { force: true });
     } catch (error) {
       options.signal?.throwIfAborted();
       packageWarning = error instanceof Error ? error.message : String(error);
@@ -344,7 +342,6 @@ async function produceShort(
     packageWarning ? `packaging requires retry: ${packageWarning}` : "",
   ].filter(Boolean);
   const observations = [
-    ...buildShortLengthObservations(finalDraft, charsPerChapter, language),
     ...completionWarnings.map((warning): Observation => ({
       code: warning.startsWith("packaging") ? "package-generation" : "draft-review",
       kind: "soft",
@@ -549,26 +546,6 @@ async function writePackageArtifacts(
       textWrite(join(finalDir, "sales-package.md"), packageMarkdown),
       textWrite(join(finalDir, "cover-prompt.md"), salesPackage.coverPrompt),
     ],
-  });
-}
-
-function buildShortLengthObservations(
-  draft: ShortFictionBatchDraft,
-  target: number,
-  language: ShortFictionLanguage,
-): Observation[] {
-  const spec = buildLengthSpec(target, language);
-  return draft.chapters.flatMap((chapter) => {
-    const observation = createRangeObservation({
-    code: `chapter-${chapter.number}-length`,
-    actual: countChapterLength(chapter.content, spec.countingMode),
-    target: spec.target,
-    min: spec.hardMin,
-    max: spec.hardMax,
-    unit: spec.countingMode,
-    evidence: `chapter ${chapter.number}: ${chapter.title}`,
-    });
-    return observation ? [observation] : [];
   });
 }
 
@@ -1038,10 +1015,10 @@ async function ensureVisualWork(
   }));
 }
 
-function boundedInteger(value: number | undefined, fallback: number, name: string, min: number, max: number): number {
+function positiveInteger(value: number | undefined, fallback: number, name: string): number {
   const parsed = value ?? fallback;
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer.`);
   }
   return parsed;
 }

@@ -11,7 +11,6 @@ function createSession(): InteractionSession {
     projectRoot: "/tmp/inkos-demo",
     activeBookId: "harbor",
     messages: [],
-    events: [],
   };
 }
 

@@ -32,8 +32,6 @@ import { PlayStore } from "../play/play-store.js";
 import type { AgentContext } from "../agents/base.js";
 import {
   ActionPayloadSchema,
-  shortRunCharsPerChapterError,
-  shortRunCharsPerChapterRange,
   type ActionPayload,
 } from "../interaction/action-envelope.js";
 import { ResearchSearchConfigSchema } from "../models/project.js";
@@ -1471,7 +1469,8 @@ async function readResearchSearchConfig(projectRoot: string) {
   try {
     const raw = JSON.parse(await readFile(join(projectRoot, "inkos.json"), "utf-8")) as Record<string, unknown>;
     return ResearchSearchConfigSchema.parse(raw.researchSearch ?? {});
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return ResearchSearchConfigSchema.parse({});
   }
 }
@@ -1494,10 +1493,10 @@ const ShortFictionRunParams = Type.Object({
     description: "Optional short-fiction Work id. Leave empty to derive it from the generated title.",
   })),
   chapters: Type.Optional(Type.Number({
-    description: "Target complete short chapter count, 12-18. Default 12.",
+    description: "User-requested complete chapter count. Omit when the user leaves it open.",
   })),
   charsPerChapter: Type.Optional(Type.Number({
-    description: "Per-chapter length in the story language's native unit: 900-1200 Chinese characters (default 1000) for zh, or 600-800 English words (default 650) for en. Values outside the story language's range are rejected before the pipeline starts. Do not use total story length here.",
+    description: "User-requested per-chapter length in the story language's native unit: Chinese characters for zh or words for en. Do not use total story length here.",
   })),
   cover: Type.Optional(Type.Boolean({
     description: "Whether to attempt cover image generation after synopsis and cover prompt. Default true; use false if the user only wants text assets.",
@@ -1520,20 +1519,6 @@ const ShortFictionRunParams = Type.Object({
 });
 
 type ShortFictionRunParamsType = Static<typeof ShortFictionRunParams>;
-
-// 启动 pipeline 之前校验 charsPerChapter 是否落在最终语言的合法区间：
-// 确认卡 payload 在 language 缺省时只能做 600-1200 并集校验，这里能拿到最终
-// 语言（payload.language ?? 会话语言 ?? zh，与 runner 的默认一致），越界立即
-// 抛出带合法范围的双语错误，不让任务开跑后才在 runner 中途失败。
-function assertShortRunCharsPerChapter(
-  value: number | undefined,
-  language: "zh" | "en",
-): void {
-  if (value === undefined) return;
-  const { min, max } = shortRunCharsPerChapterRange(language);
-  if (Number.isInteger(value) && value >= min && value <= max) return;
-  throw new Error(shortRunCharsPerChapterError(value, language));
-}
 
 export function createShortFictionRunTool(
   pipeline: PipelineRunner,
@@ -1562,7 +1547,6 @@ export function createShortFictionRunTool(
       const language = shortPayload?.language ?? options.language;
       const charsPerChapter = shortPayload?.charsPerChapter ?? params.charsPerChapter;
       const activatedSkills = resolveProductionToolSkills(options);
-      assertShortRunCharsPerChapter(charsPerChapter, language ?? "zh");
       const result = await runPipelineWithAgentContext(
         pipeline,
         _signal,
@@ -2836,84 +2820,7 @@ export function createReadTool(
 }
 
 // ---------------------------------------------------------------------------
-// 3. Edit Tool
-// ---------------------------------------------------------------------------
-
-const EditParams = Type.Object({
-  path: Type.String({ description: "File path relative to works/" }),
-  old_string: Type.String({ description: "Exact string to find in the file" }),
-  new_string: Type.String({ description: "Replacement string" }),
-});
-
-export function createEditTool(projectRoot: string): AgentTool<typeof EditParams> {
-  const worksRoot = join(projectRoot, "works");
-
-  return {
-    name: "edit",
-    description:
-      "Edit a file under works/ via exact string replacement. " +
-      "old_string must appear exactly once in the file. " +
-      "For chapter text use patch_chapter_text; for canonical truth files (outline/story_frame.md, outline/volume_map.md, roles/**/*.md, current_focus.md, author_intent.md) prefer write_truth_file; " +
-      "to rewrite or polish a whole chapter call revise_chapter.",
-    label: "Edit File",
-    parameters: EditParams,
-    async execute(
-      _toolCallId: string,
-      params: Static<typeof EditParams>,
-    ): Promise<AgentToolResult<undefined>> {
-      const filePath = safeBooksPath(worksRoot, params.path);
-      const content = await readFile(filePath, "utf-8");
-      const idx = content.indexOf(params.old_string);
-      if (idx === -1) {
-        throw new Error(`old_string not found in "${params.path}".`);
-      }
-      if (content.indexOf(params.old_string, idx + 1) !== -1) {
-        throw new Error(`old_string appears more than once in "${params.path}". Provide a more specific match.`);
-      }
-      const updated = content.slice(0, idx) + params.new_string + content.slice(idx + params.old_string.length);
-      await writeFile(filePath, updated, "utf-8");
-      return textResult(`File "${params.path}" updated successfully.`);
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// 4. Write Tool
-// ---------------------------------------------------------------------------
-
-const WriteFileParams = Type.Object({
-  path: Type.String({ description: "File path relative to works/" }),
-  content: Type.String({ description: "Full file content to write" }),
-});
-
-export function createWriteFileTool(projectRoot: string): AgentTool<typeof WriteFileParams> {
-  const worksRoot = join(projectRoot, "works");
-
-  return {
-    name: "write",
-    description:
-      "Create a new file, or fully replace an existing file's content under works/. " +
-      "Parent directories are created automatically. Existing content is overwritten silently — " +
-      "for canonical truth files prefer write_truth_file; " +
-      "for whole-chapter rewrites/polishing call revise_chapter.",
-    label: "Write File",
-    parameters: WriteFileParams,
-    async execute(
-      _toolCallId: string,
-      params: Static<typeof WriteFileParams>,
-    ): Promise<AgentToolResult<undefined>> {
-      const filePath = safeBooksPath(worksRoot, params.path);
-      const parentDir = resolve(filePath, "..");
-      const { mkdir } = await import("node:fs/promises");
-      await mkdir(parentDir, { recursive: true });
-      await writeFile(filePath, params.content, "utf-8");
-      return textResult(`File "${params.path}" written successfully.`);
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// 5. Work Catalog / Grep Tools
+// 3. Work Catalog / Grep Tools
 // ---------------------------------------------------------------------------
 
 const ListWorksParams = Type.Object({

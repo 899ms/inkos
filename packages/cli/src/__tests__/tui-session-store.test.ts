@@ -62,20 +62,11 @@ describe("tui session store", () => {
     expect(await resolveSessionActiveBook(projectRoot, session)).toBe("night-harbor");
   });
 
-  it("falls back to the only book in the project", async () => {
+  it("does not infer an active book from the project catalog", async () => {
     const singleRoot = await mkdtemp(join(tmpdir(), "inkos-tui-single-"));
     await createBookWork(singleRoot, "single-book");
 
     const session = createProjectSession(singleRoot);
-    expect(await resolveSessionActiveBook(singleRoot, session)).toBe("single-book");
-  });
-
-  it("returns undefined when multiple books exist and no valid active binding is stored", async () => {
-    const multiRoot = await mkdtemp(join(tmpdir(), "inkos-tui-multi-"));
-    await createBookWork(multiRoot, "book-a");
-    await createBookWork(multiRoot, "book-b");
-
-    const session = createProjectSession(multiRoot);
-    expect(await resolveSessionActiveBook(multiRoot, session)).toBeUndefined();
+    expect(await resolveSessionActiveBook(singleRoot, session)).toBeUndefined();
   });
 });

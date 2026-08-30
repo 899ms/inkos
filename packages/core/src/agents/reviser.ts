@@ -51,8 +51,8 @@ export class ReviserAgent extends BaseAgent {
     const context = renderNarrativeSelectedContext(options.contextPackage.selectedContext, options.language);
     const lengthBlock = options.lengthSpec
       ? (isEnglish
-          ? `\n## Length telemetry\nTarget: ${options.lengthSpec.target}; range: ${options.lengthSpec.softMin}-${options.lengthSpec.softMax}; hard range: ${options.lengthSpec.hardMin}-${options.lengthSpec.hardMax}.`
-          : `\n## 字数遥测\n目标：${options.lengthSpec.target}；区间：${options.lengthSpec.softMin}-${options.lengthSpec.softMax}；硬区间：${options.lengthSpec.hardMin}-${options.lengthSpec.hardMax}。`)
+          ? `\n## Length target\nUser target: ${options.lengthSpec.target} words.`
+          : `\n## 字数目标\n用户目标：${options.lengthSpec.target} 字。`)
       : "";
     const systemPrompt = buildRevisionProtocol(mode, options.language);
     const userPrompt = isEnglish

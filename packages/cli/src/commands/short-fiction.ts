@@ -5,12 +5,6 @@ import {
   SHORT_FICTION_DEFAULT_CHAPTERS,
   SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
   SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER,
-  SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER,
-  SHORT_FICTION_EN_MIN_WORDS_PER_CHAPTER,
-  SHORT_FICTION_MAX_CHAPTERS,
-  SHORT_FICTION_MAX_CHARS_PER_CHAPTER,
-  SHORT_FICTION_MIN_CHAPTERS,
-  SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
   activatedSkillIds,
   createBuiltInWorkProfileRegistry,
   createShortFictionRunTool,
@@ -35,8 +29,8 @@ shortCommand
   .option("--reference <path>", "Optional reference notes/text")
   .option("--story-id <id>", "Work id for the generated short fiction")
   .option("--lang <language>", "Writing language: zh or en", "zh")
-  .option("--chapters <n>", "Complete short chapter count (12-18)", String(SHORT_FICTION_DEFAULT_CHAPTERS))
-  .option("--chars <n>", "Per-chapter length: zh characters (900-1200) or en words (600-800)")
+  .option("--chapters <n>", "Complete short chapter count", String(SHORT_FICTION_DEFAULT_CHAPTERS))
+  .option("--chars <n>", "Per-chapter length: zh characters or en words")
   .option("--llm-base-url <url>", "Override LLM base URL")
   .option("--model <model>", "Fallback model for all short stages")
   .option("--planner-model <model>", "Model for outline creation")
@@ -54,21 +48,17 @@ shortCommand
     try {
       const root = findProjectRoot();
       const language = parseShortFictionLanguage(opts.lang);
-      const chapterCount = parseBoundedInteger(
+      const chapterCount = parsePositiveInteger(
         opts.chapters,
         SHORT_FICTION_DEFAULT_CHAPTERS,
         "chapters",
-        SHORT_FICTION_MIN_CHAPTERS,
-        SHORT_FICTION_MAX_CHAPTERS,
       );
       const charsPerChapter = opts.chars === undefined
         ? undefined
-        : parseBoundedInteger(
+        : parsePositiveInteger(
             opts.chars,
             language === "en" ? SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER : SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
             "chars",
-            language === "en" ? SHORT_FICTION_EN_MIN_WORDS_PER_CHAPTER : SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
-            language === "en" ? SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER : SHORT_FICTION_MAX_CHARS_PER_CHAPTER,
           );
       const reference = opts.reference ? await readReference(root, opts.reference) : undefined;
       const models = resolveShortRunModels(opts);
@@ -198,16 +188,14 @@ async function readReference(root: string, path: string): Promise<ShortFictionRe
   };
 }
 
-function parseBoundedInteger(
+function parsePositiveInteger(
   value: string | undefined,
   fallback: number,
   name: string,
-  min: number,
-  max: number,
 ): number {
   const parsed = value ? Number.parseInt(value, 10) : fallback;
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer.`);
   }
   return parsed;
 }

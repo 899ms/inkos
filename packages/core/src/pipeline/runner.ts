@@ -24,7 +24,7 @@ import type { RadarResult } from "../agents/radar.js";
 import type { LengthSpec, LengthTelemetry } from "../models/length-governance.js";
 import type { ChapterMemo, ChapterTrace, ContextPackage } from "../models/input-governance.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
-import { buildLengthSpec, countChapterLength, formatLengthCount, isOutsideHardRange, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
+import { buildLengthSpec, countChapterLength, formatLengthCount, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
 import {
   readCharacterContext,
   readStoryFrame,
@@ -173,26 +173,6 @@ export interface ReviseResult {
     readonly suggestion?: string;
   }>;
   readonly lengthTelemetry?: LengthTelemetry;
-}
-
-export interface TruthFiles {
-  readonly currentState: string;
-  readonly pendingHooks: string;
-  readonly storyFrame: string;
-  readonly volumeMap: string;
-  readonly bookRules: string;
-}
-
-export interface BookStatusInfo {
-  readonly bookId: string;
-  readonly title: string;
-  readonly genre: string;
-  readonly platform: string;
-  readonly status: string;
-  readonly chaptersWritten: number;
-  readonly totalWords: number;
-  readonly nextChapter: number;
-  readonly chapters: ReadonlyArray<ChapterMeta>;
 }
 
 export interface ImportChaptersInput {
@@ -598,7 +578,8 @@ export class PipelineRunner {
   ): Promise<string> {
     const { FanficCanonImporter } = await import("../agents/fanfic-canon-importer.js");
     const importer = new FanficCanonImporter(this.agentCtxFor("fanfic-canon-importer", bookId));
-    const result = await importer.importFromText(sourceText, sourceName, fanficMode);
+    const language = await this.resolveBookLanguageById(bookId);
+    const result = await importer.importFromText(sourceText, sourceName, fanficMode, language);
 
     const bookDir = this.state.bookDir(bookId);
     const storyDir = join(bookDir, "story");
@@ -743,19 +724,7 @@ export class PipelineRunner {
       language,
       auditOptions: { contextPackage: governed.composed.contextPackage },
     });
-    const lengthSpec = buildLengthSpec(book.chapterWordCount, language);
-    const lengthIssue = this.buildLengthReviewIssue(
-      targetChapter,
-      countChapterLength(content, lengthSpec.countingMode),
-      lengthSpec,
-    );
-    const result: AuditResult = {
-      ...evaluation,
-      issues: [
-        ...evaluation.issues,
-        ...(lengthIssue ? [lengthIssue] : []),
-      ],
-    };
+    const result: AuditResult = evaluation;
 
     // Update index with audit result
     const index = await this.state.loadChapterIndex(bookId);
@@ -949,21 +918,17 @@ export class PipelineRunner {
           contextPackage: reviseControlInput.composed.contextPackage,
         },
       });
-      const lengthReviewIssue = this.buildLengthReviewIssue(targetChapter, revisedCount, lengthSpec);
       const postRevisionIssues = [
         ...postRevision.issues,
         ...buildStateReconciliationIssues(stateValidation.warnings, language),
-        ...(lengthReviewIssue ? [lengthReviewIssue] : []),
       ];
       const revisionBaseCount = countChapterLength(content, lengthSpec.countingMode);
-      const lengthWarning = isOutsideHardRange(revisedCount, lengthSpec);
       const lengthTelemetry = this.buildLengthTelemetry({
         lengthSpec,
         writerCount: revisionBaseCount,
         postReviseCount: revisedCount,
         finalCount: revisedCount,
         repairApplied: revisedContent !== content,
-        lengthWarning,
       });
 
       const remainingIssues = postRevisionIssues
@@ -1070,51 +1035,8 @@ export class PipelineRunner {
     }
   }
 
-  /** Read all truth files for a book. */
-  async readTruthFiles(bookId: string): Promise<TruthFiles> {
-    const bookDir = this.state.bookDir(bookId);
-    const storyDir = join(bookDir, "story");
-    const book = await this.state.loadBookConfig(bookId);
-    const language = book.language;
-    const [runtimeSnapshot, storyFrame, volumeMap, bookRules] =
-      await Promise.all([
-        loadRuntimeStateSnapshot(bookDir),
-        readFile(join(storyDir, "outline/story_frame.md"), "utf-8"),
-        readFile(join(storyDir, "outline/volume_map.md"), "utf-8"),
-        readFile(join(storyDir, "book_rules.md"), "utf-8"),
-      ]);
-
-    return {
-      currentState: renderCurrentStateProjection(runtimeSnapshot.currentState, language),
-      pendingHooks: renderHooksProjection(runtimeSnapshot.hooks, language),
-      storyFrame,
-      volumeMap,
-      bookRules,
-    };
-  }
-
-  /** Get book status overview. */
-  async getBookStatus(bookId: string): Promise<BookStatusInfo> {
-    const book = await this.state.loadBookConfig(bookId);
-    const chapters = await this.state.loadChapterIndex(bookId);
-    const nextChapter = await this.state.getNextChapterNumber(bookId);
-    const totalWords = chapters.reduce((sum, ch) => sum + ch.wordCount, 0);
-
-    return {
-      bookId,
-      title: book.title,
-      genre: book.genre,
-      platform: book.platform,
-      status: book.status,
-      chaptersWritten: chapters.length,
-      totalWords,
-      nextChapter,
-      chapters: [...chapters],
-    };
-  }
-
   // ---------------------------------------------------------------------------
-  // Full pipeline (convenience — runs draft + audit + revise in one shot)
+  // Long-form production capability
   // ---------------------------------------------------------------------------
 
   async writeNextChapter(
@@ -1303,14 +1225,12 @@ export class PipelineRunner {
       reducedControlInput,
     );
     finalWordCount = persistenceOutput.wordCount;
-    const lengthWarning = isOutsideHardRange(finalWordCount, lengthSpec);
     const lengthTelemetry = this.buildLengthTelemetry({
       lengthSpec,
       writerCount,
       postReviseCount: 0,
       finalCount: finalWordCount,
       repairApplied: false,
-      lengthWarning,
     });
 
     // 4.1 Validate settler output before writing
@@ -1996,48 +1916,20 @@ export class PipelineRunner {
     throw new Error(`Chapter ${chapterNumber} has empty chapter content after ${stage}`);
   }
 
-  private buildLengthReviewIssue(
-    chapterNumber: number,
-    finalCount: number,
-    lengthSpec: LengthSpec,
-  ): AuditIssue | undefined {
-    if (!isOutsideHardRange(finalCount, lengthSpec)) return undefined;
-    const language = this.languageFromLengthSpec(lengthSpec);
-    return {
-      severity: "warning",
-      category: "length-budget",
-      description: this.localize(language, {
-        zh: `第${chapterNumber}章当前版本为 ${finalCount} 字，超出硬区间 ${lengthSpec.hardMin}-${lengthSpec.hardMax} 字。`,
-        en: `Chapter ${chapterNumber} currently has ${finalCount} words, outside the hard range ${lengthSpec.hardMin}-${lengthSpec.hardMax}.`,
-      }),
-      suggestion: this.localize(language, {
-        zh: `围绕 ${lengthSpec.target} 字调整当前版本。`,
-        en: `Revise the current artifact toward ${lengthSpec.target} words.`,
-      }),
-      repairScope: "structural",
-    };
-  }
-
   private buildLengthTelemetry(params: {
     lengthSpec: LengthSpec;
     writerCount: number;
     postReviseCount: number;
     finalCount: number;
     repairApplied: boolean;
-    lengthWarning: boolean;
   }): LengthTelemetry {
     return {
       target: params.lengthSpec.target,
-      softMin: params.lengthSpec.softMin,
-      softMax: params.lengthSpec.softMax,
-      hardMin: params.lengthSpec.hardMin,
-      hardMax: params.lengthSpec.hardMax,
       countingMode: params.lengthSpec.countingMode,
       writerCount: params.writerCount,
       postReviseCount: params.postReviseCount,
       finalCount: params.finalCount,
       repairApplied: params.repairApplied,
-      lengthWarning: params.lengthWarning,
     };
   }
 

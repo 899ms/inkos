@@ -24,6 +24,7 @@ export function createWorkManifest(input: {
   readonly title: string;
   readonly profileId: string;
   readonly language: string;
+  readonly status?: WorkManifest["status"];
   readonly now?: string;
   readonly lineage?: WorkManifest["lineage"];
   readonly metadata?: WorkManifest["metadata"];
@@ -35,7 +36,7 @@ export function createWorkManifest(input: {
     title: input.title,
     profileId: input.profileId,
     language: input.language,
-    status: "active",
+    status: input.status ?? "draft",
     lineage: input.lineage ?? [],
     artifacts: [],
     metadata: input.metadata ?? {},

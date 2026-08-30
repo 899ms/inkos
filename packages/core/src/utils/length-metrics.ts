@@ -2,10 +2,6 @@ import type { LengthCountingMode, LengthSpec } from "../models/length-governance
 
 export type LengthLanguage = "zh" | "en";
 
-const REFERENCE_TARGET = 2200;
-const SOFT_RANGE_DELTA = 300;
-const HARD_RANGE_DELTA = 600;
-
 // Per-chapter length default in the book's native unit: Chinese counts characters (3000字),
 // English counts words (~2000 ≈ a 3000-char chapter). One cross-language number would mis-scale —
 // 3000 read as English words runs ~50% long, and the hard-range guard then force-expands correct chapters.
@@ -47,39 +43,10 @@ export function buildLengthSpec(
   target: number,
   language: LengthLanguage = "zh",
 ): LengthSpec {
-  const softDelta = scaleRangeDelta(target, SOFT_RANGE_DELTA);
-  const hardDelta = Math.max(softDelta, scaleRangeDelta(target, HARD_RANGE_DELTA));
-  const softMin = Math.max(1, target - softDelta);
-  const softMax = target + softDelta;
-  const hardMin = Math.max(1, target - hardDelta);
-  const hardMax = target + hardDelta;
-
   return {
     target,
-    softMin,
-    softMax,
-    hardMin,
-    hardMax,
     countingMode: resolveLengthCountingMode(language),
   };
-}
-
-function scaleRangeDelta(target: number, referenceDelta: number): number {
-  return Math.max(1, Math.floor((target * referenceDelta) / REFERENCE_TARGET));
-}
-
-export function isOutsideSoftRange(
-  count: number,
-  spec: Pick<LengthSpec, "softMin" | "softMax">,
-): boolean {
-  return count < spec.softMin || count > spec.softMax;
-}
-
-export function isOutsideHardRange(
-  count: number,
-  spec: Pick<LengthSpec, "hardMin" | "hardMax">,
-): boolean {
-  return count < spec.hardMin || count > spec.hardMax;
 }
 
 function stripMarkdownMetadata(content: string): string {

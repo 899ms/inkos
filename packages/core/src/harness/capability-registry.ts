@@ -26,7 +26,6 @@ export interface CapabilityAction<TParameters extends TSchema = TSchema> {
   readonly description: string;
   readonly risk: ActionRisk;
   readonly requiresConfirmation?: boolean;
-  readonly contextRecipeId?: string;
   readonly defaultSkillIds?: ReadonlyArray<string>;
   readonly parameters: TParameters;
   execute(context: CapabilityExecutionContext, input: Static<TParameters>): Promise<ActionResult>;

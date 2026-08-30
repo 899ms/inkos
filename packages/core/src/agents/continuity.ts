@@ -6,7 +6,7 @@ import { renderNarrativeSelectedContext } from "../utils/narrative-control.js";
 export interface AuditResult {
   readonly issues: ReadonlyArray<AuditIssue>;
   readonly summary: string;
-  readonly parseFailed?: boolean;
+  readonly unavailable?: boolean;
   readonly tokenUsage?: {
     readonly promptTokens: number;
     readonly completionTokens: number;

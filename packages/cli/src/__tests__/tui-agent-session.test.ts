@@ -112,10 +112,6 @@ describe("tui agent session bridge", () => {
         projectRoot,
       }),
       "帮我整理这一章",
-      [
-        { role: "user", content: "旧问题" },
-        { role: "assistant", content: "旧回答" },
-      ],
     );
     expect(result.responseText).toBe("这是 agent 直接返回的回复。");
     expect(result.session.messages.at(-1)).toEqual(expect.objectContaining({
@@ -179,7 +175,6 @@ describe("tui agent session bridge", () => {
         actionSource: "free-text",
       }),
       expect.stringContaining("雾灯小巷"),
-      [],
     );
     expect(result.session.activeBookId).toBeUndefined();
     expect(result.responseText).toContain("请确认");
@@ -204,7 +199,6 @@ describe("tui agent session bridge", () => {
     expect(runAgentSessionMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ bookId: null, sessionKind: "book-create", actionSource: "slash" }),
       "一部海港悬疑长篇",
-      [],
     );
     expect(newBook.session.activeBookId).toBeUndefined();
 
@@ -216,7 +210,6 @@ describe("tui agent session bridge", () => {
     expect(runAgentSessionMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ bookId: null, sessionKind: "short", actionSource: "slash" }),
       "婚姻背叛后的证据反杀",
-      [],
     );
 
     await processTuiAgentInput({
@@ -227,7 +220,6 @@ describe("tui agent session bridge", () => {
     expect(runAgentSessionMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ bookId: null, sessionKind: "play", playMode: "open" }),
       "雨夜便利店里时间停止",
-      [],
     );
   });
 
@@ -293,7 +285,6 @@ describe("tui agent session bridge", () => {
     expect(runAgentSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "script", workId: "tui-script" }),
       "Rewrite the second scene.",
-      expect.any(Array),
     );
   });
 
@@ -362,7 +353,6 @@ describe("tui agent session bridge", () => {
         },
       }),
       "把上传的故事改成三幕互动影游",
-      expect.any(Array),
     );
     expect(confirmed.session.pendingProposedAction).toBeUndefined();
   });
@@ -413,7 +403,6 @@ describe("tui agent session bridge", () => {
         requestedIntent: "write_next",
       }),
       "写下一章",
-      [],
     );
     expect(result.responseText).toContain("完成下一章");
     const persisted = await loadProjectSession(projectRoot);

@@ -46,8 +46,8 @@ The current user instruction and chapter memo govern this chapter. Established f
 
 function lengthContract(spec: LengthSpec, language: "zh" | "en"): string {
   return language === "en"
-    ? `## Length\nTarget ${spec.target} words; accepted range ${spec.softMin}-${spec.softMax}; hard range ${spec.hardMin}-${spec.hardMax}.`
-    : `## 字数\n目标 ${spec.target} 字；允许区间 ${spec.softMin}-${spec.softMax}；硬区间 ${spec.hardMin}-${spec.hardMax}。`;
+    ? `## Length\nUser target: ${spec.target} words. Preserve scene completeness instead of padding or cutting mechanically.`
+    : `## 字数\n用户目标：${spec.target} 字。保持场景完整，不要机械注水或裁切。`;
 }
 
 function narrativePersonContract(bookRules: BookRules | null, language: "zh" | "en"): string {

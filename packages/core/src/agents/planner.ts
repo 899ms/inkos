@@ -132,10 +132,6 @@ export class PlannerAgent extends BaseAgent {
       currentInstruction: input.currentInstruction,
       lengthBudget: {
         target: input.lengthSpec.target,
-        softMin: input.lengthSpec.softMin,
-        softMax: input.lengthSpec.softMax,
-        hardMin: input.lengthSpec.hardMin,
-        hardMax: input.lengthSpec.hardMax,
         unit: input.lengthSpec.countingMode === "en_words" ? "words" : "字",
       },
       language,

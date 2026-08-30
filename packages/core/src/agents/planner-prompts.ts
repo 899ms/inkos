@@ -14,10 +14,6 @@ export function buildPlannerUserMessage(input: {
   readonly previousChapter?: string;
   readonly lengthBudget: {
     readonly target: number;
-    readonly softMin: number;
-    readonly softMax: number;
-    readonly hardMin: number;
-    readonly hardMax: number;
     readonly unit: string;
   };
   readonly language?: "zh" | "en";
@@ -33,7 +29,7 @@ export function buildPlannerUserMessage(input: {
       `## Governed context\n${context}`,
       previous ? `## Previous chapter\n${previous}` : "",
       "## Host length telemetry",
-      `Target ${input.lengthBudget.target} ${input.lengthBudget.unit}; range ${input.lengthBudget.softMin}-${input.lengthBudget.softMax}; hard range ${input.lengthBudget.hardMin}-${input.lengthBudget.hardMax}.`,
+      `User target: ${input.lengthBudget.target} ${input.lengthBudget.unit}. Treat it as a creative constraint, not a host quality verdict.`,
     ].filter(Boolean).join("\n\n");
   }
   return [
@@ -42,6 +38,6 @@ export function buildPlannerUserMessage(input: {
     `## 权威上下文\n${context}`,
     previous ? `## 上一章正文\n${previous}` : "",
     "## 宿主字数遥测",
-    `目标 ${input.lengthBudget.target} ${input.lengthBudget.unit}；区间 ${input.lengthBudget.softMin}-${input.lengthBudget.softMax}；硬区间 ${input.lengthBudget.hardMin}-${input.lengthBudget.hardMax}。`,
+    `用户目标：${input.lengthBudget.target} ${input.lengthBudget.unit}。这是创作约束，不是宿主质量判决。`,
   ].filter(Boolean).join("\n\n");
 }

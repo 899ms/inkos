@@ -73,7 +73,6 @@ describe("AgentSkills registry", () => {
       capabilityIds: ["script"],
       requiredSkillIds: ["inkos-script-writing"],
       recommendedSkillIds: [],
-      contextRecipes: {},
       artifactKinds: ["script"],
       confirmation: {
         inferredMutation: "execute",

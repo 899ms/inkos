@@ -86,10 +86,6 @@ export async function processTuiAgentInput(params: {
         ? params.session.workId
         : surfaceBinding.workId,
   };
-  const initialMessages = params.session.messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
-    .map((message) => ({ role: message.role, content: message.content }));
-
   let nextSession = appendInteractionMessage({
     ...params.session,
     sessionKind: route.sessionKind,
@@ -158,7 +154,6 @@ export async function processTuiAgentInput(params: {
       },
     },
     route.userMessage,
-    initialMessages,
   );
   const createdBookId = extractCreatedBookId(result.messages);
   const activeBookId = createdBookId ?? resolvedBookId;

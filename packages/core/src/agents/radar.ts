@@ -33,9 +33,7 @@ function formatRankingsForPrompt(rankings: ReadonlyArray<PlatformRankings>): str
       return `### ${r.platform}\n${lines.join("\n")}`;
     });
 
-  return sections.length > 0
-    ? sections.join("\n\n")
-    : "（未能获取到实时排行数据，请基于你的知识分析）";
+  return sections.join("\n\n");
 }
 
 export class RadarAgent extends BaseAgent {
@@ -56,14 +54,17 @@ export class RadarAgent extends BaseAgent {
   async scan(): Promise<RadarResult> {
     const rankings = await Promise.all(this.sources.map((s) => s.fetch()));
     const rankingsText = formatRankingsForPrompt(rankings);
+    if (!rankingsText) {
+      throw new Error("Market radar has no source evidence to analyze.");
+    }
 
-    const systemPrompt = `按已激活的长篇市场研究 Skill 分析以下实时排行榜。每条判断引用具体榜单证据，并按建议价值排序。
+    const systemPrompt = `按已激活的长篇市场研究 Skill 分析以下实时排行榜。每条判断必须引用输入中的具体证据。
 
 ## 实时排行榜数据
 
 ${rankingsText}
 
-通过结果工具提交 3-5 个有榜单证据的建议和整体市场概述。不要给数值评分。`;
+通过结果工具提交建议和整体市场概述。`;
 
     const { result } = await this.submitStructured(
       [

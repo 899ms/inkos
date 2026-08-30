@@ -581,13 +581,13 @@ ${selectedContext || "- none"}\n`;
   private buildLengthRequirementBlock(lengthSpec: LengthSpec, language: "zh" | "en"): string {
     if (language === "en") {
       return `Requirements:
-- Target length: ${lengthSpec.target} words
-- Acceptable range: ${lengthSpec.softMin}-${lengthSpec.softMax} words`;
+- User target length: ${lengthSpec.target} words
+- Keep the scene complete; do not pad or cut mechanically`;
     }
 
     return `要求：
-- 目标字数：${lengthSpec.target}字
-- 允许区间：${lengthSpec.softMin}-${lengthSpec.softMax}字`;
+- 用户目标字数：${lengthSpec.target}字
+- 保持场景完整，不要机械注水或裁切`;
   }
 
   private async readFileOrDefault(path: string): Promise<string> {

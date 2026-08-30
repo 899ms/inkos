@@ -1,6 +1,5 @@
 import type {
   ExecutionStatus,
-  InteractionEvent,
   InteractionMessage,
   InteractionSession,
 } from "@actalk/inkos-core";
@@ -13,12 +12,6 @@ export interface DashboardMessageRow {
   readonly content: string;
 }
 
-export interface DashboardEventRow {
-  readonly key: string;
-  readonly status: ExecutionStatus;
-  readonly summary: string;
-}
-
 export interface DashboardViewModel {
   readonly projectName: string;
   readonly activeBookTitle?: string;
@@ -29,7 +22,6 @@ export interface DashboardViewModel {
   readonly statusPrimaryLine: string;
   readonly statusSecondaryLine: string;
   readonly messageRows: ReadonlyArray<DashboardMessageRow>;
-  readonly eventRows: ReadonlyArray<DashboardEventRow>;
   readonly composerPlaceholder: string;
   readonly composerHelper: string;
   readonly composerStatus: string;
@@ -72,17 +64,6 @@ export function buildDashboardViewModel(params: BuildDashboardViewModelParams): 
       content: message.content,
     }));
 
-  const eventRows = params.session.events
-    .filter((event) => event.timestamp >= sinceTimestamp)
-    .slice(-3)
-    .map((event, index) => ({
-      key: `${event.timestamp}-${index}`,
-      status: event.status,
-      summary: summarizeEvent(event, params.copy),
-    }));
-
-  const latestEventSummary = eventRows[eventRows.length - 1]?.summary;
-
   return {
     projectName: params.projectName,
     activeBookTitle: params.activeBookTitle ?? params.session.activeBookId,
@@ -99,13 +80,8 @@ export function buildDashboardViewModel(params: BuildDashboardViewModelParams): 
     statusPrimaryLine: `${params.copy.labels.stage} ${executionLabel} · ${params.copy.labels.model} ${params.modelLabel}`,
     statusSecondaryLine: params.lastError
       ? `${params.copy.labels.error} · ${compactInline(params.lastError)}`
-      : params.isSubmitting && latestEventSummary
-        ? `${params.copy.labels.recent} · ${latestEventSummary}`
-      : latestEventSummary
-            ? `${params.copy.labels.recent} · ${latestEventSummary}`
-            : `${params.copy.labels.ready} · ${bookLabel}`,
+      : `${params.copy.labels.ready} · ${bookLabel}`,
     messageRows,
-    eventRows,
     composerPlaceholder: params.copy.composer.placeholder,
     composerHelper: params.copy.composer.helper,
     composerStatus: params.isSubmitting
@@ -128,20 +104,6 @@ function roleLabel(role: InteractionMessage["role"], copy: TuiCopy): string {
     default:
       return role;
   }
-}
-
-function summarizeEvent(event: InteractionEvent, copy: TuiCopy): string {
-  const base = compactInline(event.detail?.trim() || event.kind);
-  if (event.bookId && event.chapterNumber !== undefined) {
-    const chapterLabel = copy.locale === "zh-CN"
-      ? `第 ${event.chapterNumber} 章`
-      : `ch.${event.chapterNumber}`;
-    return `${base} (${event.bookId} ${chapterLabel})`;
-  }
-  if (event.bookId) {
-    return `${base} (${event.bookId})`;
-  }
-  return base;
 }
 
 function compactInline(value: string): string {

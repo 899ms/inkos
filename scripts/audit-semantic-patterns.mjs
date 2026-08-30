@@ -11,6 +11,34 @@ const SCAN_DIRS = [
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
 
+const FORBIDDEN_SOURCE_PATHS = [
+  "packages/core/src/models/state.ts",
+  "packages/core/src/models/genre-profile.ts",
+  "packages/core/src/state/memory-db.ts",
+  "packages/core/src/interactive-film/memory-link.ts",
+  "packages/core/src/agent/llm-stub.ts",
+  "packages/cli/src/commands/genre.ts",
+];
+
+const FORBIDDEN_ARCHITECTURE_TOKENS = [
+  ["audit-failed", "hidden content rejection state"],
+  ["review-failed", "hidden content rejection state"],
+  ["qualityScore", "host-owned prose score"],
+  ["isOutsideHardRange", "host-derived hard length gate"],
+  ["isOutsideSoftRange", "host-derived soft length gate"],
+  ["lengthWarning", "host-derived length verdict"],
+  ["softMin", "host-derived length range"],
+  ["hardMin", "host-derived length range"],
+  ["SHORT_FICTION_MIN_CHAPTERS", "host-owned creative range"],
+  ["SHORT_FICTION_MAX_CHAPTERS", "host-owned creative range"],
+  ["INKOS_AGENT_LLM_STUB", "production test-model branch"],
+  ["contextRecipes", "unused parallel context abstraction"],
+  ["createEditTool", "unregistered generic write surface"],
+  ["createWriteFileTool", "unregistered generic write surface"],
+  ["plainToAgentMessages", "second conversation-history source"],
+  ["InteractionEventSchema", "parallel interaction event ledger"],
+];
+
 const ACTION_SURFACE_PATHS = [
   "packages/core/src/agent/",
   "packages/core/src/interaction/",
@@ -124,12 +152,29 @@ for (const dir of SCAN_DIRS) {
 }
 
 const findings = [];
+for (const path of FORBIDDEN_SOURCE_PATHS) {
+  try {
+    await readFile(join(ROOT, path), "utf-8");
+    findings.push({ file: path, line: 1, text: "forbidden 1.x source remains" });
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
 for (const file of files) {
   const content = await readFile(file, "utf-8");
   const lines = content.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const windowText = lines.slice(Math.max(0, index - 4), Math.min(lines.length, index + 5)).join("\n");
+    for (const [token, reason] of FORBIDDEN_ARCHITECTURE_TOKENS) {
+      if (line.includes(token)) {
+        findings.push({
+          file: relative(ROOT, file),
+          line: index + 1,
+          text: `${reason}: ${line.trim()}`,
+        });
+      }
+    }
     if (isLikelySemanticDecision(file, line, windowText)) {
       findings.push({
         file: relative(ROOT, file),

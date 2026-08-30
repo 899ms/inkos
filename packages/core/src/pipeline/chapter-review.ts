@@ -1,8 +1,8 @@
-import type { AuditIssue, AuditResult } from "../agents/continuity.js";
+import type { AuditResult } from "../agents/continuity.js";
 import type { WriteChapterOutput } from "../agents/writer.js";
 import type { ContextPackage } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
-import { countChapterLength, isOutsideHardRange } from "../utils/length-metrics.js";
+import { countChapterLength } from "../utils/length-metrics.js";
 
 export interface ChapterReviewUsage {
   readonly promptTokens: number;
@@ -64,7 +64,7 @@ export async function reviewChapterDraft(params: {
   } catch (error) {
     const isEnglish = params.lengthSpec.countingMode === "en_words";
     modelReview = {
-      parseFailed: true,
+      unavailable: true,
       issues: [{
         severity: "warning",
         category: "review-unavailable",
@@ -78,25 +78,10 @@ export async function reviewChapterDraft(params: {
       summary: isEnglish ? "Review unavailable" : "审稿暂不可用",
     };
   }
-  const lengthIssues: AuditIssue[] = isOutsideHardRange(wordCount, params.lengthSpec)
-    ? [{
-        severity: "warning",
-        category: "length-budget",
-        description: `Chapter length ${wordCount} is outside ${params.lengthSpec.hardMin}-${params.lengthSpec.hardMax}.`,
-        suggestion: `If this configured range remains desired, adjust length toward ${params.lengthSpec.target} while preserving the chapter's established content.`,
-      }]
-    : [];
-  const review: AuditResult = {
-    ...modelReview,
-    issues: [
-      ...modelReview.issues,
-      ...lengthIssues,
-    ],
-  };
   return {
     content,
     wordCount,
-    review,
+    review: modelReview,
     totalUsage: params.addUsage(params.initialUsage, modelReview.tokenUsage),
   };
 }

@@ -30,6 +30,7 @@ export function createInitialWorkManifestWrite(input: {
     title: input.title,
     profileId: input.profileId,
     language: input.language,
+    status: "active",
     now: createdAt,
     metadata: input.metadata,
   });
@@ -152,7 +153,12 @@ export async function syncWorkSourceArtifacts(input: {
     });
   }
 
-  const next = WorkManifestSchema.parse({ ...manifest, artifacts, updatedAt });
+  const next = WorkManifestSchema.parse({
+    ...manifest,
+    status: manifest.status === "archived" ? "archived" : input.accept ? "active" : manifest.status,
+    artifacts,
+    updatedAt,
+  });
   await saveWorkManifest(input.projectRoot, next);
   return next;
 }

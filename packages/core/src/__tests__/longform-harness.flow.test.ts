@@ -126,11 +126,11 @@ describe("long-form harness mini-flow", () => {
     expect({
       content: result.content,
       observation: result.review.issues[0]?.category,
-      parseFailed: result.review.parseFailed,
+      unavailable: result.review.unavailable,
     }).toEqual({
       content: output.content,
       observation: "review-unavailable",
-      parseFailed: true,
+      unavailable: true,
     });
   });
 
