@@ -576,6 +576,14 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
         const projectSessions = await loadSessionList(null);
         if (cancelled) return;
 
+        const latestState = useChatStore.getState();
+        const latestSession = latestState.activeSessionId
+          ? latestState.sessions[latestState.activeSessionId]
+          : null;
+        if (latestSession?.bookId === null && latestSession.isDraft) {
+          return;
+        }
+
         const reusableSessionId = pickProjectChatSessionId(projectSessions);
         if (reusableSessionId) {
           activateSession(reusableSessionId);

@@ -4947,9 +4947,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           }, "");
           exec.status = "completed";
           exec.completedAt = Date.now();
+          if (continuation.errorMessage) {
+            exec.logs = [
+              ...(exec.logs ?? []),
+              pick(surfaceLanguage, `后续对话不可用：${continuation.errorMessage}`, `Follow-up response unavailable: ${continuation.errorMessage}`),
+            ].slice(-80);
+            exec.details = {
+              ...(exec.details && typeof exec.details === "object" ? exec.details as Record<string, unknown> : {}),
+              continuationError: continuation.errorMessage,
+            };
+          }
           await persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId);
           const responseText = continuation.responseText
-            || continuation.errorMessage
             || exec.result
             || pick(surfaceLanguage, "已完成。", "Done.");
           const responseForUser = continuation.responseText
