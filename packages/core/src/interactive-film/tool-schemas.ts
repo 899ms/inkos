@@ -49,7 +49,7 @@ const NodeTypeToolSchema = Type.Union([
   Type.Literal("ending"),
   Type.Literal("explore"),
 ], {
-  description: "Exactly one node is start. Nodes that present choices are branch. Terminal outcome nodes are ending. Other scene nodes are normal/explore/merge.",
+  description: "Exactly one node is start. A start node may present the opening choices. Use branch for a dedicated later decision scene, ending for terminal outcomes, and normal/explore/merge for other scenes.",
 });
 
 const StoryNodeFields = {

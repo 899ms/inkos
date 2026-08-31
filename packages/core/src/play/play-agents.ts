@@ -81,7 +81,7 @@ const PlayEdgeResultSchema = Type.Object({
 
 const PlayStateSlotResultSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
-  ownerEntityId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  ownerEntityId: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
   kind: Type.Union([
     Type.Literal("resource"), Type.Literal("relation"), Type.Literal("pressure"),
     Type.Literal("clue"), Type.Literal("evidence"), Type.Literal("flag"), Type.Literal("timer"),

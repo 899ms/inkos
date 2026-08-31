@@ -46,7 +46,9 @@ function playableGraphContent() {
 describe("generateStoryGraph structured worker", () => {
   beforeEach(() => {
     runWorkerAgentToolMock.mockReset();
-    runWorkerAgentToolMock.mockResolvedValue(playableGraphContent());
+    runWorkerAgentToolMock.mockImplementation(async (_client, _model, _messages, tool) => (
+      tool.validate ? tool.validate(playableGraphContent()) : playableGraphContent()
+    ));
   });
 
   it("uses a typed Pi result tool and keeps host-owned identity authoritative", async () => {
@@ -66,8 +68,8 @@ describe("generateStoryGraph structured worker", () => {
     expect(tool.parameters.type).toBe("object");
   });
 
-  it("rejects a structurally valid but unplayable graph instead of writing a generic fallback", async () => {
-    runWorkerAgentToolMock.mockResolvedValue({
+  it("validates playability inside the Pi result tool", async () => {
+    runWorkerAgentToolMock.mockImplementationOnce(async (_client, _model, _messages, tool) => tool.validate({
       nodes: [
         { id: "s", type: "start", choices: [] },
         { id: "b1", type: "branch", choices: [] },
@@ -79,28 +81,31 @@ describe("generateStoryGraph structured worker", () => {
         { id: "one", nodeId: "e1", title: "One", type: "good" },
         { id: "two", nodeId: "e2", title: "Two", type: "bad" },
       ],
-    });
+    }));
 
     await expect(generateStoryGraph(client, "m", {
       projectId: "p",
       title: "T",
       premise: "P",
-    })).rejects.toThrow("Generated story graph is not playable");
-    expect(runWorkerAgentToolMock).toHaveBeenCalledTimes(2);
-    expect(runWorkerAgentToolMock.mock.calls[1]?.[2].at(-1)?.content).toContain("死路");
+    })).rejects.toThrow();
+    expect(runWorkerAgentToolMock).toHaveBeenCalledTimes(1);
   });
 
-  it("repairs a rejected graph through a second structured submission", async () => {
-    runWorkerAgentToolMock
-      .mockResolvedValueOnce({
-        nodes: [
-          { id: "s", type: "start", choices: [] },
-          { id: "n", type: "normal", choices: [] },
-          { id: "e", type: "ending", choices: [] },
+  it("accepts an opening node that directly carries the meaningful branch", async () => {
+    const openingBranch = playableGraphContent();
+    openingBranch.nodes = [
+      {
+        id: "s",
+        type: "start",
+        choices: [
+          { id: "s-e1", text: "report", targetNodeId: "e1", effects: [{ var: "trust", op: "add", value: 1 }] },
+          { id: "s-e2", text: "investigate", targetNodeId: "e2", effects: [{ var: "trust", op: "sub", value: 1 }] },
         ],
-        endings: [{ id: "ending", nodeId: "e", title: "End", type: "neutral" }],
-      })
-      .mockResolvedValueOnce(playableGraphContent());
+      },
+      { id: "e1", type: "ending", choices: [] },
+      { id: "e2", type: "ending", choices: [] },
+    ];
+    runWorkerAgentToolMock.mockImplementationOnce(async (_client, _model, _messages, tool) => tool.validate(openingBranch));
 
     const graph = await generateStoryGraph(client, "m", {
       projectId: "p",
@@ -108,7 +113,7 @@ describe("generateStoryGraph structured worker", () => {
       premise: "P",
     }, { language: "en" });
 
-    expect(graph.nodes).toHaveLength(5);
-    expect(runWorkerAgentToolMock).toHaveBeenCalledTimes(2);
+    expect(graph.nodes).toHaveLength(3);
+    expect(runWorkerAgentToolMock).toHaveBeenCalledTimes(1);
   });
 });
