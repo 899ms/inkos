@@ -170,6 +170,7 @@ export function createProductionCapabilityRegistry(
     proposalAction: environment.work
       ? undefined
       : proposedActionName(environment.proposalAction) ?? proposalActionForProfile(environment.profileId),
+    playMode: environment.playMode,
     requestedSkillIds: environment.requestedSkillIds,
     attachmentPaths: environment.attachmentPaths,
   });

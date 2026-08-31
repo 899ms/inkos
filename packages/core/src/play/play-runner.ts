@@ -5,16 +5,14 @@ import {
   PlayMutationSchema,
   type PlayEntity,
   type PlayActionIntent,
-  type PlayActionIntentInput,
   type PlayMutation,
   type PlayMutationInput,
 } from "../models/play.js";
 import {
-  PlayActionInterpreterAgent,
-  PlaySceneReconcilerAgent,
-  PlaySceneRendererAgent,
-  PlayWorldMutatorAgent,
+  PlayOpeningStateAgent,
+  PlayTurnAgent,
   type PlaySceneRender,
+  type PlayTurnResult,
 } from "./play-agents.js";
 import { createPlayDB } from "./play-db-factory.js";
 import { applyPlayMutation, seedPlayGraph, type PlayReducerDB } from "./play-reducer.js";
@@ -26,50 +24,27 @@ import { createBuiltInWorkProfileRegistry } from "../harness/builtin-profiles.js
 import { semanticInputBudget } from "../llm/semantic-input.js";
 import { SemanticContextCompilerAgent } from "../agents/semantic-context-compiler.js";
 
-export interface PlayActionInterpreterLike {
-  readonly interpret: (input: {
-    readonly input: string;
-    readonly sceneBrief: string;
-    readonly language?: "zh" | "en";
-  }) => Promise<PlayActionIntentInput>;
-}
-
-export interface PlayWorldMutatorLike {
-  readonly proposeMutation: (input: {
+export interface PlayOpeningStateLike {
+  readonly extract: (input: {
     readonly turn: number;
-    readonly input: string;
-    readonly action: PlayActionIntentInput;
-    readonly context: string;
-    readonly language?: "zh" | "en";
-  }) => Promise<PlayMutationInput>;
-}
-
-export interface PlaySceneRendererLike {
-  readonly render: (input: {
-    readonly input: string;
-    readonly action: PlayActionIntentInput;
-    readonly context?: string;
-    readonly mutationSummary: string;
-    readonly stateBrief: string;
-    readonly replayContext?: string;
-    readonly mode?: "open" | "guided";
-    readonly language?: "zh" | "en";
-    readonly worldPremise?: string;
-  }) => Promise<PlaySceneRender>;
-}
-
-export interface PlaySceneReconcilerLike {
-  readonly reconcile: (input: {
-    readonly turn: number;
-    readonly input: string;
-    readonly action: PlayActionIntentInput;
-    readonly mutation: PlayMutationInput;
     readonly sceneText: string;
+    readonly suggestedActions: readonly string[];
     readonly context: string;
-    readonly stateBrief: string;
     readonly language?: "zh" | "en";
     readonly worldPremise?: string;
   }) => Promise<PlayMutationInput>;
+}
+
+export interface PlayTurnLike {
+  readonly run: (input: {
+    readonly turn: number;
+    readonly input: string;
+    readonly context: string;
+    readonly replayContext?: string;
+    readonly mode: "open" | "guided";
+    readonly language?: "zh" | "en";
+    readonly worldPremise?: string;
+  }) => Promise<PlayTurnResult>;
 }
 
 export interface PlayRunnerOptions {
@@ -80,10 +55,8 @@ export interface PlayRunnerOptions {
   readonly store?: PlayStore;
   readonly db?: PlayReducerDB;
   readonly agents?: {
-    readonly actionInterpreter?: PlayActionInterpreterLike;
-    readonly worldMutator?: PlayWorldMutatorLike;
-    readonly sceneRenderer?: PlaySceneRendererLike;
-    readonly sceneReconciler?: PlaySceneReconcilerLike;
+    readonly openingState?: PlayOpeningStateLike;
+    readonly turn?: PlayTurnLike;
   };
 }
 
@@ -120,10 +93,8 @@ export class PlayRunner {
   private readonly db: PlayReducerDB;
   private readonly ownsDb: boolean;
   private dbClosed = false;
-  private readonly actionInterpreter: PlayActionInterpreterLike;
-  private readonly worldMutator: PlayWorldMutatorLike;
-  private readonly sceneRenderer: PlaySceneRendererLike;
-  private readonly sceneReconciler: PlaySceneReconcilerLike | null;
+  private readonly openingState: PlayOpeningStateLike;
+  private readonly turnAgent: PlayTurnLike;
   private readonly contextCompiler: SemanticContextCompilerAgent | null;
   private readonly contextBudgetTokens: number | undefined;
 
@@ -131,14 +102,12 @@ export class PlayRunner {
     this.store = options.store ?? new PlayStore(options.projectRoot);
     this.ownsDb = !options.db;
     this.db = options.db ?? createPlayDB(this.store.runDir(options.worldId, options.runId));
-    if (!options.ctx && (!options.agents?.actionInterpreter || !options.agents.worldMutator || !options.agents.sceneRenderer)) {
+    if (!options.ctx && (!options.agents?.openingState || !options.agents.turn)) {
       throw new Error("PlayRunner requires ctx when default play agents are used.");
     }
     const ctx = options.ctx;
-    this.actionInterpreter = options.agents?.actionInterpreter ?? new PlayActionInterpreterAgent(ctx!);
-    this.worldMutator = options.agents?.worldMutator ?? new PlayWorldMutatorAgent(ctx!);
-    this.sceneRenderer = options.agents?.sceneRenderer ?? new PlaySceneRendererAgent(ctx!);
-    this.sceneReconciler = options.agents?.sceneReconciler ?? (ctx ? new PlaySceneReconcilerAgent(ctx) : null);
+    this.openingState = options.agents?.openingState ?? new PlayOpeningStateAgent(ctx!);
+    this.turnAgent = options.agents?.turn ?? new PlayTurnAgent(ctx!);
     this.contextCompiler = ctx ? new SemanticContextCompilerAgent(ctx) : null;
     this.contextBudgetTokens = ctx
       ? semanticInputBudget(ctx.client, {
@@ -182,60 +151,31 @@ export class PlayRunner {
     };
     const worldContext = renderPlayWorldContext(world, language);
     const context = await this.buildContextBrief(input.sceneText, language, world, input.sceneText);
-    const mutation = PlayMutationSchema.parse(await this.worldMutator.proposeMutation({
+    const mutation = PlayMutationSchema.parse(await this.openingState.extract({
       turn: 0,
-      input: buildOpeningSeedInput({
-        sceneText: input.sceneText,
-        suggestedActions: input.suggestedActions ?? [],
-        language,
-        premise: worldContext,
-      }),
-      action,
+      sceneText: input.sceneText,
+      suggestedActions: input.suggestedActions ?? [],
       context,
       language,
+      worldPremise: worldContext,
     }));
-    const normalized = PlayMutationSchema.parse({
-      ...mutation,
-      eventId: "evt-0",
-      turn: 0,
-      actionKind: "look",
-    });
-    const stateBrief = renderStateBrief({ action, mutation: normalized });
-    const finalMutation = this.sceneReconciler
-      ? mergePlayMutations(normalized, PlayMutationSchema.parse(await this.sceneReconciler.reconcile({
-        turn: 0,
-        input: buildOpeningSeedInput({
-          sceneText: input.sceneText,
-          suggestedActions: input.suggestedActions ?? [],
-          language,
-          premise: worldContext,
-        }),
-        action,
-        mutation: normalized,
-        sceneText: input.sceneText,
-        context,
-        stateBrief,
-        language,
-        worldPremise: worldContext,
-      })))
-      : normalized;
 
     seedPlayGraph({
       db: this.db,
-      mutation: finalMutation,
+      mutation,
     });
     const seededGraph = readGraphSnapshot(this.db);
-    if (finalMutation.blocked || !isOpeningGraphReady(seededGraph)) {
+    if (mutation.blocked || !isOpeningGraphReady(seededGraph)) {
       throw new PlayOpeningSeedError(
-        finalMutation.blockedReason
+        mutation.blockedReason
           || (language === "en"
             ? "The opening scene did not produce a usable player/world graph. Retry world creation."
             : "开场没有生成可用的玩家与世界图谱，请重试创建互动世界。"),
       );
     }
-    await this.store.writeProjection(this.options.worldId, this.options.runId, "projections/state.md", renderStateBrief({ action, mutation: finalMutation }));
+    await this.store.writeProjection(this.options.worldId, this.options.runId, "projections/state.md", renderStateBrief({ action, mutation }));
     await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true });
-    return { mutation: finalMutation };
+    return { mutation };
   }
 
   async step(input: string, options: { readonly replayContext?: string } = {}): Promise<PlayStepResult> {
@@ -267,51 +207,24 @@ export class PlayRunner {
     const world = await this.store.ensureWorldDefinition(this.options.worldId);
     const language = world.language;
     const sceneBrief = await this.readOptionalProjection("projections/scene.md");
-    const action = PlayActionIntentSchema.parse(await this.actionInterpreter.interpret({
-      input: rawInput,
-      sceneBrief: sceneBrief || (language === "en" ? "A new turn begins; carry over the current world state." : "新回合开始，沿用当前世界状态。"),
-      language,
-    }));
     const worldContext = renderPlayWorldContext(world, language);
     const context = await this.buildContextBrief(sceneBrief, language, world, rawInput);
-    const mutation = PlayMutationSchema.parse(await this.worldMutator.proposeMutation({
+    const turnResult = await this.turnAgent.run({
       turn,
       input: rawInput,
-      action,
       context,
-      language,
-    }));
-    const stateBrief = renderStateBrief({ action, mutation });
-
-    // Render BEFORE any commit. Nothing about this turn (db mutation, event, state,
-    // scene, transcript) is persisted until a valid scene is in hand, so rendering
-    // failures remain retryable and cannot create a half-committed turn.
-    const render = await this.sceneRenderer.render({
-      input: rawInput,
-      action,
-      context,
-      mutationSummary: mutation.summary || mutation.blockedReason,
-      stateBrief,
       replayContext: options.replayContext,
       mode: world.mode,
       language,
       worldPremise: worldContext,
     });
-
-    const finalMutation = this.sceneReconciler && !mutation.blocked
-      ? mergePlayMutations(mutation, PlayMutationSchema.parse(await this.sceneReconciler.reconcile({
-        turn,
-        input: rawInput,
-        action,
-        mutation,
-        sceneText: render.sceneText,
-        context,
-        stateBrief,
-        language,
-        worldPremise: worldContext,
-      })))
-      : mutation;
-    const finalStateBrief = finalMutation === mutation ? stateBrief : renderStateBrief({ action, mutation: finalMutation });
+    const action = PlayActionIntentSchema.parse(turnResult.action);
+    const finalMutation = PlayMutationSchema.parse(turnResult.mutation);
+    const render: PlaySceneRender = {
+      sceneText: turnResult.sceneText,
+      suggestedActions: turnResult.suggestedActions,
+    };
+    const finalStateBrief = renderStateBrief({ action, mutation: finalMutation });
 
     // Commit everything together, only after the scene and graph reconciliation are in hand.
     const beforeGraph = readGraphSnapshot(this.db);
@@ -519,33 +432,6 @@ function isOpeningGraphReady(graph: PlayGraphSnapshot | null): boolean {
     && graph.entities.some((entity) => entity.id !== "actor_player");
 }
 
-function buildOpeningSeedInput(input: {
-  readonly sceneText: string;
-  readonly suggestedActions: readonly string[];
-  readonly language: "zh" | "en";
-  readonly premise?: string;
-}): string {
-  const isEn = input.language === "en";
-  const lines = isEn
-    ? [
-        "Seed only the state that already exists at the opening of this playable world.",
-        "Do not advance time, do not solve the mystery, and do not narrate a new turn.",
-        "If the premise or opening scene says the player already holds, carries, keeps, wears, or starts with a tangible object, that object is already established: create its entity and add an actor_player holding edge. Do not hide held objects inside the player summary.",
-        input.premise ? `Premise:\n${input.premise}` : "",
-        `Opening scene:\n${input.sceneText}`,
-        input.suggestedActions.length > 0 ? `Suggested player actions:\n${input.suggestedActions.map((action) => `- ${action}`).join("\n")}` : "",
-      ]
-    : [
-        "只播种这个互动世界开场已经成立的状态。",
-        "不要推进时间，不要解谜，不要写新的回合剧情。",
-        "如果世界前提或开场正文说玩家已经拿着、带着、揣着、穿着、携带或开局拥有某个实物，这就是已成立状态：必须为该实物建立实体，并补一条 actor_player 指向它、value.role=\"holding\" 的持有边。不要把已持有实物只藏在玩家 summary 里。",
-        input.premise ? `世界前提：\n${input.premise}` : "",
-        `开场正文：\n${input.sceneText}`,
-        input.suggestedActions.length > 0 ? `建议动作：\n${input.suggestedActions.map((action) => `- ${action}`).join("\n")}` : "",
-      ];
-  return lines.filter(Boolean).join("\n\n");
-}
-
 function buildReplayContext(input: {
   readonly originalInput: string;
   readonly replacementInput?: string;
@@ -613,60 +499,6 @@ function requireRestorableGraphDB(db: PlayReducerDB): PlayReducerDB & {
     snapshot: () => PlayGraphSnapshot;
     replaceWithSnapshot: (snapshot: PlayGraphSnapshot) => void;
   };
-}
-
-function mergePlayMutations(base: PlayMutation, supplement: PlayMutation): PlayMutation {
-  if (isEmptyMutationSupplement(supplement)) return base;
-  const summary = mergeMutationSummary(base.summary, supplement.summary);
-  return PlayMutationSchema.parse({
-    ...base,
-    summary,
-    entities: {
-      upsert: mergeById([...base.entities.upsert, ...supplement.entities.upsert]),
-    },
-    edges: {
-      upsert: mergeById([...base.edges.upsert, ...supplement.edges.upsert]),
-      expire: [...base.edges.expire, ...supplement.edges.expire],
-    },
-    stateSlots: {
-      upsert: mergeById([...base.stateSlots.upsert, ...supplement.stateSlots.upsert]),
-    },
-    evidence: {
-      transitions: [...base.evidence.transitions, ...supplement.evidence.transitions],
-    },
-    timeAdvance: base.timeAdvance ?? supplement.timeAdvance,
-    notes: [...base.notes, ...supplement.notes],
-  });
-}
-
-function mergeById<T extends { readonly id: string }>(items: ReadonlyArray<T>): T[] {
-  const order: string[] = [];
-  const byId = new Map<string, T>();
-  for (const item of items) {
-    if (!byId.has(item.id)) order.push(item.id);
-    byId.set(item.id, item);
-  }
-  return order.map((id) => byId.get(id)!);
-}
-
-function mergeMutationSummary(base: string, supplement: string): string {
-  const left = base.trim();
-  const right = supplement.trim();
-  if (!right) return left;
-  if (!left) return right;
-  if (left === right) return left;
-  return `${left}；${right}`;
-}
-
-function isEmptyMutationSupplement(mutation: PlayMutation): boolean {
-  return mutation.entities.upsert.length === 0
-    && mutation.edges.upsert.length === 0
-    && mutation.edges.expire.length === 0
-    && mutation.stateSlots.upsert.length === 0
-    && mutation.evidence.transitions.length === 0
-    && mutation.notes.length === 0
-    && !mutation.summary.trim()
-    && !mutation.blocked;
 }
 
 function renderEntity(entity: PlayEntity, language: "zh" | "en"): string {

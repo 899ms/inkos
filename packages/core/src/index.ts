@@ -72,15 +72,12 @@ export {
   PlayMutationSchema,
 } from "./models/play.js";
 export {
-  PlayActionInterpreterAgent,
-  PlayWorldMutatorAgent,
-  PlaySceneRendererAgent,
-  PlaySceneReconcilerAgent,
-  type PlayActionInterpreterInput,
-  type PlayWorldMutatorInput,
-  type PlaySceneRenderInput,
-  type PlaySceneReconcileInput,
+  PlayOpeningStateAgent,
+  PlayTurnAgent,
+  type PlayOpeningStateInput,
+  type PlayTurnInput,
   type PlaySceneRender,
+  type PlayTurnResult,
 } from "./play/play-agents.js";
 export { PlayDB } from "./play/play-db.js";
 export { createPlayDB, type PlayGraphDB } from "./play/play-db-factory.js";
@@ -93,9 +90,8 @@ export {
 } from "./play/play-reducer.js";
 export {
   PlayRunner,
-  type PlayActionInterpreterLike,
-  type PlayWorldMutatorLike,
-  type PlaySceneRendererLike,
+  type PlayOpeningStateLike,
+  type PlayTurnLike,
   type PlayRunnerOptions,
   type PlayStepResult,
 } from "./play/play-runner.js";

@@ -5,47 +5,24 @@ import {
   PlayActionIntentSchema,
   PlayMutationSchema,
   type PlayActionIntent,
-  type PlayActionIntentInput,
   type PlayMutation,
-  type PlayMutationInput,
 } from "../models/play.js";
 
-export interface PlayActionInterpreterInput {
-  readonly input: string;
-  readonly sceneBrief: string;
-  readonly language?: "zh" | "en";
-}
-
-export interface PlayWorldMutatorInput {
+export interface PlayOpeningStateInput {
   readonly turn: number;
-  readonly input: string;
-  readonly action: PlayActionIntentInput;
+  readonly sceneText: string;
+  readonly suggestedActions: readonly string[];
   readonly context: string;
   readonly language?: "zh" | "en";
-}
-
-export interface PlaySceneRenderInput {
-  readonly input: string;
-  readonly action: PlayActionIntentInput;
-  readonly context?: string;
-  readonly mutationSummary: string;
-  readonly stateBrief: string;
-  readonly replayContext?: string;
-  readonly language?: "zh" | "en";
-  // The world's premise — a persistent anchor so the scene stays in the
-  // established era/setting/genre and doesn't drift (a modern shop must not grow
-  // night-watchmen and oil lamps).
   readonly worldPremise?: string;
 }
 
-export interface PlaySceneReconcileInput {
+export interface PlayTurnInput {
   readonly turn: number;
   readonly input: string;
-  readonly action: PlayActionIntentInput;
-  readonly mutation: PlayMutationInput;
-  readonly sceneText: string;
   readonly context: string;
-  readonly stateBrief: string;
+  readonly replayContext?: string;
+  readonly mode: "open" | "guided";
   readonly language?: "zh" | "en";
   readonly worldPremise?: string;
 }
@@ -55,6 +32,11 @@ const PlaySceneRenderSchema = z.object({
   suggestedActions: z.array(z.string().min(1)),
 }).strict();
 export type PlaySceneRender = z.infer<typeof PlaySceneRenderSchema>;
+
+export interface PlayTurnResult extends PlaySceneRender {
+  readonly action: PlayActionIntent;
+  readonly mutation: PlayMutation;
+}
 
 const PlayEntityResultSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
@@ -124,85 +106,115 @@ const PlayMutationResultSchema = Type.Object({
   notes: Type.Array(Type.String()),
 });
 
-const WORLD_MUTATION_TOOL = {
-  name: "submit_world_mutation",
-  label: "Submit world mutation",
-  description: "Submit the complete world-state transition caused by this action. Host-owned event metadata is intentionally omitted.",
+const EVIDENCE_ENTITY_TYPES = new Set(["evidence", "clue", "claim", "proof_chain"]);
+
+function validateMutationSubmission(
+  raw: Static<typeof PlayMutationResultSchema>,
+): Static<typeof PlayMutationResultSchema> {
+  const submittedTypes = new Map(raw.entities.map((entity) => [entity.id, entity.type]));
+  for (const transition of raw.evidenceTransitions) {
+    const submittedType = submittedTypes.get(transition.entityId);
+    if (submittedType && !EVIDENCE_ENTITY_TYPES.has(submittedType)) {
+      throw new Error(
+        `evidenceTransitions may reference only evidence, clue, claim, or proof_chain entities; ${transition.entityId} is ${submittedType}. `
+        + "Use an evidentiary entity type for a physical clue, or remove its evidence transition.",
+      );
+    }
+  }
+  return raw;
+}
+
+const PlayActionResultSchema = Type.Object({
+  actionKind: Type.Union([
+    Type.Literal("look"), Type.Literal("say"), Type.Literal("move"),
+    Type.Literal("do"), Type.Literal("wait"),
+  ]),
+  targetEntityLabel: Type.Optional(Type.String()),
+  targetLocationLabel: Type.Optional(Type.String()),
+  intent: Type.String(),
+  manner: Type.Optional(Type.String()),
+  risk: Type.Optional(Type.String()),
+  ambiguity: Type.Optional(Type.String()),
+  secondaryActions: Type.Optional(Type.Array(Type.String())),
+});
+
+const OPENING_STATE_TOOL = {
+  name: "submit_opening_state",
+  label: "Submit opening state",
+  description: "Submit the world facts already established by the supplied opening scene. Host-owned event metadata is omitted.",
   parameters: PlayMutationResultSchema,
+  validate: validateMutationSubmission,
 } as const;
 
-const GRAPH_RECONCILIATION_TOOL = {
-  name: "submit_graph_reconciliation",
-  label: "Submit graph reconciliation",
-  description: "Submit only graph facts present in the rendered scene but missing from the applied mutation. Submit empty arrays when nothing is missing.",
-  parameters: PlayMutationResultSchema,
-} as const;
+function playTurnTool(mode: "open" | "guided") {
+  return {
+    name: "submit_play_turn",
+    label: "Submit play turn",
+    description: mode === "open"
+      ? "Submit one coherent open-world turn: interpreted action, authoritative state transition, and rendered scene."
+      : "Submit one coherent guided turn: interpreted action, authoritative state transition, rendered scene, and optional grounded choices.",
+    parameters: Type.Object({
+      action: PlayActionResultSchema,
+      mutation: PlayMutationResultSchema,
+      sceneText: Type.String({ minLength: 1 }),
+      suggestedActions: mode === "open"
+        ? Type.Array(Type.String({ minLength: 1 }), { maxItems: 0 })
+        : Type.Array(Type.String({ minLength: 1 })),
+    }),
+    validate: (result: {
+      readonly action: Static<typeof PlayActionResultSchema>;
+      readonly mutation: Static<typeof PlayMutationResultSchema>;
+      readonly sceneText: string;
+      readonly suggestedActions: string[];
+    }) => ({ ...result, mutation: validateMutationSubmission(result.mutation) }),
+  } as const;
+}
 
-const PLAY_ACTION_TOOL = {
-  name: "submit_play_action",
-  label: "Submit play action",
-  description: "Submit the interpreted player action without changing world state.",
-  parameters: Type.Object({
-    actionKind: Type.Union([
-      Type.Literal("look"), Type.Literal("say"), Type.Literal("move"),
-      Type.Literal("do"), Type.Literal("wait"),
-    ]),
-    targetEntityLabel: Type.Optional(Type.String()),
-    targetLocationLabel: Type.Optional(Type.String()),
-    intent: Type.String(),
-    manner: Type.Optional(Type.String()),
-    risk: Type.Optional(Type.String()),
-    ambiguity: Type.Optional(Type.String()),
-    secondaryActions: Type.Optional(Type.Array(Type.String())),
-  }),
-} as const;
-
-export class PlayActionInterpreterAgent extends BaseAgent {
+export class PlayOpeningStateAgent extends BaseAgent {
   constructor(ctx: AgentContext) {
     super(ctx);
   }
 
   get name(): string {
-    return "play-action-interpreter";
+    return "play-opening-state";
   }
 
-  async interpret(input: PlayActionInterpreterInput): Promise<PlayActionIntent> {
+  async extract(input: PlayOpeningStateInput): Promise<PlayMutation> {
+    const language = input.language ?? "zh";
     const { result } = await this.submitStructured([
-      { role: "system", content: buildActionInterpreterSystemPrompt(input.language ?? "zh") },
-      { role: "user", content: buildActionInterpreterUserPrompt(input, input.language ?? "zh") },
-    ], PLAY_ACTION_TOOL, { temperature: 0.15, maxTokens: 1024 });
-    return PlayActionIntentSchema.parse(result);
+      { role: "system", content: buildOpeningStateSystemPrompt(language) },
+      { role: "user", content: buildOpeningStateUserPrompt(input, language) },
+    ], OPENING_STATE_TOOL, { temperature: 0.15, maxTokens: 4096 });
+    const mutation = mutationFromStructuredResult(result, input.turn, "look");
+    if (!hasMutationResult(mutation)) {
+      throw new Error("Play opening state was empty; the world was not started.");
+    }
+    return mutation;
   }
 }
 
-export class PlayWorldMutatorAgent extends BaseAgent {
+export class PlayTurnAgent extends BaseAgent {
   constructor(ctx: AgentContext) {
     super(ctx);
   }
 
   get name(): string {
-    return "play-world-mutator";
+    return "play-turn";
   }
 
-  async proposeMutation(input: PlayWorldMutatorInput): Promise<PlayMutation> {
+  async run(input: PlayTurnInput): Promise<PlayTurnResult> {
     const language = input.language ?? "zh";
-    const actionKind = PlayActionIntentSchema.parse(input.action).actionKind;
-    const systemPrompt = buildWorldMutatorSystemPrompt(language);
-    const messages: { role: "system" | "user"; content: string }[] = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: buildWorldMutatorUserPrompt(input, language) },
-    ];
-
-    const { result: raw } = await this.submitStructured(
-      messages,
-      WORLD_MUTATION_TOOL,
-      { temperature: 0.25, maxTokens: 4096 },
-    );
-    const mutation = mutationFromStructuredResult(raw, input.turn, actionKind);
+    const { result } = await this.submitStructured([
+      { role: "system", content: buildTurnSystemPrompt(input.mode, language) },
+      { role: "user", content: buildTurnUserPrompt(input, language) },
+    ], playTurnTool(input.mode), { temperature: 0.4, maxTokens: 8192 });
+    const action = PlayActionIntentSchema.parse(result.action);
+    const mutation = mutationFromStructuredResult(result.mutation, input.turn, action.actionKind);
     if (!hasMutationResult(mutation)) {
-      throw new Error("Play world mutation was empty; the turn was not committed.");
+      throw new Error("Play turn state was empty; the turn was not committed.");
     }
-    return mutation;
+    const scene = PlaySceneRenderSchema.parse(result);
+    return { ...scene, action, mutation };
   }
 }
 
@@ -262,292 +274,99 @@ function hasMutationResult(mutation: PlayMutation): boolean {
     || mutation.notes.length > 0;
 }
 
-export class PlaySceneRendererAgent extends BaseAgent {
-  constructor(ctx: AgentContext) {
-    super(ctx);
-  }
-
-  get name(): string {
-    return "play-scene-renderer";
-  }
-
-  async render(input: PlaySceneRenderInput & { readonly mode?: "open" | "guided" }): Promise<PlaySceneRender> {
-    const language = input.language ?? "zh";
-    const mode = input.mode ?? "open";
-    const systemPrompt = buildSceneRendererSystemPrompt(mode, language);
-    const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: buildSceneRendererUserPrompt(input, language) },
-    ];
-    const { result: raw } = await this.submitStructured(
-      messages,
-      {
-        name: "submit_play_scene",
-        label: "Submit play scene",
-        description: mode === "guided"
-          ? "Submit the rendered scene and grounded optional player choices."
-          : "Submit the rendered open-world scene with an empty suggestedActions array.",
-        parameters: Type.Object({
-          sceneText: Type.String({ minLength: 1 }),
-          suggestedActions: mode === "open"
-            ? Type.Array(Type.String({ minLength: 1 }), { maxItems: 0 })
-            : Type.Array(Type.String({ minLength: 1 })),
-        }),
-      },
-      { temperature: 0.45, maxTokens: 4096 },
-    );
-    return PlaySceneRenderSchema.parse(raw);
-  }
+function buildOpeningStateSystemPrompt(language: "zh" | "en"): string {
+  return language === "en"
+    ? [
+        "Extract the authoritative world state already established by the supplied opening scene and world contract.",
+        "Do not rewrite the scene or add facts. Always create actor_player and the concrete people, places, objects, clues, and relationships needed to make the opening playable.",
+        "Reuse stable readable ids. Physical holdings use an actor_player edge with value.role=holding; knowledge is observed rather than held.",
+        "Submit only the opening mutation. The host owns eventId, turn, and actionKind.",
+      ].join("\n")
+    : [
+        "从给定开场正文和世界契约中提取已经成立的权威世界状态。",
+        "不要改写开场，也不要添加正文没有的事实。必须建立 actor_player，以及让开场可玩的具体人物、地点、物件、线索和关系。",
+        "使用稳定可读的 id。实际持有使用 actor_player 指向实体且 value.role=holding；知道的信息属于 observed，不是 holding。",
+        "只提交开场 mutation；eventId、turn、actionKind 由宿主负责。",
+      ].join("\n");
 }
 
-export class PlaySceneReconcilerAgent extends BaseAgent {
-  constructor(ctx: AgentContext) {
-    super(ctx);
-  }
-
-  get name(): string {
-    return "play-scene-reconciler";
-  }
-
-  async reconcile(input: PlaySceneReconcileInput): Promise<PlayMutationInput> {
-    const language = input.language ?? "zh";
-    const actionKind = PlayActionIntentSchema.parse(input.action).actionKind;
-    const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-      { role: "system", content: buildSceneReconcilerSystemPrompt(language) },
-      { role: "user", content: buildSceneReconcilerUserPrompt(input, language) },
-    ];
-    const { result: raw } = await this.submitStructured(
-      messages,
-      GRAPH_RECONCILIATION_TOOL,
-      { temperature: 0.1, maxTokens: 2048 },
-    );
-    return mutationFromStructuredResult(raw, input.turn, actionKind);
-  }
-}
-
-function buildSceneReconcilerSystemPrompt(language: "zh" | "en"): string {
-  if (language === "en") {
-    return [
-      "You reconcile an interactive-fiction scene with the world graph.",
-      "Compare the rendered prose against the already applied changes and current state summary.",
-      "If the prose introduced a concrete named object, clue, evidence, location, organization, or person that is not represented in the applied changes/current state, submit ONLY those missing graph facts.",
-      "Do not rewrite prose. Do not invent facts that are not in the rendered scene. If nothing is missing, submit empty arrays.",
-      "For tangible things the player now physically holds, add a holding edge from actor_player with value.role=\"holding\"; if the target is evidence/clue/claim/proof_chain rather than an item, also set value.physical=true. Observed phenomena or learned facts are not holdings.",
-      "Call submit_graph_reconciliation once. The host supplies eventId, turn, and actionKind.",
-    ].join("\n");
-  }
-  return [
-    "你负责把互动小说正文和世界图谱对齐。",
-    "对照已经应用的本回合变化、当前状态摘要和最终正文。",
-    "如果正文里出现了具体且具名的新物件、线索、证据、地点、组织或人物，但它还没有体现在已应用变化/当前状态里，只提交这些缺失图谱事实。",
-    "不要改正文，不要发明正文没有的事实。没有缺失就提交空数组。",
-    "玩家获得或拿在手里的实物，需要补一条 actor_player 指向该实体、value.role=\"holding\" 的 edge；如果目标是 evidence/clue/claim/proof_chain 而不是 item，还要设置 value.physical=true。观察到的现象或知道的信息不是持有物。",
-    "调用一次 submit_graph_reconciliation；eventId、turn、actionKind 由宿主补入。",
-  ].join("\n");
-}
-
-function buildSceneReconcilerUserPrompt(input: PlaySceneReconcileInput, language: "zh" | "en"): string {
-  const actionKind = PlayActionIntentSchema.parse(input.action).actionKind;
-  const eventId = `evt-${input.turn}`;
-  if (language === "en") {
-    return [
-      `eventId: ${eventId}`,
-      `turn: ${input.turn}`,
-      `actionKind: ${actionKind}`,
-      "",
-      ...(input.worldPremise ? ["World setting:", input.worldPremise, ""] : []),
-      "Player input:",
-      input.input,
-      "",
-      "Current context before this turn:",
-      input.context,
-      "",
-      "Applied mutation:",
-      JSON.stringify(PlayMutationSchema.parse(input.mutation), null, 2),
-      "",
-      "Current state summary:",
-      input.stateBrief,
-      "",
-      "Rendered scene:",
-      input.sceneText,
-    ].join("\n");
-  }
-  return [
-    `eventId: ${eventId}`,
-    `turn: ${input.turn}`,
-    `actionKind: ${actionKind}`,
-    "",
-    ...(input.worldPremise ? ["世界设定：", input.worldPremise, ""] : []),
-    "玩家输入：",
-    input.input,
-    "",
-    "本回合前的当前上下文：",
-    input.context,
-    "",
-    "已应用 mutation：",
-    JSON.stringify(PlayMutationSchema.parse(input.mutation), null, 2),
-    "",
-    "当前状态摘要：",
-    input.stateBrief,
-    "",
-    "最终正文：",
-    input.sceneText,
-  ].join("\n");
-}
-
-function buildActionInterpreterSystemPrompt(language: "zh" | "en"): string {
-  if (language === "en") {
-    return [
-      "Normalize the player's literal input into one action record without adding outcomes or scene prose.",
-      "look = observe/examine/recall a clue; say = speak/probe/confront; move = move to a location; do = perform an action/use an item/investigate; wait = wait/stall/watch.",
-      "Submit the normalized action through the result tool.",
-    ].join("\n");
-  }
-  return [
-    "把玩家原话归一为一条动作记录，不添加结果或场景正文。",
-    "look=观察/检查/回忆线索；say=说话/试探/质问；move=移动到地点；do=执行动作/使用物品/调查；wait=等待/拖延/旁观。",
-    "通过结果工具提交归一后的动作。",
-  ].join("\n");
-}
-
-function buildActionInterpreterUserPrompt(input: PlayActionInterpreterInput, language: "zh" | "en"): string {
-  if (language === "en") {
-    return [
-      "Current scene:",
-      input.sceneBrief,
-      "",
-      "Player input:",
-      input.input,
-      "",
-      "Output fields: actionKind, targetEntityLabel?, targetLocationLabel?, intent, manner, risk, ambiguity, secondaryActions.",
-    ].join("\n");
-  }
-  return [
-    "当前场景：",
-    input.sceneBrief,
-    "",
-    "玩家输入：",
-    input.input,
-    "",
-    "输出字段：actionKind, targetEntityLabel?, targetLocationLabel?, intent, manner, risk, ambiguity, secondaryActions。",
-  ].join("\n");
-}
-
-function buildWorldMutatorSystemPrompt(language: "zh" | "en"): string {
-  const contract = language === "en"
-      ? [
-        "Project the turn into the world-mutation schema after applying the activated play-world Skill. Do not write scene prose or commit state.",
-        "Reuse exact roster ids. The player id is always actor_player; only its label, summary, and status vary.",
-        "Represent tangible discovered or held things as item/evidence/clue entities. A physical holding is an actor_player edge with value.role=holding; set value.physical=true for physical evidence or clues. Mere knowledge is observed, not held.",
-        "Record meaningful relationships as edges with value.role=relation. stateSlots are optional and appear only when the world contract authorizes that kind of tracking.",
-        "For non-opening turns, encode elapsed duration, resulting anchor, rationale, and synchronized off-screen changes in timeAdvance.",
-        "If the action cannot proceed, set blocked=true with blockedReason.",
-        "Call submit_world_mutation once with summary, timeAdvance, entities, edges, stateSlots, evidenceTransitions, blocked, blockedReason, and notes. The host owns eventId, turn, and actionKind.",
-      ]
-      : [
-        "应用已激活的开放世界 Skill 后，把本回合投影到 world-mutation schema；不要写场景正文，也不要替宿主落库。",
-        "复用名册精确 id。玩家 id 永远是 actor_player，只可改变 label、summary、status。",
-        "玩家发现或持有的实物必须建成 item/evidence/clue 实体。实际持有使用 actor_player 指向实体且 value.role=holding；物理证据或线索再设 value.physical=true。只知道某事属于 observed，不是 holding。",
-        "有意义的关系写成 value.role=relation 的 edge。只有世界契约允许时才使用 stateSlots。",
-        "非开场回合把经过时长、结束时间锚、理由和同期世界变化写入 timeAdvance。",
-        "动作无法执行时设置 blocked=true 和 blockedReason。",
-        "调用一次 submit_world_mutation，提交 summary、timeAdvance、entities、edges、stateSlots、evidenceTransitions、blocked、blockedReason、notes；eventId、turn、actionKind 由宿主补入。",
-      ];
-  return contract.join("\n");
-}
-
-function buildWorldMutatorUserPrompt(input: PlayWorldMutatorInput, language: "zh" | "en"): string {
-  if (language === "en") {
-    return [
-      `turn: ${input.turn}`,
-      "Player's words:",
-      input.input,
-      "",
-      "Action interpretation:",
-      JSON.stringify(PlayActionIntentSchema.parse(input.action), null, 2),
-      "",
-      "Current context:",
-      input.context,
-      "",
-      "Every new or referenced entity, edge, and state-slot id must be stable, readable, and short.",
-    ].join("\n");
-  }
-  return [
-    `turn: ${input.turn}`,
-    "玩家原话：",
-    input.input,
-    "",
-    "动作理解：",
-    JSON.stringify(PlayActionIntentSchema.parse(input.action), null, 2),
-    "",
-    "当前上下文：",
-    input.context,
-    "",
-    "所有新增或引用的实体、关系和状态槽 id 都要稳定、可读、短小。",
-  ].join("\n");
-}
-
-export function buildSceneRendererSystemPrompt(mode: "open" | "guided" = "open", language: "zh" | "en" = "zh"): string {
-  const actionsRule = language === "en"
-    ? mode === "guided"
-      ? "suggestedActions contains sparse optional springboards only at a genuine decision point."
-      : "suggestedActions must be empty; open worlds use free player input."
-    : mode === "guided"
-      ? "suggestedActions 只在真实抉择点提供少量可选跳板。"
-      : "suggestedActions 必须为空；开放世界只接收玩家自由输入。";
-  const contract = language === "en"
-      ? [
-        "Render sceneText from the already-applied state after applying the activated play-world Skill.",
-        "Named people, places, objects, clues, and organizations may appear only when present in Applied changes or the current state. Treat supplied elapsed time and anchor as canonical.",
-        "sceneText is narrative prose only; choices belong only in suggestedActions.",
-        actionsRule,
-        "Submit sceneText and suggestedActions through the result tool.",
-      ]
-      : [
-        "应用已激活的开放世界 Skill 后，根据已经应用的状态渲染 sceneText。",
-        "具名人物、地点、物件、线索和组织只能来自已应用变化或当前状态；输入的 elapsed 与 anchor 是权威时间。",
-        "sceneText 只写叙事正文，选择只能放在 suggestedActions。",
-        actionsRule,
-        "通过结果工具提交 sceneText 与 suggestedActions。",
-      ];
-  return contract.join("\n");
-}
-
-function buildSceneRendererUserPrompt(input: PlaySceneRenderInput, language: "zh" | "en"): string {
+function buildOpeningStateUserPrompt(input: PlayOpeningStateInput, language: "zh" | "en"): string {
   const premise = input.worldPremise?.trim();
-  const context = input.context?.trim();
-  if (language === "en") {
-    return [
-      ...(premise ? ["World setting (always obey):", premise, ""] : []),
-      ...(context ? ["Authoritative context before this action:", context, ""] : []),
-      "Player's words:",
-      input.input,
-      "",
-      "Action:",
-      JSON.stringify(PlayActionIntentSchema.parse(input.action), null, 2),
-      "",
-      "Applied changes this turn:",
-      input.mutationSummary,
-      "",
-      "Current state summary:",
-      input.stateBrief,
-      input.replayContext ? ["", "Replay constraints:", input.replayContext].join("\n") : "",
-    ].join("\n");
-  }
-  return [
-    ...(premise ? ["世界设定（始终遵守）：", premise, ""] : []),
-    ...(context ? ["本回合前的权威上下文：", context, ""] : []),
-    "玩家原话：",
-    input.input,
-    "",
-    "动作：",
-    JSON.stringify(PlayActionIntentSchema.parse(input.action), null, 2),
-    "",
-    "已应用的本回合变化：",
-    input.mutationSummary,
-    "",
-    "当前状态摘要：",
-    input.stateBrief,
-    input.replayContext ? ["", "重写约束：", input.replayContext].join("\n") : "",
-  ].join("\n");
+  return language === "en"
+    ? [
+        `turn: ${input.turn}`,
+        ...(premise ? ["World contract:", premise, ""] : []),
+        "Opening scene:",
+        input.sceneText,
+        ...(input.suggestedActions.length > 0 ? ["", "Opening choices:", ...input.suggestedActions.map((action) => `- ${action}`)] : []),
+        "",
+        "Current context:",
+        input.context,
+      ].join("\n")
+    : [
+        `turn: ${input.turn}`,
+        ...(premise ? ["世界契约：", premise, ""] : []),
+        "开场正文：",
+        input.sceneText,
+        ...(input.suggestedActions.length > 0 ? ["", "开场选择：", ...input.suggestedActions.map((action) => `- ${action}`)] : []),
+        "",
+        "当前上下文：",
+        input.context,
+      ].join("\n");
+}
+
+function buildTurnSystemPrompt(mode: "open" | "guided", language: "zh" | "en"): string {
+  const choiceRule = language === "en"
+    ? mode === "open"
+      ? "The open-world surface has no suggestedActions; submit an empty array."
+      : "Use suggestedActions only for sparse, grounded choices at a genuine decision point."
+    : mode === "open"
+      ? "开放世界不提供 suggestedActions，必须提交空数组。"
+      : "只在真实抉择点提供少量、基于当前场景的 suggestedActions。";
+  return language === "en"
+    ? [
+        "Apply the activated play-world Skill and resolve one coherent interactive-fiction turn.",
+        "In one submission, normalize the player's literal action, project the authoritative world mutation, and render the resulting scene. The prose and mutation must describe the same facts.",
+        "Reuse exact roster ids. The player id is always actor_player. Every concrete named person, place, object, clue, evidence item, organization, or relationship introduced in sceneText must exist in mutation or the supplied context.",
+        "Physical holdings use an actor_player edge with value.role=holding; knowledge is observed rather than held. Use stateSlots only when the world contract authorizes that tracking.",
+        "Only evidence, clue, claim, and proof_chain entities may appear in evidenceTransitions. A tangible object that participates in an evidence lifecycle must use an evidentiary entity type rather than item.",
+        "Record elapsed duration, resulting time anchor, rationale, and synchronized off-screen changes in timeAdvance. If the action cannot proceed, set blocked and render the grounded consequence.",
+        choiceRule,
+        "The host commits the whole submission atomically and owns event metadata.",
+      ].join("\n")
+    : [
+        "应用已激活的开放世界 Skill，完成一个前后一致的互动叙事回合。",
+        "一次提交中同时归一玩家原话、投影权威世界变化并写出结果场景；正文与 mutation 必须描述同一组事实。",
+        "复用名册精确 id，玩家 id 永远是 actor_player。sceneText 中新增的具体具名人物、地点、物件、线索、证据、组织或关系，必须已经存在于 mutation 或给定上下文。",
+        "实际持有使用 actor_player 指向实体且 value.role=holding；知道的信息属于 observed，不是 holding。只有世界契约允许时才使用 stateSlots。",
+        "只有 evidence、clue、claim、proof_chain 实体可以进入 evidenceTransitions；需要证据生命周期的实物必须使用证据类实体类型，不能同时标成普通 item。",
+        "在 timeAdvance 中记录经过时长、结束时间锚、理由和同期世界变化。动作无法执行时设置 blocked，并写出符合当前状态的结果。",
+        choiceRule,
+        "宿主原子提交整个结果，并负责事件元数据。",
+      ].join("\n");
+}
+
+function buildTurnUserPrompt(input: PlayTurnInput, language: "zh" | "en"): string {
+  const premise = input.worldPremise?.trim();
+  return language === "en"
+    ? [
+        `turn: ${input.turn}`,
+        ...(premise ? ["World contract:", premise, ""] : []),
+        "Authoritative context before this turn:",
+        input.context,
+        "",
+        "Player's words:",
+        input.input,
+        input.replayContext ? ["", "Replay constraints:", input.replayContext].join("\n") : "",
+      ].join("\n")
+    : [
+        `turn: ${input.turn}`,
+        ...(premise ? ["世界契约：", premise, ""] : []),
+        "本回合前的权威上下文：",
+        input.context,
+        "",
+        "玩家原话：",
+        input.input,
+        input.replayContext ? ["", "重写约束：", input.replayContext].join("\n") : "",
+      ].join("\n");
 }

@@ -409,6 +409,7 @@ export type ProposedActionName = ProposeActionParamsType["action"];
 type ProposeActionToolOptions = {
   readonly sameSession?: boolean;
   readonly proposalAction?: ProposedActionName;
+  readonly playMode?: "open" | "guided";
   readonly requestedSkillIds?: () => ReadonlyArray<string>;
   readonly attachmentPaths?: () => ReadonlyArray<string>;
 };
@@ -431,11 +432,21 @@ const PROPOSAL_PAYLOAD_KEYS: Readonly<Partial<Record<ProposeActionParamsType["ac
   remove_node: "removeNode",
 };
 
-function proposalParameters(action: ProposeActionParamsType["action"] | undefined) {
+function proposalParameters(
+  action: ProposeActionParamsType["action"] | undefined,
+  playMode?: "open" | "guided",
+) {
   const payloadKey = action ? PROPOSAL_PAYLOAD_KEYS[action] : undefined;
   if (!action || !payloadKey) return ProposeActionParams;
-  const properties = (ProposeActionParams as any).properties as Record<string, unknown>;
-  const requiredPayload = Type.Required(Type.Object({ [payloadKey]: properties[payloadKey] } as any)) as any;
+  const properties = (ProposeActionParams as any).properties as Record<string, any>;
+  let payloadSchema = properties[payloadKey];
+  if (action === "play_start" && playMode === "open") {
+    const { suggestedActions: _suggestedActions, ...openWorldProperties } = payloadSchema.properties;
+    payloadSchema = Type.Object(openWorldProperties, {
+      description: "Structured execution args for an open-world play_start. The player responds with free text, so fixed suggested actions are not part of this surface.",
+    });
+  }
+  const requiredPayload = Type.Required(Type.Object({ [payloadKey]: payloadSchema } as any)) as any;
   return Type.Object({
     action: Type.Literal(action),
     instruction: properties.instruction,
@@ -621,7 +632,7 @@ export function createProposeActionTool(
   language: "zh" | "en" = "zh",
   options: ProposeActionToolOptions = {},
 ): AgentTool<any, unknown> {
-  const parameters = proposalParameters(options.proposalAction);
+  const parameters = proposalParameters(options.proposalAction, options.playMode);
   return {
     name: "propose_action",
     description:
@@ -2155,10 +2166,9 @@ export function createPlayStartTool(
       const sceneText = (initialScene?.trim() || (world.language === "en"
         ? [`You enter "${world.title}".`, world.premise || "The scene is set. Make your first move."].join("\n")
         : [`你进入「${world.title}」。`, world.premise || "场景已经就位，等待你的第一个动作。"].join("\n"))).trim();
-      const suggestedActions = validateSuggestedActions(playPayload?.suggestedActions ?? params.suggestedActions);
-      if (world.mode === "open" && suggestedActions.length > 0) {
-        throw new Error("Open-world Play does not accept suggestedActions; use free player input or guided mode.");
-      }
+      const suggestedActions = world.mode === "guided"
+        ? validateSuggestedActions(playPayload?.suggestedActions ?? params.suggestedActions)
+        : [];
       let seed: PlayOpeningSeedResult | null = null;
       let graph;
       try {
