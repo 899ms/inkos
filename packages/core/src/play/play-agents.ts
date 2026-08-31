@@ -89,11 +89,6 @@ const PlayMutationResultSchema = Type.Object({
   stateSlots: Type.Array(PlayStateSlotResultSchema),
   evidenceTransitions: Type.Array(Type.Object({
     entityId: Type.String(),
-    from: Type.Optional(Type.Union([
-      Type.Literal("unknown"), Type.Literal("hinted"), Type.Literal("seen"),
-      Type.Literal("collected"), Type.Literal("verified"), Type.Literal("weaponized"),
-      Type.Literal("exposed"), Type.Literal("exhausted"),
-    ])),
     to: Type.Union([
       Type.Literal("unknown"), Type.Literal("hinted"), Type.Literal("seen"),
       Type.Literal("collected"), Type.Literal("verified"), Type.Literal("weaponized"),
@@ -118,6 +113,20 @@ function validateMutationSubmission(
       throw new Error(
         `evidenceTransitions may reference only evidence, clue, claim, or proof_chain entities; ${transition.entityId} is ${submittedType}. `
         + "Use an evidentiary entity type for a physical clue, or remove its evidence transition.",
+      );
+    }
+  }
+  for (const edge of raw.edges) {
+    const targetType = submittedTypes.get(edge.toId);
+    if (
+      edge.fromId === "actor_player"
+      && edge.value?.role === "holding"
+      && targetType
+      && EVIDENCE_ENTITY_TYPES.has(targetType)
+      && edge.value.physical !== true
+    ) {
+      throw new Error(
+        `Holding edge ${edge.id} targets physical ${targetType} ${edge.toId}; set value.physical=true.`,
       );
     }
   }
@@ -213,7 +222,10 @@ export class PlayTurnAgent extends BaseAgent {
     if (!hasMutationResult(mutation)) {
       throw new Error("Play turn state was empty; the turn was not committed.");
     }
-    const scene = PlaySceneRenderSchema.parse(result);
+    const scene = PlaySceneRenderSchema.parse({
+      sceneText: result.sceneText,
+      suggestedActions: result.suggestedActions,
+    });
     return { ...scene, action, mutation };
   }
 }
@@ -328,7 +340,7 @@ function buildTurnSystemPrompt(mode: "open" | "guided", language: "zh" | "en"): 
         "Apply the activated play-world Skill and resolve one coherent interactive-fiction turn.",
         "In one submission, normalize the player's literal action, project the authoritative world mutation, and render the resulting scene. The prose and mutation must describe the same facts.",
         "Reuse exact roster ids. The player id is always actor_player. Every concrete named person, place, object, clue, evidence item, organization, or relationship introduced in sceneText must exist in mutation or the supplied context.",
-        "Physical holdings use an actor_player edge with value.role=holding; knowledge is observed rather than held. Use stateSlots only when the world contract authorizes that tracking.",
+        "Physical holdings use an actor_player edge with value.role=holding; when the held target is evidence, clue, claim, or proof_chain, also set value.physical=true. Knowledge is observed rather than held. Use stateSlots only when the world contract authorizes that tracking.",
         "Only evidence, clue, claim, and proof_chain entities may appear in evidenceTransitions. A tangible object that participates in an evidence lifecycle must use an evidentiary entity type rather than item.",
         "Record elapsed duration, resulting time anchor, rationale, and synchronized off-screen changes in timeAdvance. If the action cannot proceed, set blocked and render the grounded consequence.",
         choiceRule,
@@ -338,7 +350,7 @@ function buildTurnSystemPrompt(mode: "open" | "guided", language: "zh" | "en"): 
         "应用已激活的开放世界 Skill，完成一个前后一致的互动叙事回合。",
         "一次提交中同时归一玩家原话、投影权威世界变化并写出结果场景；正文与 mutation 必须描述同一组事实。",
         "复用名册精确 id，玩家 id 永远是 actor_player。sceneText 中新增的具体具名人物、地点、物件、线索、证据、组织或关系，必须已经存在于 mutation 或给定上下文。",
-        "实际持有使用 actor_player 指向实体且 value.role=holding；知道的信息属于 observed，不是 holding。只有世界契约允许时才使用 stateSlots。",
+        "实际持有使用 actor_player 指向实体且 value.role=holding；持有的目标若是 evidence、clue、claim、proof_chain，还必须设置 value.physical=true。知道的信息属于 observed，不是 holding。只有世界契约允许时才使用 stateSlots。",
         "只有 evidence、clue、claim、proof_chain 实体可以进入 evidenceTransitions；需要证据生命周期的实物必须使用证据类实体类型，不能同时标成普通 item。",
         "在 timeAdvance 中记录经过时长、结束时间锚、理由和同期世界变化。动作无法执行时设置 blocked，并写出符合当前状态的结果。",
         choiceRule,
