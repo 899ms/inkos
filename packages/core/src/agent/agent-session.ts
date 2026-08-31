@@ -2,17 +2,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import { getModel, getEnvApiKey, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { getModel, getEnvApiKey } from "@mariozechner/pi-ai";
 import type {
   Model,
   Api,
   AssistantMessage,
-  AssistantMessageEventStream,
   Context as PiContext,
   ImageContent,
   Message,
   SimpleStreamOptions,
-  ToolResultMessage,
 } from "@mariozechner/pi-ai";
 import type { PipelineRunner } from "../pipeline/runner.js";
 import {
@@ -36,9 +34,7 @@ import {
   readTranscriptEvents,
 } from "../interaction/session-transcript.js";
 import {
-  TOOL_RESULT_BRIDGE_TEXT,
   adaptRestoredAgentMessagesForModel,
-  appendRestoredHistoryBoundary,
   restoreAgentMessagesFromTranscript,
 } from "../interaction/session-transcript-restore.js";
 import type { TranscriptEvent, TranscriptRole } from "../interaction/session-transcript-schema.js";
@@ -211,15 +207,6 @@ function removeCachedAgent(key: string, cancelRunningEpisode = false): boolean {
 /** TTL for cached agents: 5 minutes. */
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-const EMPTY_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 /** Cleanup interval handle (lazy-started). */
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -365,86 +352,6 @@ function attachmentImages(attachments: ReadonlyArray<AgentSessionAttachment> | u
       data: attachment.image!.data,
       mimeType: attachment.image!.mimeType,
     }));
-}
-
-function localAssistantStopStream(model: Model<Api>): AssistantMessageEventStream {
-  const stream = createAssistantMessageEventStream();
-  const message: AssistantMessage = {
-    role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: EMPTY_USAGE,
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-  queueMicrotask(() => {
-    stream.push({ type: "done", reason: "stop", message });
-    stream.end(message);
-  });
-  return stream;
-}
-
-export function isTerminalProductionToolName(toolName: unknown): boolean {
-  if (typeof toolName !== "string") return false;
-  const actionName = capabilityActionId(toolName);
-  return actionName === "propose_action"
-    || actionName === "create_book"
-    || actionName === "revise_foundation"
-    || actionName === "write_chapters"
-    || actionName === "review_chapter"
-    || actionName === "revise_chapter"
-    || actionName === "export_book"
-    || actionName === "resync_chapter_state"
-    || actionName === "short_fiction_run"
-    || actionName === "script_create"
-    || actionName === "storyboard_create"
-    || actionName === "interactive_film_create"
-    || actionName === "translation_create"
-    || actionName === "fanfic_create"
-    || actionName === "continuation_import"
-    || actionName === "spinoff_create"
-    || actionName === "imitation_create"
-    || actionName === "generate_cover"
-    || actionName === "play_start"
-    || actionName === "play_edit"
-    || actionName === "play_revise"
-    || actionName === "play_step"
-    || actionName === "create_narrative_forecast"
-    || actionName === "get_narrative_forecast"
-    || actionName === "select_narrative_branch";
-}
-
-function hasUnansweredTerminalToolResult(messages: AgentMessage[]): boolean {
-  let assistantTextAfterTool = false;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object" || !("role" in message)) continue;
-    const role = (message as { role?: unknown }).role;
-    if (role === "user") return false;
-    if (role === "assistant") {
-      const text = extractTextFromAssistant(message as AssistantMessage).trim();
-      if (text) assistantTextAfterTool = true;
-      continue;
-    }
-    if (role !== "toolResult") continue;
-    const toolResult = message as { toolName?: unknown; isError?: unknown };
-    const toolName = toolResult.toolName;
-    if (
-      typeof toolName === "string"
-      && capabilityActionId(toolName) === "propose_action"
-      && toolResult.isError === true
-    ) {
-      // A proposal has no production side effect. Let Pi repair malformed
-      // structured arguments instead of terminating on validation failure.
-      return false;
-    }
-    if (isTerminalProductionToolName(toolName)) {
-      return !assistantTextAfterTool;
-    }
-  }
-  return false;
 }
 
 export function turnHasObservableOutcome(messages: ReadonlyArray<AgentMessage>): boolean {
@@ -655,112 +562,15 @@ function assistantErrorMessage(message: AssistantMessage | undefined): string | 
       : undefined;
 }
 
-function convertAgentMessagesForModel(messages: AgentMessage[], model: Model<Api>): Message[] {
-  const llmMessages = messages.flatMap((message): Message[] => {
+function convertAgentMessagesForModel(messages: AgentMessage[]): Message[] {
+  return messages.flatMap((message): Message[] => {
     if (!message || typeof message !== "object" || !("role" in message)) return [];
     const raw = message as { role?: unknown; content?: unknown };
     if (raw.role === "user" || raw.role === "assistant" || raw.role === "toolResult") {
       return [message as Message];
     }
-    if (raw.role === "system" && typeof raw.content === "string") {
-      return [{
-        role: "user",
-        content: raw.content,
-        timestamp: messageTimestamp(message),
-      }];
-    }
     return [];
   });
-
-  const candidate = model as { api?: unknown; baseUrl?: unknown };
-  // InkOS's internal `toolResult` role is not part of the OpenAI Chat Completions spec.
-  // Many openai-completions upstreams (Google, and kkaiapi/DeepSeek-Pro-style gateways) reject
-  // it outright — which surfaces as an opaque "503 provider temporarily unavailable" — so fold
-  // tool results into a plain user message for EVERY openai-completions endpoint, not just Google.
-  // Anthropic-format endpoints (MiniMax / 百炼) handle tool results natively and are left untouched.
-  const isOpenAICompletionsCompatible = candidate.api === "openai-completions";
-  if (!isOpenAICompletionsCompatible) return llmMessages;
-
-  const converted: Message[] = [];
-  const pushToolResultsAsUser = (toolResults: ToolResultMessage[]) => {
-    const lines = toolResults.flatMap((result) => {
-      const content = result.content
-        .map((block) => block.type === "text" ? block.text : "[image]")
-        .filter(Boolean)
-        .join("\n")
-        .trim() || "(empty tool result)";
-      return [`- ${result.toolName} (${result.toolCallId}):`, content];
-    });
-    converted.push({
-      role: "user",
-      content: [
-        "[Tool results]",
-        ...lines,
-        "Use these tool results to answer the active user request. If a tool failed, explain the failure and choose the next useful action.",
-      ].join("\n"),
-      timestamp: toolResults.reduce(
-        (max, result) => Math.max(max, messageTimestamp(result as AgentMessage)),
-        0,
-      ) || Date.now(),
-    });
-  };
-
-  for (let i = 0; i < llmMessages.length; i++) {
-    const message = llmMessages[i];
-
-    if (message.role === "assistant") {
-      const textContent = message.content.filter(
-        (block): block is { type: "text"; text: string } =>
-          block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0,
-      );
-      if (
-        textContent.length === 1 &&
-        message.content.length === 1 &&
-        textContent[0].text.trim() === TOOL_RESULT_BRIDGE_TEXT
-      ) {
-        continue;
-      }
-
-      const toolCallIds = new Set<string>();
-      for (const block of message.content) {
-        if (block.type === "toolCall" && typeof block.id === "string" && block.id.length > 0) {
-          toolCallIds.add(block.id);
-        }
-      }
-      if (toolCallIds.size === 0) {
-        converted.push(message);
-        continue;
-      }
-
-      if (textContent.length > 0) {
-        converted.push({ ...message, content: textContent });
-      }
-
-      const toolResults: ToolResultMessage[] = [];
-      let nextIndex = i + 1;
-      while (nextIndex < llmMessages.length) {
-        const next = llmMessages[nextIndex];
-        if (next.role !== "toolResult" || !toolCallIds.has(next.toolCallId)) break;
-        toolResults.push(next);
-        nextIndex += 1;
-      }
-
-      if (toolResults.length > 0) {
-        pushToolResultsAsUser(toolResults);
-        i = nextIndex - 1;
-      }
-      continue;
-    }
-
-    if (message.role === "toolResult") {
-      pushToolResultsAsUser([message]);
-      continue;
-    }
-
-    converted.push(message);
-  }
-
-  return converted;
 }
 
 /**
@@ -967,15 +777,14 @@ async function runAgentSessionUnlocked(
 
   if (!cached) {
     const restoredHistory = await restoreAgentMessagesFromTranscript(projectRoot, sessionId, sessionKind);
-    const restoredMessages = appendRestoredHistoryBoundary(
-      adaptRestoredAgentMessagesForModel(
-        restoredHistory,
-        model,
-      ),
-      language,
-    );
-    const initialAgentMessages = restoredMessages;
-    let terminalToolResultTail = false;
+    const restoredMessages = adaptRestoredAgentMessagesForModel(restoredHistory, model);
+    const restoredSystemContext = restoredMessages.flatMap((message) => {
+      const raw = message as unknown as { readonly role?: unknown; readonly content?: unknown };
+      return raw.role === "system" && typeof raw.content === "string" ? [raw.content] : [];
+    });
+    const initialAgentMessages = restoredMessages.filter((message) => (
+      (message as unknown as { readonly role?: unknown }).role !== "system"
+    ));
     const turnSkills = new Map<string, ActivatedSkillGuidance>(
       skillResolution.usedSkills.map((skill) => [skill.id, { skill, resources: [] }]),
     );
@@ -1081,12 +890,15 @@ async function runAgentSessionUnlocked(
         ? { confirmedAction: requestedIntent }
         : {}),
     });
+    const restoredContextBlock = restoredSystemContext.length > 0
+      ? `\n\n## Restored committed context\n${restoredSystemContext.join("\n\n")}`
+      : "";
     const agent = new Agent({
       initialState: {
         model,
-        systemPrompt: config.backgroundTaskContext
-          ? `${baseSystemPrompt}\n\n${config.backgroundTaskContext}`
-          : baseSystemPrompt,
+        systemPrompt: [baseSystemPrompt, restoredContextBlock, config.backgroundTaskContext]
+          .filter(Boolean)
+          .join("\n\n"),
         tools: [...visibleTools],
         messages: initialAgentMessages,
       },
@@ -1129,19 +941,10 @@ async function runAgentSessionUnlocked(
         }),
         onContextCompression,
       }),
-      convertToLlm: (messages) => {
-        terminalToolResultTail = hasUnansweredTerminalToolResult(messages);
-        return convertAgentMessagesForModel(messages, model);
-      },
-      streamFn: (streamModel, context, options) => {
-        if (terminalToolResultTail) {
-          terminalToolResultTail = false;
-          return localAssistantStopStream(streamModel);
-        }
-        return config.stream === false
-          ? guardedPiNonStreaming(streamModel, context, options, config.proxyUrl)
-          : guardedPiStream(streamModel, context, options);
-      },
+      convertToLlm: convertAgentMessagesForModel,
+      streamFn: (streamModel, context, options) => config.stream === false
+        ? guardedPiNonStreaming(streamModel, context, options, config.proxyUrl)
+        : guardedPiStream(streamModel, context, options),
       getApiKey: (provider: string) => {
         if (config.apiKey) return config.apiKey;
         return getEnvApiKey(provider);

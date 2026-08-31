@@ -69,16 +69,8 @@ const emptyUsage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-export const TOOL_RESULT_BRIDGE_TEXT = "I have processed the tool results.";
+export const TOOL_RESULT_BRIDGE_TEXT = "[Completed tool-result boundary]";
 const EXPIRED_SKILL_RESULT_TEXT = "Skill instructions expired after their original turn.";
-const RESTORED_HISTORY_BOUNDARY_ZH =
-  "[已完成的历史上下文]\n" +
-  "以上是已经完成并提交的历史上下文，只能用于回忆，不代表当前轮已经执行了动作。\n" +
-  "当前轮必须优先遵循用户接下来输入的最新指令；如果最新输入是提问、讨论或确认，直接回答，不要因为历史工具结果跳过判断或继续执行旧动作。";
-const RESTORED_HISTORY_BOUNDARY_EN =
-  "[Completed history context]\n" +
-  "The messages above are completed and committed history. Use them only as memory; they do not mean any action has already run in the current turn.\n" +
-  "For the current turn, prioritize the next user instruction. If it is a question, discussion, or confirmation, answer directly instead of continuing an old tool action.";
 
 function toolResultBridgeMessage(timestamp: number): AgentMessage {
   return {
@@ -118,26 +110,6 @@ function systemMessage(content: string, timestamp: number): AgentMessage {
     content,
     timestamp,
   } as unknown as AgentMessage;
-}
-
-export function appendRestoredHistoryBoundary(
-  messages: AgentMessage[],
-  language: string,
-): AgentMessage[] {
-  if (messages.length === 0) return messages;
-  const timestamp = messages.reduce((max, message) => {
-    if (isObject(message) && typeof message.timestamp === "number") {
-      return Math.max(max, message.timestamp);
-    }
-    return max;
-  }, 0) || Date.now();
-  return [
-    ...messages,
-    systemMessage(
-      language === "zh" ? RESTORED_HISTORY_BOUNDARY_ZH : RESTORED_HISTORY_BOUNDARY_EN,
-      timestamp + 1,
-    ),
-  ];
 }
 
 export function cleanRestoredAgentMessages(messages: AgentMessage[]): AgentMessage[] {
@@ -597,10 +569,11 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     return toolLabels[action] ?? action;
   };
 
-  const hasCompletedPlayTool = (executions: ReadonlyArray<ToolExecution>): boolean =>
+  const hasCompletedImmersiveScene = (executions: ReadonlyArray<ToolExecution>): boolean =>
     executions.some((execution) =>
       execution.status === "completed"
-      && (execution.tool === "play_start" || execution.tool === "play_step" || execution.tool === "play_revise")
+      && isObject(execution.details)
+      && execution.details.presentation === "immersive-scene"
     );
 
   const rememberToolCalls = (event: MessageEvent, raw: Record<string, unknown>) => {
@@ -681,7 +654,7 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
         || !!displayedToolExecutions?.length;
       if (
         pendingToolExecutions.length > 0
-        && !hasCompletedPlayTool(pendingToolExecutions)
+        && !hasCompletedImmersiveScene(pendingToolExecutions)
         && !currentText
         && !currentThinking
         && !hasToolCallContent(raw)
@@ -697,7 +670,7 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
         pendingToolExecutions.length > 0 ? pendingToolExecutions : undefined,
         pendingThinking.length > 0 ? pendingThinking : undefined,
         {
-          suppressAssistantText: hasCompletedPlayTool(pendingToolExecutions),
+          suppressAssistantText: hasCompletedImmersiveScene(pendingToolExecutions),
           suppressThinking: isSkillRequest,
         },
       );

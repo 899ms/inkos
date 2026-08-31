@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { createLLMClient, StateManager, createLogger, createStderrSink, createJsonLineSink, resolveEffectiveLLMConfig, loadLLMEnvLayers, GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH, createBuiltInWorkProfileRegistry, loadAvailableAgentSkills, mergeActivatedSkillGuidance, resolveProfileSkillActivations, type ActivatedSkillGuidance, type EffectiveLLMConfigResult, type LLMApiFormat, type LLMConfigCliOverrides, type ProjectConfig, type PipelineConfig, type PipelineRunner, type LogSink } from "@actalk/inkos-core";
+import { createLLMClient, StateManager, createLogger, createStderrSink, createJsonLineSink, resolveEffectiveLLMConfig, loadLLMEnvLayers, GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH, createBuiltInWorkProfileRegistry, loadAvailableAgentSkills, mergeActivatedSkillGuidance, resolveProfileSkillActivations, type ActivatedSkillGuidance, type EffectiveLLMConfigResult, type LLMApiFormat, type LLMConfigCliOverrides, type ProjectConfig, type PipelineConfig, type LogSink } from "@actalk/inkos-core";
 
 export { GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH };
 
@@ -47,17 +47,6 @@ export async function resolveCliProfileSkills(
     return { skill, resources: [] };
   });
   return mergeActivatedSkillGuidance(profileSkills, extras);
-}
-
-export async function runWithCliProfileSkills<T>(
-  pipeline: PipelineRunner,
-  projectRoot: string,
-  profileId: string,
-  operation: () => Promise<T>,
-  options: { readonly includeRecommended?: boolean; readonly extraSkillIds?: ReadonlyArray<string> } = {},
-): Promise<T> {
-  const activatedSkills = await resolveCliProfileSkills(projectRoot, profileId, options);
-  return pipeline.runWithAgentContext({ activatedSkills }, operation);
 }
 
 export async function loadConfig(options?: {

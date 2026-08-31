@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { appendTranscriptEvent } from "../interaction/session-transcript.js";
 import {
   adaptRestoredAgentMessagesForModel,
-  appendRestoredHistoryBoundary,
   deriveBookSessionFromTranscript,
   restoreAgentMessagesFromTranscript,
   TOOL_RESULT_BRIDGE_TEXT,
@@ -960,7 +959,7 @@ describe("session transcript restore", () => {
       },
       {
         role: "assistant",
-        content: [{ type: "text", text: "I have processed the tool results." }],
+        content: [{ type: "text", text: TOOL_RESULT_BRIDGE_TEXT }],
         api: "openai-completions",
         provider: "inkos",
         model: "synthetic-tool-result-bridge",
@@ -1116,39 +1115,6 @@ describe("session transcript restore", () => {
     expect(body).toContain("先看角色。");
     expect(body).toContain("[Historical tool results]");
     expect(body).toContain("林默资料");
-  });
-
-  it("给恢复的历史消息追加边界，避免旧工具结果被当成当前轮动作", () => {
-    const messages = [
-      { role: "user", content: "写下一章", timestamp: 1 },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "tool-1", name: "write_chapters", arguments: { } }],
-        api: "openai-completions",
-        provider: "openai",
-        model: "deepseek-v4-pro",
-        usage,
-        stopReason: "toolUse",
-        timestamp: 2,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "tool-1",
-        toolName: "write_chapters",
-        content: [{ type: "text", text: "Chapter written." }],
-        isError: false,
-        timestamp: 3,
-      },
-    ] as any;
-
-    const bounded = appendRestoredHistoryBoundary(messages, "zh");
-
-    expect(bounded).toHaveLength(4);
-    expect(bounded[3]).toMatchObject({
-      role: "system",
-      content: expect.stringContaining("以上是已经完成并提交的历史上下文"),
-    });
-    expect(JSON.stringify(bounded[3])).toContain("优先遵循用户接下来输入的最新指令");
   });
 
   it("派生 BookSession 时跳过没有正文的 assistant tool-use message", async () => {
@@ -2136,6 +2102,7 @@ describe("session transcript restore", () => {
         content: [{ type: "text", text: "Play advanced.\n工具生成的权威场景。" }],
         details: {
           kind: "play_turn_advanced",
+          presentation: "immersive-scene",
           sceneText: "工具生成的权威场景。",
           suggestedActions: ["继续检查"],
         },

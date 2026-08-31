@@ -25,6 +25,7 @@ import {
   unbindBookReference,
 } from "../references/book-references.js";
 import { loadChaptersFromPath } from "./chapter-import-source.js";
+import { splitChapters } from "../utils/chapter-splitter.js";
 import type { ScriptTargetFormat } from "../agents/script-storyboard.js";
 import { createPlayDB, type PlayGraphDB } from "../play/play-db-factory.js";
 import { PlayRunner, type PlayOpeningSeedResult, type PlayReplayResult, type PlayStepResult, type PlayVariantRestoreResult } from "../play/play-runner.js";
@@ -44,6 +45,7 @@ import {
 } from "../skills/activations.js";
 import { listWorkManifests, loadWorkManifest } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { StoryNodeToolSchema } from "../interactive-film/tool-schemas.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -388,6 +390,18 @@ const ProposeActionParams = Type.Object({
     targetChapters: Type.Optional(Type.Number({ description: "Confirmed total chapter count." })),
     chapterWordCount: Type.Optional(Type.Number({ description: "Confirmed per-chapter length." })),
   }, { description: "Structured execution args for action=style_imitation. This creates an original book and style guide directly after confirmation." })),
+  draftStructure: Type.Optional(Type.Object({
+    projectId: Type.Optional(Type.String({ minLength: 1 })),
+    instruction: Type.String({ description: "Confirmed instruction for the branching structure draft." }),
+  }, { description: "Structured execution args for action=draft_structure." })),
+  connectChoice: Type.Optional(Type.Object({
+    projectId: Type.Optional(Type.String({ minLength: 1 })),
+    node: StoryNodeToolSchema,
+  }, { description: "Structured execution args for action=connect_choice." })),
+  removeNode: Type.Optional(Type.Object({
+    projectId: Type.Optional(Type.String({ minLength: 1 })),
+    nodeId: Type.String({ minLength: 1 }),
+  }, { description: "Structured execution args for action=remove_node." })),
 });
 
 type ProposeActionParamsType = Static<typeof ProposeActionParams>;
@@ -412,6 +426,9 @@ const PROPOSAL_PAYLOAD_KEYS: Readonly<Partial<Record<ProposeActionParamsType["ac
   continuation_import: "continuationImport",
   spinoff_create: "spinoffCreate",
   style_imitation: "imitationCreate",
+  draft_structure: "draftStructure",
+  connect_choice: "connectChoice",
+  remove_node: "removeNode",
 };
 
 function proposalParameters(action: ProposeActionParamsType["action"] | undefined) {
@@ -428,60 +445,41 @@ function proposalParameters(action: ProposeActionParamsType["action"] | undefine
   } as any, { additionalProperties: false });
 }
 
-function proposedActionSessionKind(action: ProposeActionParamsType["action"]): "book-create" | "short" | "play" | "script" | "storyboard" | "interactive-film" | "interactive-film-authoring" | "chat" {
-  if (action === "create_book") return "book-create";
-  if (action === "play_start") return "play";
-  if (action === "script_create") return "script";
-  if (action === "storyboard_create") return "storyboard";
-  if (action === "interactive_film_create") return "interactive-film";
-  if (action === "translation_create") return "chat";
-  if (action === "draft_structure" || action === "connect_choice" || action === "remove_node") return "interactive-film-authoring";
-  if (action === "fanfic_init" || action === "continuation_import" || action === "spinoff_create" || action === "style_imitation") return "chat";
-  return "short";
+type ProposedSessionKind = "book-create" | "short" | "play" | "script" | "storyboard" | "interactive-film" | "interactive-film-authoring" | "chat";
+
+const PROPOSED_ACTION_SESSION_KIND: Readonly<Record<ProposedActionName, ProposedSessionKind>> = {
+  create_book: "book-create",
+  short_run: "short",
+  play_start: "play",
+  generate_cover: "short",
+  fanfic_init: "chat",
+  continuation_import: "chat",
+  spinoff_create: "chat",
+  style_imitation: "chat",
+  script_create: "script",
+  storyboard_create: "storyboard",
+  interactive_film_create: "interactive-film",
+  translation_create: "chat",
+  draft_structure: "interactive-film-authoring",
+  connect_choice: "interactive-film-authoring",
+  remove_node: "interactive-film-authoring",
+};
+
+function proposedActionSessionKind(action: ProposedActionName): ProposedSessionKind {
+  return PROPOSED_ACTION_SESSION_KIND[action];
 }
 
 function proposedActionPayload(
   params: ProposeActionParamsType,
   language: "zh" | "en",
 ): ActionPayload | undefined {
-  const payload: ActionPayload = {};
-  if (params.action === "create_book") {
-    if (params.createBook) payload.createBook = params.createBook;
-  }
-  if (params.action === "short_run") {
-    if (params.shortRun) payload.shortRun = { language, ...params.shortRun };
-  }
-  if (params.action === "play_start") {
-    if (params.playStart) payload.playStart = params.playStart;
-  }
-  if (params.action === "generate_cover") {
-    if (params.generateCover) payload.generateCover = params.generateCover;
-  }
-  if (params.action === "script_create") {
-    if (params.scriptCreate) payload.scriptCreate = params.scriptCreate;
-  }
-  if (params.action === "storyboard_create") {
-    if (params.storyboardCreate) payload.storyboardCreate = params.storyboardCreate;
-  }
-  if (params.action === "interactive_film_create") {
-    if (params.interactiveFilmCreate) payload.interactiveFilmCreate = params.interactiveFilmCreate;
-  }
-  if (params.action === "translation_create") {
-    if (params.translationCreate) payload.translationCreate = params.translationCreate;
-  }
-  if (params.action === "fanfic_init") {
-    if (params.fanficCreate) payload.fanficCreate = params.fanficCreate;
-  }
-  if (params.action === "continuation_import") {
-    if (params.continuationImport) payload.continuationImport = params.continuationImport;
-  }
-  if (params.action === "spinoff_create") {
-    if (params.spinoffCreate) payload.spinoffCreate = params.spinoffCreate;
-  }
-  if (params.action === "style_imitation") {
-    if (params.imitationCreate) payload.imitationCreate = params.imitationCreate;
-  }
-  return Object.keys(payload).length > 0 ? payload : undefined;
+  const payloadKey = PROPOSAL_PAYLOAD_KEYS[params.action];
+  if (!payloadKey) return undefined;
+  const value = params[payloadKey] as Record<string, unknown> | undefined;
+  if (!value) return undefined;
+  return ActionPayloadSchema.parse({
+    [payloadKey]: payloadKey === "shortRun" ? { language, ...value } : value,
+  });
 }
 
 function validateProposedActionPayload(payload: ActionPayload | undefined): {
@@ -604,6 +602,18 @@ function assertExecutableProposedAction(params: ProposeActionParamsType, payload
     if (!payload?.imitationCreate?.referenceText?.trim() && !payload?.imitationCreate?.referencePath?.trim()) {
       throw new Error("propose_action is missing imitationCreate.referenceText/referencePath; ask for or use the attached reference before proposing production.");
     }
+    return;
+  }
+  if (params.action === "draft_structure") {
+    if (!payload?.draftStructure) throw new Error("propose_action is missing draftStructure payload.");
+    return;
+  }
+  if (params.action === "connect_choice") {
+    if (!payload?.connectChoice?.node) throw new Error("propose_action is missing connectChoice.node.");
+    return;
+  }
+  if (params.action === "remove_node") {
+    requireProposedText(payload?.removeNode?.nodeId, "removeNode.nodeId");
   }
 }
 
@@ -716,15 +726,8 @@ const ResearchWebParams = Type.Object({
   topic: Type.String({
     description: "Research question or topic, e.g. 1990s county cold-storage accounting workflow or Tang dynasty courier stations.",
   }),
-  purpose: Type.Union([
-    Type.Literal("worldbuilding"),
-    Type.Literal("era"),
-    Type.Literal("profession"),
-    Type.Literal("market"),
-    Type.Literal("fact-check"),
-    Type.Literal("general"),
-  ], {
-    description: "Why this research is needed. Research reports are references only and must not directly mutate story state.",
+  purpose: Type.String({
+    description: "Why this research is needed, in the user's own terms. Research reports are references only and must not directly mutate story state.",
   }),
   depth: Type.Optional(Type.Union([
     Type.Literal("quick"),
@@ -818,14 +821,7 @@ const IngestMaterialParams = Type.Object({
   title: Type.Optional(Type.String({
     description: "Human-readable material title.",
   })),
-  purpose: Type.Optional(Type.Union([
-    Type.Literal("reference"),
-    Type.Literal("worldbuilding"),
-    Type.Literal("script"),
-    Type.Literal("storyboard"),
-    Type.Literal("research"),
-    Type.Literal("general"),
-  ], {
+  purpose: Type.Optional(Type.String({
     description: "Why this material is being ingested. It remains reference material unless the user explicitly promotes it.",
   })),
 });
@@ -883,14 +879,7 @@ const RetrieveMaterialParams = Type.Object({
   query: Type.String({
     description: "Natural-language query written by the agent from the user's current task, e.g. 冷库赔偿款 0607 账页 or storyboard shot requirements.",
   }),
-  purpose: Type.Optional(Type.Union([
-    Type.Literal("reference"),
-    Type.Literal("worldbuilding"),
-    Type.Literal("script"),
-    Type.Literal("storyboard"),
-    Type.Literal("research"),
-    Type.Literal("general"),
-  ], {
+  purpose: Type.Optional(Type.String({
     description: "Optional material purpose filter.",
   })),
   limit: Type.Optional(Type.Number({
@@ -1076,9 +1065,13 @@ const ImportChaptersParams = Type.Object({
   bookId: Type.Optional(Type.String({
     description: "Target book ID to import into. In active-book sessions, omit it to use the current active book; if provided, it must match the active book. In general chat there is no active book, so it is required and must be an existing book.",
   })),
-  sourcePath: Type.String({
+  sourcePath: Type.Optional(Type.String({
     description: "Local path of the chapter source: either the stored_path from the Uploaded Files block (project-relative, e.g. .inkos/uploads/<session>/novel.txt) or an absolute path on this machine that the user provided. A directory imports each .md/.txt file as one chapter in filename order; a single file is split into chapters automatically by heading lines.",
-  }),
+  })),
+  sourceText: Type.Optional(Type.String({
+    description: "Complete source text supplied by a deterministic host surface. Agent callers should prefer sourcePath for uploaded or long material.",
+  })),
+  sourceName: Type.Optional(Type.String({ description: "Human-readable source name used in progress output." })),
   splitPattern: Type.Optional(Type.String({
     description: "Single-file mode only: custom JavaScript regex source matching chapter heading lines. Omit to use the default pattern, which matches \"第X章/第X回\" and \"Chapter N\" headings.",
   })),
@@ -1099,6 +1092,7 @@ export function createImportChaptersTool(
   pipeline: PipelineRunner,
   activeBookId: string | null,
   projectRoot: string,
+  options: SkillAwareProductionOptions = {},
 ): AgentTool<typeof ImportChaptersParams> {
   return {
     name: "import_chapters",
@@ -1125,16 +1119,28 @@ export function createImportChaptersTool(
         );
       }
 
-      const resolvedSourcePath = isAbsolute(params.sourcePath)
-        ? params.sourcePath
-        : resolve(projectRoot, params.sourcePath);
-      onUpdate?.(textResult(`Reading chapters from ${resolvedSourcePath}...`));
-      const chapters = await loadChaptersFromPath(resolvedSourcePath, params.splitPattern);
+      const sourceText = params.sourceText?.trim();
+      const sourcePath = params.sourcePath?.trim();
+      if (!sourceText && !sourcePath) throw new Error("import_chapters requires sourcePath or sourceText.");
+      if (sourceText && sourcePath) throw new Error("import_chapters accepts sourcePath or sourceText, not both.");
+      let chapters;
+      if (sourceText) {
+        onUpdate?.(textResult(`Reading chapters from ${params.sourceName?.trim() || "inline source"}...`));
+        chapters = [...splitChapters(sourceText, params.splitPattern)];
+      } else {
+        const resolvedSourcePath = isAbsolute(sourcePath!)
+          ? sourcePath!
+          : resolve(projectRoot, sourcePath!);
+        onUpdate?.(textResult(`Reading chapters from ${resolvedSourcePath}...`));
+        chapters = await loadChaptersFromPath(resolvedSourcePath, params.splitPattern);
+      }
 
       onUpdate?.(textResult(`Found ${chapters.length} chapter(s); importing into "${targetBookId}"...`));
-      const result = await runPipelineWithAbortSignal(
+      const activatedSkills = resolveProductionToolSkills(options);
+      const result = await runPipelineWithAgentContext(
         pipeline,
         _signal,
+        activatedSkills,
         () => pipeline.importChapters({
           bookId: targetBookId,
           chapters,
@@ -1160,8 +1166,90 @@ export function createImportChaptersTool(
           totalWords: result.totalWords,
           nextChapter: result.nextChapter,
           importMode: params.importMode ?? "continuation",
+          skillIds: activatedSkillIds(activatedSkills),
         },
       );
+    },
+  };
+}
+
+const ImportCanonParams = Type.Object({
+  parentBookId: Type.String({ minLength: 1, description: "Existing parent Work whose canon should be projected into the active Work." }),
+});
+
+export function createImportCanonTool(
+  pipeline: PipelineRunner,
+  activeBookId: string,
+): AgentTool<typeof ImportCanonParams> {
+  const bookId = assertSafeBookId(activeBookId, "import_canon.bookId");
+  return {
+    name: "import_canon",
+    label: "Import parent canon",
+    description: "Project an existing parent Work's canonical foundation, state, hooks, summaries, and style into the active derived Work without changing the parent.",
+    parameters: ImportCanonParams,
+    async execute(_toolCallId, params, signal) {
+      signal?.throwIfAborted();
+      const parentBookId = assertSafeBookId(params.parentBookId, "import_canon.parentBookId");
+      const canon = await runPipelineWithAbortSignal(
+        pipeline,
+        signal,
+        () => pipeline.importCanon(bookId, parentBookId),
+      );
+      return textResult(`Imported canon from "${parentBookId}" into "${bookId}".`, {
+        kind: "parent_canon_imported",
+        workId: bookId,
+        bookId,
+        parentBookId,
+        canonLength: canon.length,
+      });
+    },
+  };
+}
+
+const RefreshFanficCanonParams = Type.Object({
+  sourceText: Type.Optional(Type.String({ description: "Source/canon text supplied directly by the user or deterministic host surface." })),
+  sourcePath: Type.Optional(Type.String({ description: "Project-relative uploaded source/canon path." })),
+  sourceName: Type.Optional(Type.String({ description: "Human-readable source title." })),
+  mode: Type.Optional(Type.String({ description: "Fan-fiction boundary in the user's own terms." })),
+});
+
+export function createRefreshFanficCanonTool(
+  pipeline: PipelineRunner,
+  projectRoot: string,
+  activeBookId: string,
+  options: SkillAwareProductionOptions = {},
+): AgentTool<typeof RefreshFanficCanonParams> {
+  const bookId = assertSafeBookId(activeBookId, "refresh_fanfic_canon.bookId");
+  return {
+    name: "refresh_fanfic_canon",
+    label: "Refresh fan-fiction canon",
+    description: "Recompile the active fan-fiction Work's source-grounded canon from user-provided material while preserving the existing Work and chapters.",
+    parameters: RefreshFanficCanonParams,
+    async execute(_toolCallId, params, signal) {
+      const source = await loadCreationSource({
+        projectRoot,
+        sourceText: params.sourceText,
+        sourcePath: params.sourcePath,
+        sourceName: params.sourceName,
+        purpose: "reference",
+      });
+      const book = await new StateManager(projectRoot).loadBookConfig(bookId);
+      const mode = params.mode?.trim() || book.fanficMode || "canon";
+      const activatedSkills = resolveProductionToolSkills(options);
+      await runPipelineWithAgentContext(
+        pipeline,
+        signal,
+        activatedSkills,
+        () => pipeline.importFanficCanon(bookId, source.text, source.name, mode),
+      );
+      return textResult(`Refreshed fan-fiction canon for "${bookId}" from "${source.name}".`, {
+        kind: "fanfic_canon_refreshed",
+        workId: bookId,
+        bookId,
+        sourceName: source.name,
+        mode,
+        skillIds: activatedSkillIds(activatedSkills),
+      });
     },
   };
 }
@@ -2138,6 +2226,7 @@ export function createPlayStartTool(
         sceneText,
         {
           kind: "play_world_started",
+          presentation: "immersive-scene",
           workId: world.id,
           worldId: world.id,
           runId,
@@ -2447,6 +2536,7 @@ export function createPlayStepTool(
           step.sceneText,
           {
             kind: "play_turn_advanced",
+            presentation: "immersive-scene",
             workId: target.worldId,
             worldId: target.worldId,
             runId: target.runId,
@@ -2545,6 +2635,7 @@ export function createPlayReviseTool(
             restored.sceneText || (isZh ? "已切换到指定互动回合版本。" : "Switched to the requested play turn variant."),
             {
               kind: "play_variant_restored",
+              presentation: "immersive-scene",
               workId: worldId,
               worldId,
               runId,
@@ -2572,6 +2663,7 @@ export function createPlayReviseTool(
           replay.sceneText,
           {
             kind: "play_turn_revised",
+            presentation: "immersive-scene",
             workId: worldId,
             worldId,
             runId,

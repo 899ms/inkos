@@ -865,28 +865,18 @@ function hasStructuredResultPreview(exec: ToolExecution): boolean {
 }
 
 function isPipelineTool(tool: string): boolean {
-  return tool === "create_book"
-    || tool === "revise_foundation"
-    || tool === "write_chapters"
-    || tool === "review_chapter"
-    || tool === "revise_chapter"
-    || tool === "export_book"
-    || tool === "resync_chapter_state"
-    || tool === "context_compression"
-    || tool === "propose_action"
-    || tool === "short_fiction_run"
-    || tool === "script_create"
-    || tool === "storyboard_create"
-    || tool === "interactive_film_create"
-    || tool === "generate_cover"
-    || tool === "play_edit"
-    || tool === "play_start"
-    || tool === "play_revise"
-    || tool === "play_step"
-    || tool === "create_narrative_forecast"
-    || tool === "get_narrative_forecast"
-    || tool === "select_narrative_branch";
+  return !UTILITY_TOOL_NAMES.has(tool);
 }
+
+const UTILITY_TOOL_NAMES = new Set([
+  "read",
+  "grep",
+  "ls",
+  "list_works",
+  "inspect_work",
+  "retrieve_material",
+  "use_skill",
+]);
 
 // -- Live elapsed timer hook --
 

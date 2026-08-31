@@ -61,7 +61,46 @@ const FORBIDDEN_ARCHITECTURE_TOKENS = [
   ["chapterWordCount: z.number().int().min(1000)", "host-owned chapter length floor"],
   ["maximum: 20", "host-owned multi-chapter action ceiling"],
   [".max(20)", "host-owned multi-chapter action ceiling"],
+  ["isTerminalProductionToolName", "host-owned production action stop list"],
+  ["hasUnansweredTerminalToolResult", "host-owned production action stop list"],
+  ["localAssistantStopStream", "host-forced Pi termination after a production action"],
+  ["pushToolResultsAsUser", "structured tool results rewritten as user prose"],
+  ["appendRestoredHistoryBoundary", "historical control message appended to the user-message stream"],
+  ["function suppressManualTextForTool", "tool presentation inferred from an action-name list"],
+  ["runWithCliProfileSkills", "legacy CLI-only production wrapper"],
+  ["async resyncChapterArtifacts(", "legacy parallel chapter-state repair entry"],
+  ["const READ_TOOLS", "capability risk inferred from a parallel tool-name list"],
+  ["const DESTRUCTIVE_TOOLS", "capability risk inferred from a parallel tool-name list"],
+  ["const CONFIRMED_CREATION_TOOLS", "capability confirmation inferred from a parallel tool-name list"],
+  ["function toolRisk(", "capability risk inferred from tool names"],
 ];
+
+const FORBIDDEN_ENTRY_CALLS = [
+  "pipeline.initBook(",
+  "pipeline.writeNextChapter(",
+  "pipeline.writeChapters(",
+  "pipeline.reviseDraft(",
+  "pipeline.reviseFoundation(",
+  "pipeline.resyncChapter",
+  "pipeline.importChapters(",
+  "pipeline.importCanon(",
+  "pipeline.importFanficCanon(",
+  "pipeline.generateStyleGuide(",
+  "runShortFictionProduction(",
+  "runScriptCreation(",
+  "runStoryboardCreation(",
+  "runInteractiveFilmCreation(",
+];
+
+const HARNESS_ENTRY_PATHS = [
+  "packages/cli/src/commands/",
+  "packages/studio/src/api/server.ts",
+];
+
+const AGENT_CONSTRUCTION_PATHS = new Set([
+  "packages/core/src/agent/agent-session.ts",
+  "packages/core/src/agent/worker-agent.ts",
+]);
 
 const ACTION_SURFACE_PATHS = [
   "packages/core/src/agent/",
@@ -187,6 +226,7 @@ for (const path of FORBIDDEN_SOURCE_PATHS) {
 for (const file of files) {
   const content = await readFile(file, "utf-8");
   const lines = content.split(/\r?\n/);
+  const relativeFile = relative(ROOT, file);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const windowText = lines.slice(Math.max(0, index - 4), Math.min(lines.length, index + 5)).join("\n");
@@ -204,6 +244,23 @@ for (const file of files) {
         file: relative(ROOT, file),
         line: index + 1,
         text: line.trim(),
+      });
+    }
+    if (
+      HARNESS_ENTRY_PATHS.some((prefix) => relativeFile.startsWith(prefix))
+      && FORBIDDEN_ENTRY_CALLS.some((token) => line.includes(token))
+    ) {
+      findings.push({
+        file: relativeFile,
+        line: index + 1,
+        text: `production entry bypasses Harness capability: ${line.trim()}`,
+      });
+    }
+    if (line.includes("new Agent(") && !AGENT_CONSTRUCTION_PATHS.has(relativeFile)) {
+      findings.push({
+        file: relativeFile,
+        line: index + 1,
+        text: `parallel Agent construction outside the shared main/worker kernels: ${line.trim()}`,
       });
     }
   }

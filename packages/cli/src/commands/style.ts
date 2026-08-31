@@ -1,6 +1,10 @@
 import { Command } from "commander";
-import { PipelineRunner } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, runWithCliProfileSkills } from "../utils.js";
+import {
+  PipelineRunner,
+  createGenerateStyleGuideTool,
+  executeExplicitCapabilityTool,
+} from "@actalk/inkos-core";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -21,13 +25,16 @@ styleCommand
       const text = await readFile(resolve(file), "utf-8");
       const config = await loadConfig();
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
-      await runWithCliProfileSkills(
-        pipeline,
-        root,
-        "longform-novel",
-        () => pipeline.generateStyleGuide(bookId, text, opts.name ?? file),
-        { extraSkillIds: ["inkos-long-story-analysis", "inkos-imitation-writing"] },
-      );
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-long-story-analysis", "inkos-imitation-writing"],
+      });
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "generate_style_guide", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createGenerateStyleGuideTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
+        workId: bookId,
+        parameters: { referenceText: text, sourceName: opts.name ?? file },
+      });
       const result = { bookId, file, styleGuide: "story/style_guide.md" };
       log(opts.json ? JSON.stringify(result, null, 2) : `Style guide imported to "${bookId}" from "${file}"`);
     } catch (error) {

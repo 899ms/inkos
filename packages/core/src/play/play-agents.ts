@@ -398,17 +398,13 @@ function buildSceneReconcilerUserPrompt(input: PlaySceneReconcileInput, language
 function buildActionInterpreterSystemPrompt(language: "zh" | "en"): string {
   if (language === "en") {
     return [
-      "You are an interactive-fiction action interpreter.",
-      "Your job is to normalize one line of the player's natural language into one of five action kinds: look / say / move / do / wait.",
-      "Do not add drama for the player, do not advance the plot, do not write scene prose.",
+      "Normalize the player's literal input into one action record without adding outcomes or scene prose.",
       "look = observe/examine/recall a clue; say = speak/probe/confront; move = move to a location; do = perform an action/use an item/investigate; wait = wait/stall/watch.",
       "Submit the normalized action through the result tool.",
     ].join("\n");
   }
   return [
-    "你是互动小说动作理解器。",
-    "你的任务是把玩家一句自然语言，归一成五类动作之一：look / say / move / do / wait。",
-    "不要替玩家加戏，不要直接推进剧情，不要写场景正文。",
+    "把玩家原话归一为一条动作记录，不添加结果或场景正文。",
     "look=观察/检查/回忆线索；say=说话/试探/质问；move=移动到地点；do=执行动作/使用物品/调查；wait=等待/拖延/旁观。",
     "通过结果工具提交归一后的动作。",
   ].join("\n");
@@ -439,21 +435,21 @@ function buildActionInterpreterUserPrompt(input: PlayActionInterpreterInput, lan
 
 function buildWorldMutatorSystemPrompt(language: "zh" | "en"): string {
   const contract = language === "en"
-    ? [
-        "Draft this turn's state changes from the player's literal action and authoritative context using the activated play-world Skill. Do not write scene prose or commit state.",
-        "Create only facts made real by this turn. Reuse exact roster ids. The player id is always actor_player; only its label, summary, and status vary.",
+      ? [
+        "Project the turn into the world-mutation schema after applying the activated play-world Skill. Do not write scene prose or commit state.",
+        "Reuse exact roster ids. The player id is always actor_player; only its label, summary, and status vary.",
         "Represent tangible discovered or held things as item/evidence/clue entities. A physical holding is an actor_player edge with value.role=holding; set value.physical=true for physical evidence or clues. Mere knowledge is observed, not held.",
         "Record meaningful relationships as edges with value.role=relation. stateSlots are optional and appear only when the world contract authorizes that kind of tracking.",
-        "For non-opening turns, timeAdvance records the natural elapsed duration, resulting anchor, rationale, and synchronized off-screen changes. It is not a fixed tick.",
+        "For non-opening turns, encode elapsed duration, resulting anchor, rationale, and synchronized off-screen changes in timeAdvance.",
         "If the action cannot proceed, set blocked=true with blockedReason.",
         "Call submit_world_mutation once with summary, timeAdvance, entities, edges, stateSlots, evidenceTransitions, blocked, blockedReason, and notes. The host owns eventId, turn, and actionKind.",
       ]
-    : [
-        "按已激活的开放世界 Skill，根据玩家原话与权威上下文起草本回合状态变化。不要写场景正文，也不要替宿主落库。",
-        "只创建本回合真正落地的事实，并复用名册精确 id。玩家 id 永远是 actor_player，只可改变 label、summary、status。",
+      : [
+        "应用已激活的开放世界 Skill 后，把本回合投影到 world-mutation schema；不要写场景正文，也不要替宿主落库。",
+        "复用名册精确 id。玩家 id 永远是 actor_player，只可改变 label、summary、status。",
         "玩家发现或持有的实物必须建成 item/evidence/clue 实体。实际持有使用 actor_player 指向实体且 value.role=holding；物理证据或线索再设 value.physical=true。只知道某事属于 observed，不是 holding。",
         "有意义的关系写成 value.role=relation 的 edge。只有世界契约允许时才使用 stateSlots。",
-        "非开场回合的 timeAdvance 记录动作自然经过时长、结束时间锚、理由和同期世界变化，不是固定 tick。",
+        "非开场回合把经过时长、结束时间锚、理由和同期世界变化写入 timeAdvance。",
         "动作无法执行时设置 blocked=true 和 blockedReason。",
         "调用一次 submit_world_mutation，提交 summary、timeAdvance、entities、edges、stateSlots、evidenceTransitions、blocked、blockedReason、notes；eventId、turn、actionKind 由宿主补入。",
       ];
@@ -500,15 +496,15 @@ export function buildSceneRendererSystemPrompt(mode: "open" | "guided" = "open",
       ? "suggestedActions 只在真实抉择点提供少量可选跳板。"
       : "suggestedActions 必须为空；开放世界只接收玩家自由输入。";
   const contract = language === "en"
-    ? [
-        "Render the playable scene with the activated play-world Skill from the already-applied state.",
+      ? [
+        "Render sceneText from the already-applied state after applying the activated play-world Skill.",
         "Named people, places, objects, clues, and organizations may appear only when present in Applied changes or the current state. Treat supplied elapsed time and anchor as canonical.",
         "sceneText is narrative prose only; choices belong only in suggestedActions.",
         actionsRule,
         "Submit sceneText and suggestedActions through the result tool.",
       ]
-    : [
-        "按已激活的开放世界 Skill，根据已经应用的状态渲染可玩场景。",
+      : [
+        "应用已激活的开放世界 Skill 后，根据已经应用的状态渲染 sceneText。",
         "具名人物、地点、物件、线索和组织只能来自已应用变化或当前状态；输入的 elapsed 与 anchor 是权威时间。",
         "sceneText 只写叙事正文，选择只能放在 suggestedActions。",
         actionsRule,

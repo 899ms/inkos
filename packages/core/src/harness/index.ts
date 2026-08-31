@@ -73,6 +73,7 @@ export {
   createWriteChaptersTool,
   createReviewChapterTool,
   createReviseChapterTool,
+  createGenerateStyleGuideTool,
 } from "./tools/longform-production.js";
 export {
   assertSafeTruthFileName,

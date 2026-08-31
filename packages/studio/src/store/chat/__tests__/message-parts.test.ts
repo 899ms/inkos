@@ -279,6 +279,7 @@ describe("buildPartsFromEvents", () => {
         result: "advanced",
         details: {
           kind: "play_turn_advanced",
+          presentation: "immersive-scene",
           sceneText: "工具生成的权威场景。",
           suggestedActions: ["检查票根"],
         },
@@ -301,6 +302,7 @@ describe("buildPartsFromEvents", () => {
         result: "revised",
         details: {
           kind: "play_turn_revised",
+          presentation: "immersive-scene",
           sceneText: "工具生成的新版本场景。",
           suggestedActions: ["检查录音笔"],
         },

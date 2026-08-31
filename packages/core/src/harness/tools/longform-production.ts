@@ -54,6 +54,11 @@ const ReviseChapterParams = Type.Object({
   ])),
 });
 
+const StyleGuideParams = Type.Object({
+  referenceText: Type.String({ minLength: 1, description: "User-provided reference prose used only to derive an operational style guide." }),
+  sourceName: Type.Optional(Type.String({ description: "Human-readable reference source name." })),
+});
+
 function textResult<T>(text: string, details: T): AgentToolResult<T> {
   return { content: [{ type: "text", text }], details };
 }
@@ -273,6 +278,37 @@ export function createReviseChapterTool(
             skillIds: skills.map((skill) => skill.skill.id),
           },
         );
+    },
+  };
+}
+
+export function createGenerateStyleGuideTool(
+  pipeline: PipelineRunner,
+  activeBookId: string,
+  options: LongformToolOptions = {},
+): AgentTool<typeof StyleGuideParams> {
+  return {
+    name: "generate_style_guide",
+    label: "Generate style guide",
+    description: "Compile user-provided reference prose into an operational style guide for the active Work and persist it as a revisioned artifact.",
+    parameters: StyleGuideParams,
+    async execute(_toolCallId, params, signal) {
+      const bookId = resolveBookId("generate_style_guide", undefined, activeBookId);
+      const skills = activatedSkills(options, "style-guide");
+      const guide = await runPipeline(
+        pipeline,
+        signal,
+        options,
+        () => pipeline.generateStyleGuide(bookId, params.referenceText, params.sourceName),
+      );
+      return textResult(`Generated style guide for "${bookId}".`, {
+        kind: "style_guide_generated",
+        workId: bookId,
+        bookId,
+        sourceName: params.sourceName,
+        guideLength: guide.length,
+        skillIds: skills.map((skill) => skill.skill.id),
+      });
     },
   };
 }

@@ -337,7 +337,11 @@ describe("chat message actions", () => {
             label: "启动互动世界",
             status: "completed",
             startedAt: 2,
-            details: { kind: "play_world_started" },
+            details: {
+              kind: "play_world_started",
+              requestedIntent: "play_start",
+              presentation: "immersive-scene",
+            },
           },
         ],
       },

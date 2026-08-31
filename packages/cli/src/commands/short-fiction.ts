@@ -85,7 +85,7 @@ shortCommand
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { quiet: Boolean(opts.json) }));
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "short-fiction", actionId: "short_fiction_run", profileId: "short-fiction" },
+        binding: { capabilityId: "short-fiction", actionId: "short_fiction_run", profileId: "short-fiction", risk: "recoverable-write" },
         tool: createShortFictionRunTool(pipeline, root, { language, defaultSkills: activatedSkills }),
         parameters: {
           direction: opts.direction,

@@ -418,14 +418,8 @@ function proposedActionFrom(exec: ToolExecution): string | null {
 
 function completesProposedAction(exec: ToolExecution, action: string): boolean {
   if (exec.status !== "completed") return false;
-  if (action === "create_book") return actionToolName(exec.tool) === "create_book";
-  if (action === "short_run") return exec.tool === "short_fiction_run";
-  if (action === "play_start") return exec.tool === "play_start";
-  if (action === "generate_cover") return exec.tool === "generate_cover";
-  if (action === "script_create") return exec.tool === "script_create";
-  if (action === "storyboard_create") return exec.tool === "storyboard_create";
-  if (action === "interactive_film_create") return exec.tool === "interactive_film_create";
-  return false;
+  if (!exec.details || typeof exec.details !== "object") return false;
+  return (exec.details as Record<string, unknown>).requestedIntent === action;
 }
 
 export function deriveResolvedProposals(

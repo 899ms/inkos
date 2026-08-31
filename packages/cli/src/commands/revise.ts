@@ -1,6 +1,13 @@
 import { Command } from "commander";
-import { DEFAULT_REVISE_MODE, PipelineRunner, StateManager, type ReviseMode } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, runWithCliProfileSkills } from "../utils.js";
+import {
+  DEFAULT_REVISE_MODE,
+  PipelineRunner,
+  StateManager,
+  createReviseChapterTool,
+  executeExplicitCapabilityTool,
+  type ReviseMode,
+} from "@actalk/inkos-core";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatNotifyCommandTitle,
   formatNotifyFailureBody,
@@ -47,13 +54,25 @@ export const reviseCommand = new Command("revise")
       const mode = opts.mode as ReviseMode;
       if (!opts.json) log(`Revising "${bookId}"${chapterNumber ? ` chapter ${chapterNumber}` : " (latest)"} [mode: ${mode}]...`);
 
-      const result = await runWithCliProfileSkills(
-        pipeline,
-        root,
-        "longform-novel",
-        () => pipeline.reviseDraft(bookId, chapterNumber, mode),
-        { includeRecommended: true },
-      );
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createReviseChapterTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
+        workId: bookId,
+        parameters: {
+          instruction: opts.brief?.trim() || "Revise the chapter from its persisted observations and Work authority.",
+          bookId,
+          ...(chapterNumber ? { chapterNumber } : {}),
+          mode,
+        },
+      });
+      const result = action.data as {
+        readonly chapterNumber: number;
+        readonly wordCount: number;
+        readonly changed: boolean;
+        readonly observations: ReadonlyArray<unknown>;
+      };
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));

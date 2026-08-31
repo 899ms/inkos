@@ -12,6 +12,8 @@ export {
   createIngestMaterialTool,
   createManageBookReferenceTool,
   createImportChaptersTool,
+  createImportCanonTool,
+  createRefreshFanficCanonTool,
   createResyncChapterStateTool,
   createGenerateCoverTool,
   createPlayStartTool,
@@ -39,7 +41,12 @@ export {
   type AgentSessionConfig,
   type AgentSessionResult,
 } from "./agent-session.js";
-export { createUseSkillTool, type CreateUseSkillToolOptions } from "./skill-tool.js";
+export {
+  createUseSkillTool,
+  hydrateActivatedSkillGuidance,
+  type CreateUseSkillToolOptions,
+} from "./skill-tool.js";
+export { appendActivatedSkillGuidance } from "../agents/base.js";
 export {
   createSetWorldAnchorTool,
   createUpsertCharactersTool,

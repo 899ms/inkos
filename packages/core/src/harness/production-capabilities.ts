@@ -11,6 +11,7 @@ import {
   createGenerateCoverTool,
   createGrepTool,
   createImportChaptersTool,
+  createImportCanonTool,
   createIngestMaterialTool,
   createInteractiveFilmCreationTool,
   createInspectWorkTool,
@@ -21,6 +22,7 @@ import {
   createPlayReviseTool,
   createPlayStartTool,
   createPlayStepTool,
+  createRefreshFanficCanonTool,
   createProposeActionTool,
   createReadTool,
   createResearchWebTool,
@@ -38,6 +40,7 @@ import {
   createFoundationRevisionTool,
   createReviewChapterTool,
   createReviseChapterTool,
+  createGenerateStyleGuideTool,
   createWriteChaptersTool,
 } from "./tools/longform-production.js";
 import { createExportBookTool } from "./tools/export-book.js";
@@ -104,61 +107,39 @@ export interface ProductionCapabilityEnvironment {
   readonly interactiveFilmAuthoring?: boolean;
 }
 
-const READ_TOOLS = new Set([
-  "propose_action",
-  "read",
-  "list_works",
-  "inspect_work",
-  "grep",
-  "ls",
-  "research_web",
-  "retrieve_material",
-  "get_narrative_forecast",
-  "use_skill",
-]);
-
-const DESTRUCTIVE_TOOLS = new Set(["delete_latest_chapter"]);
-
-const CONFIRMED_CREATION_TOOLS = new Set([
-  "short_fiction_run",
-  "script_create",
-  "storyboard_create",
-  "interactive_film_create",
-  "play_start",
-  "generate_cover",
-  "translation_create",
-  "fanfic_create",
-  "continuation_import",
-  "spinoff_create",
-  "imitation_create",
-]);
-
 type ProductionAgentTool = AgentTool<any, any>;
+
+interface ProductionToolAction {
+  readonly tool: ProductionAgentTool;
+  readonly risk: ActionRisk;
+  readonly requiresConfirmation?: boolean;
+}
 
 export interface ConfirmedCapabilityBinding {
   readonly capabilityId: string;
   readonly actionId: string;
   readonly profileId: string;
+  readonly risk: ActionRisk;
 }
 
 const CONFIRMED_CAPABILITY_BINDINGS: Readonly<Partial<Record<RequestedIntent, ConfirmedCapabilityBinding>>> = {
-  create_book: { capabilityId: "longform", actionId: "create_book", profileId: "longform-novel" },
-  write_next: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel" },
-  short_run: { capabilityId: "short-fiction", actionId: "short_fiction_run", profileId: "short-fiction" },
-  play_start: { capabilityId: "interactive-world", actionId: "play_start", profileId: "interactive-world" },
-  play_step: { capabilityId: "interactive-world", actionId: "play_step", profileId: "interactive-world" },
-  generate_cover: { capabilityId: "visual", actionId: "generate_cover", profileId: "visual-asset" },
-  fanfic_init: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default" },
-  continuation_import: { capabilityId: "adaptation", actionId: "continuation_import", profileId: "workspace-default" },
-  spinoff_create: { capabilityId: "adaptation", actionId: "spinoff_create", profileId: "workspace-default" },
-  style_imitation: { capabilityId: "adaptation", actionId: "imitation_create", profileId: "workspace-default" },
-  script_create: { capabilityId: "script", actionId: "script_create", profileId: "script" },
-  storyboard_create: { capabilityId: "storyboard", actionId: "storyboard_create", profileId: "storyboard" },
-  interactive_film_create: { capabilityId: "interactive-film", actionId: "interactive_film_create", profileId: "interactive-film" },
-  translation_create: { capabilityId: "translation", actionId: "translation_create", profileId: "translation" },
-  draft_structure: { capabilityId: "interactive-film", actionId: "draft_structure", profileId: "interactive-film" },
-  connect_choice: { capabilityId: "interactive-film", actionId: "connect_choice", profileId: "interactive-film" },
-  remove_node: { capabilityId: "interactive-film", actionId: "remove_node", profileId: "interactive-film" },
+  create_book: { capabilityId: "longform", actionId: "create_book", profileId: "longform-novel", risk: "recoverable-write" },
+  write_next: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+  short_run: { capabilityId: "short-fiction", actionId: "short_fiction_run", profileId: "short-fiction", risk: "recoverable-write" },
+  play_start: { capabilityId: "interactive-world", actionId: "play_start", profileId: "interactive-world", risk: "recoverable-write" },
+  play_step: { capabilityId: "interactive-world", actionId: "play_step", profileId: "interactive-world", risk: "recoverable-write" },
+  generate_cover: { capabilityId: "visual", actionId: "generate_cover", profileId: "visual-asset", risk: "recoverable-write" },
+  fanfic_init: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default", risk: "recoverable-write" },
+  continuation_import: { capabilityId: "adaptation", actionId: "continuation_import", profileId: "workspace-default", risk: "recoverable-write" },
+  spinoff_create: { capabilityId: "adaptation", actionId: "spinoff_create", profileId: "workspace-default", risk: "recoverable-write" },
+  style_imitation: { capabilityId: "adaptation", actionId: "imitation_create", profileId: "workspace-default", risk: "recoverable-write" },
+  script_create: { capabilityId: "script", actionId: "script_create", profileId: "script", risk: "recoverable-write" },
+  storyboard_create: { capabilityId: "storyboard", actionId: "storyboard_create", profileId: "storyboard", risk: "recoverable-write" },
+  interactive_film_create: { capabilityId: "interactive-film", actionId: "interactive_film_create", profileId: "interactive-film", risk: "recoverable-write" },
+  translation_create: { capabilityId: "translation", actionId: "translation_create", profileId: "translation", risk: "recoverable-write" },
+  draft_structure: { capabilityId: "interactive-film", actionId: "draft_structure", profileId: "interactive-film", risk: "recoverable-write" },
+  connect_choice: { capabilityId: "interactive-film", actionId: "connect_choice", profileId: "interactive-film", risk: "recoverable-write" },
+  remove_node: { capabilityId: "interactive-film", actionId: "remove_node", profileId: "interactive-film", risk: "destructive-write" },
 };
 
 export function confirmedCapabilityBinding(intent: RequestedIntent): ConfirmedCapabilityBinding | undefined {
@@ -174,8 +155,7 @@ export function createSingleToolCapabilityRegistry(input: {
     registry,
     input.binding.capabilityId,
     input.binding.capabilityId,
-    [input.tool],
-    { forceConfirmation: [input.tool.name] },
+    [actionTool(input.tool, input.binding.risk, true)],
   );
   return registry;
 }
@@ -193,93 +173,110 @@ export function createProductionCapabilityRegistry(
     requestedSkillIds: environment.requestedSkillIds,
     attachmentPaths: environment.attachmentPaths,
   });
-  const workspaceTools: ProductionAgentTool[] = [
-    proposalTool,
-    createReadTool(environment.projectRoot, {
+  const workspaceTools: ProductionToolAction[] = [
+    readAction(proposalTool),
+    readAction(createReadTool(environment.projectRoot, {
       scope: "project",
       allowSystemPaths: environment.allowSystemFileRead,
-    }),
-    createListWorksTool(environment.projectRoot),
-    createInspectWorkTool(environment.projectRoot),
-    createResearchWebTool(environment.projectRoot),
-    createIngestMaterialTool(environment.projectRoot),
-    createRetrieveMaterialTool(environment.projectRoot),
+    })),
+    readAction(createListWorksTool(environment.projectRoot)),
+    readAction(createInspectWorkTool(environment.projectRoot)),
+    readAction(createResearchWebTool(environment.projectRoot)),
+    writeAction(createIngestMaterialTool(environment.projectRoot)),
+    readAction(createRetrieveMaterialTool(environment.projectRoot)),
   ];
   if (environment.work && ["short-fiction", "script", "storyboard", "translation", "visual-asset"].includes(environment.work.profileId)) {
-    workspaceTools.push(createReplaceWorkArtifactTool(environment.projectRoot, environment.work.id));
+    workspaceTools.push(writeAction(createReplaceWorkArtifactTool(environment.projectRoot, environment.work.id)));
   }
-  if (environment.intentSkillTool) workspaceTools.push(environment.intentSkillTool);
+  if (environment.intentSkillTool) workspaceTools.push(readAction(environment.intentSkillTool));
   registerToolCapability(registry, "workspace", "Creative workspace", workspaceTools);
 
-  const longformTools: ProductionAgentTool[] = environment.work
+  const longformTools: ProductionToolAction[] = environment.work
     ? [
-        createFoundationRevisionTool(environment.pipeline, environment.work.id, {
+        writeAction(createFoundationRevisionTool(environment.pipeline, environment.work.id, {
           language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
-        }),
-        createWriteChaptersTool(environment.pipeline, environment.work.id, {
+        })),
+        writeAction(createWriteChaptersTool(environment.pipeline, environment.work.id, {
           language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
-        }),
-        createReviewChapterTool(environment.pipeline, environment.work.id, {
+        })),
+        writeAction(createReviewChapterTool(environment.pipeline, environment.work.id, {
           language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
-        }),
-        createReviseChapterTool(environment.pipeline, environment.work.id, {
+        })),
+        writeAction(createReviseChapterTool(environment.pipeline, environment.work.id, {
           language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
-        }),
-        createExportBookTool(new StateManager(environment.projectRoot), environment.work.id),
-        createWriteTruthFileTool(environment.projectRoot, environment.work.id),
-        createRenameEntityTool(environment.projectRoot, environment.work.id),
-        createPatchChapterTextTool(environment.projectRoot, environment.work.id),
-        createReplaceChapterTextTool(environment.projectRoot, environment.work.id),
-        createResyncChapterStateTool(environment.pipeline, environment.work.id, {
+        })),
+        writeAction(createGenerateStyleGuideTool(environment.pipeline, environment.work.id, {
+          language: lang,
+          activeSkills: environment.activeSkills,
+          workerSkills: environment.workerSkills,
+        })),
+        writeAction(createExportBookTool(new StateManager(environment.projectRoot), environment.work.id)),
+        writeAction(createWriteTruthFileTool(environment.projectRoot, environment.work.id)),
+        writeAction(createRenameEntityTool(environment.projectRoot, environment.work.id)),
+        writeAction(createPatchChapterTextTool(environment.projectRoot, environment.work.id)),
+        writeAction(createReplaceChapterTextTool(environment.projectRoot, environment.work.id)),
+        writeAction(createResyncChapterStateTool(environment.pipeline, environment.work.id, {
           language: lang,
           defaultSkills: environment.profileSkills?.("longform-novel"),
           activeSkills: environment.activeSkills,
-        }),
-        createDeleteLatestChapterTool(environment.projectRoot, environment.work.id),
-        createManageBookReferenceTool(environment.projectRoot, environment.work.id),
-        createImportChaptersTool(environment.pipeline, environment.work.id, environment.projectRoot),
-        createNarrativeForecastCreateTool(environment.pipeline, environment.work.id, environment.projectRoot),
-        createNarrativeForecastGetTool(environment.work.id, environment.projectRoot),
-        createNarrativeForecastSelectTool(environment.work.id, environment.projectRoot),
-        createGrepTool(environment.projectRoot),
-        createLsTool(environment.projectRoot),
+        })),
+        destructiveAction(createDeleteLatestChapterTool(environment.projectRoot, environment.work.id)),
+        writeAction(createManageBookReferenceTool(environment.projectRoot, environment.work.id)),
+        writeAction(createImportChaptersTool(environment.pipeline, environment.work.id, environment.projectRoot, {
+          defaultSkills: environment.profileSkills?.("longform-novel"),
+          activeSkills: environment.activeSkills,
+        })),
+        writeAction(createImportCanonTool(environment.pipeline, environment.work.id)),
+        writeAction(createRefreshFanficCanonTool(environment.pipeline, environment.projectRoot, environment.work.id, {
+          defaultSkills: [
+            ...(environment.profileSkills?.("longform-novel") ?? []),
+            ...(environment.skillActivations?.("inkos-story-import", "inkos-fanfic-writing") ?? []),
+          ],
+          activeSkills: environment.activeSkills,
+        })),
+        writeAction(createNarrativeForecastCreateTool(environment.pipeline, environment.work.id, environment.projectRoot, {
+          defaultSkills: environment.profileSkills?.("longform-novel"),
+          activeSkills: environment.activeSkills,
+        })),
+        readAction(createNarrativeForecastGetTool(environment.work.id, environment.projectRoot)),
+        writeAction(createNarrativeForecastSelectTool(environment.work.id, environment.projectRoot)),
+        readAction(createGrepTool(environment.projectRoot)),
+        readAction(createLsTool(environment.projectRoot)),
       ]
-    : [createBookFoundationTool(environment.pipeline, {
+    : [confirmedAction(createBookFoundationTool(environment.pipeline, {
         actionPayload: environment.actionPayload,
         language: lang,
         activeSkills: environment.activeSkills,
         workerSkills: environment.workerSkills,
-      })];
-  registerToolCapability(registry, "longform", "Long-form creation", longformTools, {
-    forceConfirmation: environment.work ? [] : ["create_book"],
-  });
+      }))];
+  registerToolCapability(registry, "longform", "Long-form creation", longformTools);
 
   registerToolCapability(registry, "short-fiction", "Short fiction", [
-    createShortFictionRunTool(environment.pipeline, environment.projectRoot, {
+    confirmedAction(createShortFictionRunTool(environment.pipeline, environment.projectRoot, {
       actionPayload: environment.actionPayload,
       language: lang,
       defaultSkills: environment.profileSkills?.("short-fiction"),
       activeSkills: environment.activeSkills,
-    }),
+    })),
   ]);
   registerToolCapability(registry, "script", "Script creation", [
-    createScriptCreationTool(environment.pipeline, environment.projectRoot, {
+    confirmedAction(createScriptCreationTool(environment.pipeline, environment.projectRoot, {
       actionPayload: environment.actionPayload,
       language: lang,
       defaultSkills: environment.profileSkills?.("script"),
       activeSkills: environment.activeSkills,
-    }),
+    })),
   ]);
   registerToolCapability(registry, "storyboard", "Storyboard creation", [
-    createStoryboardCreationTool(environment.pipeline, environment.projectRoot, {
+    confirmedAction(createStoryboardCreationTool(environment.pipeline, environment.projectRoot, {
       actionPayload: environment.actionPayload,
       language: lang,
       defaultSkills: environment.profileSkills?.("storyboard"),
       activeSkills: environment.activeSkills,
-    }),
+    })),
   ]);
 
-  const interactiveFilmTools = environment.interactiveFilmAuthoring && environment.work
+  const interactiveFilmTools: ProductionToolAction[] = environment.interactiveFilmAuthoring && environment.work
     ? createFilmAuthoringTools({
         projectRoot: environment.projectRoot,
         projectId: environment.work.id,
@@ -295,33 +292,33 @@ export function createProductionCapabilityRegistry(
         ),
         proposeActionTool: proposalTool,
         language: lang,
-      })
-    : [createInteractiveFilmCreationTool(environment.pipeline, environment.projectRoot, {
+      }).map((tool) => tool === proposalTool ? readAction(tool) : writeAction(tool))
+    : [confirmedAction(createInteractiveFilmCreationTool(environment.pipeline, environment.projectRoot, {
         actionPayload: environment.actionPayload,
         language: lang,
         defaultSkills: environment.profileSkills?.("interactive-film"),
         activeSkills: environment.activeSkills,
-      })];
+      }))];
   registerToolCapability(registry, "interactive-film", "Interactive film", interactiveFilmTools);
 
   const interactiveWorldId = environment.work?.profileId === "interactive-world"
     ? environment.work.id
     : environment.sessionId;
-  const interactiveWorldTools = environment.playWorldExists
+  const interactiveWorldTools: ProductionToolAction[] = environment.playWorldExists
     ? [
-        createPlayEditTool(environment.projectRoot, interactiveWorldId, lang),
-        createPlayReviseTool(environment.pipeline, environment.projectRoot, interactiveWorldId, {
+        writeAction(createPlayEditTool(environment.projectRoot, interactiveWorldId, lang)),
+        writeAction(createPlayReviseTool(environment.pipeline, environment.projectRoot, interactiveWorldId, {
           language: lang,
           defaultSkills: environment.profileSkills?.("interactive-world"),
           activeSkills: environment.activeSkills,
-        }),
-        createPlayStepTool(environment.pipeline, environment.projectRoot, interactiveWorldId, {
+        })),
+        writeAction(createPlayStepTool(environment.pipeline, environment.projectRoot, interactiveWorldId, {
           language: lang,
           defaultSkills: environment.profileSkills?.("interactive-world"),
           activeSkills: environment.activeSkills,
-        }),
+        })),
       ]
-    : [createPlayStartTool(
+    : [confirmedAction(createPlayStartTool(
         environment.pipeline,
         environment.projectRoot,
         interactiveWorldId,
@@ -332,51 +329,51 @@ export function createProductionCapabilityRegistry(
           defaultSkills: environment.profileSkills?.("interactive-world"),
           activeSkills: environment.activeSkills,
         },
-      )];
+      ))];
   registerToolCapability(registry, "interactive-world", "Interactive world", interactiveWorldTools);
 
-  const translationTools = environment.work?.profileId === "translation"
+  const translationTools: ProductionToolAction[] = environment.work?.profileId === "translation"
     ? [
-        createTranslationRunTool(environment.pipeline, environment.projectRoot, environment.work.id, {
+        writeAction(createTranslationRunTool(environment.pipeline, environment.projectRoot, environment.work.id, {
           defaultSkills: environment.profileSkills?.("translation"),
           activeSkills: environment.activeSkills,
-        }),
-        createTranslationExportTool(environment.projectRoot, environment.work.id),
+        })),
+        writeAction(createTranslationExportTool(environment.projectRoot, environment.work.id)),
       ]
-    : [createTranslationCreateTool(environment.projectRoot, { actionPayload: environment.actionPayload })];
+    : [confirmedAction(createTranslationCreateTool(environment.projectRoot, { actionPayload: environment.actionPayload }))];
   registerToolCapability(registry, "translation", "Translation", translationTools);
   registerToolCapability(registry, "adaptation", "Adaptation", [
-    createFanficBookTool(environment.pipeline, environment.projectRoot, {
+    confirmedAction(createFanficBookTool(environment.pipeline, environment.projectRoot, {
       defaultSkills: mergeActivatedSkillGuidance(
         environment.profileSkills?.("longform-novel") ?? [],
         environment.skillActivations?.("inkos-story-import", "inkos-fanfic-writing") ?? [],
       ),
       activeSkills: environment.activeSkills,
-    }),
-    createContinuationImportTool(environment.pipeline, environment.work?.id ?? null, environment.projectRoot, {
+    })),
+    confirmedAction(createContinuationImportTool(environment.pipeline, environment.work?.id ?? null, environment.projectRoot, {
       defaultSkills: mergeActivatedSkillGuidance(
         environment.profileSkills?.("longform-novel") ?? [],
         environment.skillActivations?.("inkos-story-import", "inkos-continuation-writing") ?? [],
       ),
       activeSkills: environment.activeSkills,
-    }),
-    createSpinoffBookTool(environment.pipeline, environment.projectRoot, {
+    })),
+    confirmedAction(createSpinoffBookTool(environment.pipeline, environment.projectRoot, {
       defaultSkills: mergeActivatedSkillGuidance(
         environment.profileSkills?.("longform-novel") ?? [],
         environment.skillActivations?.("inkos-spinoff-writing") ?? [],
       ),
       activeSkills: environment.activeSkills,
-    }),
-    createImitationBookTool(environment.pipeline, environment.projectRoot, {
+    })),
+    confirmedAction(createImitationBookTool(environment.pipeline, environment.projectRoot, {
       defaultSkills: mergeActivatedSkillGuidance(
         environment.profileSkills?.("longform-novel") ?? [],
         environment.skillActivations?.("inkos-imitation-writing") ?? [],
       ),
       activeSkills: environment.activeSkills,
-    }),
+    })),
   ]);
   registerToolCapability(registry, "visual", "Visual assets", [
-    createGenerateCoverTool(environment.projectRoot, { actionPayload: environment.actionPayload }),
+    confirmedAction(createGenerateCoverTool(environment.projectRoot, { actionPayload: environment.actionPayload })),
   ]);
   return registry;
 }
@@ -418,30 +415,49 @@ function registerToolCapability(
   registry: CapabilityRegistry,
   id: string,
   title: string,
-  tools: ReadonlyArray<ProductionAgentTool>,
-  options: { readonly forceConfirmation?: ReadonlyArray<string> } = {},
+  actions: ReadonlyArray<ProductionToolAction>,
 ): void {
-  const forced = new Set(options.forceConfirmation ?? []);
   const capability: Capability = {
     id,
     title,
     description: title,
-    actions: tools.map((tool) => toolBackedAction(tool, forced.has(tool.name))),
+    actions: actions.map(toolBackedAction),
   };
   registry.register(capability);
 }
 
-function toolBackedAction(
+function actionTool(
   tool: ProductionAgentTool,
-  forceConfirmation: boolean,
-) {
-  const risk = toolRisk(tool.name);
+  risk: ActionRisk,
+  requiresConfirmation = false,
+): ProductionToolAction {
+  return { tool, risk, requiresConfirmation };
+}
+
+function readAction(tool: ProductionAgentTool): ProductionToolAction {
+  return actionTool(tool, "read");
+}
+
+function writeAction(tool: ProductionAgentTool): ProductionToolAction {
+  return actionTool(tool, "recoverable-write");
+}
+
+function confirmedAction(tool: ProductionAgentTool): ProductionToolAction {
+  return actionTool(tool, "recoverable-write", true);
+}
+
+function destructiveAction(tool: ProductionAgentTool): ProductionToolAction {
+  return actionTool(tool, "destructive-write", true);
+}
+
+function toolBackedAction(spec: ProductionToolAction) {
+  const { tool, risk, requiresConfirmation } = spec;
   return defineCapabilityAction({
     id: tool.name,
     title: tool.label || tool.name,
     description: tool.description || tool.name,
     risk,
-    requiresConfirmation: forceConfirmation || CONFIRMED_CREATION_TOOLS.has(tool.name),
+    requiresConfirmation,
     parameters: tool.parameters ?? Type.Any(),
     async execute(context: CapabilityExecutionContext, input: unknown): Promise<ActionResult> {
       const before = await loadKnownWork(context.projectRoot, context.work?.id);
@@ -455,12 +471,6 @@ function toolBackedAction(
       );
     },
   });
-}
-
-function toolRisk(toolName: string): ActionRisk {
-  if (READ_TOOLS.has(toolName)) return "read";
-  if (DESTRUCTIVE_TOOLS.has(toolName)) return "destructive-write";
-  return "recoverable-write";
 }
 
 async function normalizeToolResult(

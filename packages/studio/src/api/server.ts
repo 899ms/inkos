@@ -37,6 +37,8 @@ import {
   fetchWithProxy,
   chatCompletion,
   runWorkerAgent,
+  appendActivatedSkillGuidance,
+  hydrateActivatedSkillGuidance,
   buildExportArtifact,
   DetectionConfigSchema,
   ResearchSearchConfigSchema,
@@ -98,7 +100,11 @@ import {
   createFoundationRevisionTool,
   createReviewChapterTool,
   createReviseChapterTool,
+  createGenerateStyleGuideTool,
   createResyncChapterStateTool,
+  createImportChaptersTool,
+  createImportCanonTool,
+  createRefreshFanficCanonTool,
   DEFAULT_REVISE_MODE,
   createDraftStructureTool,
   createConnectChoiceTool,
@@ -1039,20 +1045,10 @@ class ConfirmedActionExecutionError extends Error {
   }
 }
 
-function suppressManualTextForTool(exec: CollectedToolExec): boolean {
-  const action = exec.tool.split("__").at(-1);
-  return action === "play_start"
-    || action === "play_step"
-    || action === "play_revise"
-    || action === "script_create"
-    || action === "storyboard_create"
-    || action === "interactive_film_create";
-}
-
 function hasSuccessfulToolOwnedResponse(execs: ReadonlyArray<CollectedToolExec>): boolean {
   return execs.some((exec) =>
     exec.status === "completed"
-    && (suppressManualTextForTool(exec) || hasDomainOwnedResult(exec.details))
+    && hasDomainOwnedResult(exec.details)
   );
 }
 
@@ -1069,7 +1065,7 @@ function manualToolAssistantMessage(
 ): any {
   return {
     role: "assistant",
-    content: [{ type: "text", text: suppressManualTextForTool(exec) ? "" : responseText }],
+    content: [{ type: "text", text: hasDomainOwnedResult(exec.details) ? "" : responseText }],
     api: "anthropic-messages",
     provider,
     model,
@@ -1512,7 +1508,12 @@ async function executeConfirmedProductionAction(args: {
     exec.status = "completed";
     exec.completedAt = Date.now();
     exec.result = actionResult.content ?? actionResult.summary;
-    exec.details = actionResult.data ?? actionResult;
+    exec.details = {
+      ...(actionResult.data && typeof actionResult.data === "object"
+        ? actionResult.data as Record<string, unknown>
+        : { actionResult: actionResult.data ?? actionResult }),
+      requestedIntent: args.requestedIntent,
+    };
     exec.stages = exec.stages?.map(stage => ({ ...stage, status: "completed" as const }));
     await args.onTaskChange(exec);
     const result = {
@@ -2989,25 +2990,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       ]);
       const language = book.language === "en" ? "en" : "zh";
       const requestedBrief = typeof body.brief === "string" ? body.brief.trim() : "";
+      const inspirationSkills = await hydrateActivatedSkillGuidance(
+        await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true }),
+        [requestedBrief || persistedBrief, plan, chapter].filter(Boolean).join("\n\n"),
+      );
       const response = await runWorkerAgent(
         pipelineConfig.client,
         pipelineConfig.model,
-        [
+        appendActivatedSkillGuidance([
           {
             role: "system",
             content: language === "en"
-              ? [
-                  "You are a fiction editor generating one optional inspiration card for a chapter rewrite.",
-                  "Offer a concrete alternative beat, evidence/action detail, and ending turn that fit the supplied canon.",
-                  "Do not rewrite the chapter, modify canon, or claim any file was changed.",
-                  "Return only a short, readable Markdown card.",
-                ].join("\n")
-              : [
-                  "你是小说编辑，只为本章重写生成一张可选的灵感卡。",
-                  "给出一个符合现有设定的具体替代场面、证据或行动细节，以及章尾转折。",
-                  "不要代写整章，不要改写既成事实，也不要声称已经修改文件。",
-                  "只返回简短、可读的 Markdown 灵感卡。",
-                ].join("\n"),
+              ? "Generate one optional Markdown inspiration card for revising the supplied chapter with the activated Skills. This is read-only advice: do not rewrite the chapter, alter canon, or claim persistence."
+              : "按已激活的 Skills，为所给章节生成一张可选的 Markdown 修订灵感卡。这是只读建议：不要代写整章、改变正典或声称已经落盘。",
           },
           {
             role: "user",
@@ -3021,7 +3016,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               `${language === "en" ? "Current chapter" : "当前章节"}:\n${chapter}`,
             ].filter(Boolean).join("\n\n"),
           },
-        ],
+        ], inspirationSkills),
         { temperature: 0.9, maxTokens: 600, signal: c.req.raw.signal },
       );
       const card = response.content.trim();
@@ -3283,7 +3278,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const skills = await resolveStudioProfileSkills(root, "longform-novel");
       await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "longform", actionId: "revise_foundation", profileId: "longform-novel" },
+        binding: { capabilityId: "longform", actionId: "revise_foundation", profileId: "longform-novel", risk: "recoverable-write" },
         tool: createFoundationRevisionTool(pipeline, id, { workerSkills: () => skills }),
         parameters: { instruction: feedback.trim(), bookId: id },
         workId: id,
@@ -3943,7 +3938,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!artifact) throw new ApiError(409, "ARTIFACT_NOT_REGISTERED", `Current artifact is not registered: ${path}`);
     const result = await executeExplicitCapabilityTool({
       projectRoot: root,
-      binding: { capabilityId: "workspace", actionId: "replace_work_artifact", profileId: work.profileId },
+      binding: { capabilityId: "workspace", actionId: "replace_work_artifact", profileId: work.profileId, risk: "recoverable-write" },
       tool: createReplaceWorkArtifactTool(root, workId),
       workId,
       parameters: { path, content, expectedRevisionId: artifact.currentRevisionId ?? undefined },
@@ -4852,7 +4847,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           }
 
           const responseText = exec.result ?? pick(surfaceLanguage, "已完成。", "Done.");
-          const responseForUser = suppressManualTextForTool(exec) ? "" : responseText;
+          const responseForUser = hasDomainOwnedResult(exec.details) ? "" : responseText;
           // 指令已在任务开始时写入 transcript，这里只补助手工具消息。
           await appendSessionMessagesUnlessDeleted(root, bookSession.sessionId, [
             manualToolAssistantMessage(
@@ -5220,7 +5215,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "longform", actionId: "review_chapter", profileId: "longform-novel" },
+        binding: { capabilityId: "longform", actionId: "review_chapter", profileId: "longform-novel", risk: "recoverable-write" },
         tool: createReviewChapterTool(pipeline, id, { workerSkills: () => skills }),
         parameters: { bookId: id, chapterNumber: chapterNum },
         workId: id,
@@ -5251,7 +5246,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const normalizedMode = body.mode ?? DEFAULT_REVISE_MODE;
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel" },
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel", risk: "recoverable-write" },
         tool: createReviseChapterTool(pipeline, id, { workerSkills: () => skills }),
         parameters: {
           instruction: body.brief?.trim() || "Revise the chapter using its current review observations.",
@@ -5310,6 +5305,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           capabilityId: "longform",
           actionId: "export_book",
           profileId: "longform-novel",
+          risk: "recoverable-write",
         },
         tool,
         workId: id,
@@ -5513,7 +5509,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel" },
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel", risk: "recoverable-write" },
         tool: createReviseChapterTool(pipeline, id, { workerSkills: () => skills }),
         parameters: {
           instruction: body.brief?.trim() || "Rework this chapter while preserving current Work authority.",
@@ -5551,7 +5547,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }));
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "longform", actionId: "resync_chapter_state", profileId: "longform-novel" },
+        binding: { capabilityId: "longform", actionId: "resync_chapter_state", profileId: "longform-novel", risk: "recoverable-write" },
         tool: createResyncChapterStateTool(pipeline, id),
         parameters: { bookId: id, chapterNumber: chapterNum },
         workId: id,
@@ -5609,10 +5605,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("style:start", { bookId: id });
     try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.generateStyleGuide(id, text, sourceName ?? "unknown");
+      const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-long-story-analysis", "inkos-imitation-writing"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "generate_style_guide", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createGenerateStyleGuideTool(pipeline, id, { activeSkills: () => skills }),
+        workId: id,
+        parameters: { referenceText: text, sourceName: sourceName ?? "unknown" },
+        signal: c.req.raw.signal,
+      });
       broadcast("style:complete", { bookId: id });
-      return c.json({ ok: true, result });
+      return c.json({ ok: true, result: action.data });
     } catch (e) {
       broadcast("style:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5628,11 +5634,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("import:start", { bookId: id, type: "chapters" });
     try {
-      const { splitChapters } = await import("@actalk/inkos-core");
-      const chapters = [...splitChapters(text, splitRegex)];
-
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.importChapters({ bookId: id, chapters });
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "import_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createImportChaptersTool(pipeline, id, root, { defaultSkills: skills }),
+        workId: id,
+        parameters: { bookId: id, sourceText: text, sourceName: "Studio import", splitPattern: splitRegex },
+        signal: c.req.raw.signal,
+      });
+      const result = action.data as { readonly importedCount: number };
       broadcast("import:complete", { bookId: id, type: "chapters", count: result.importedCount });
       return c.json(result);
     } catch (e) {
@@ -5651,9 +5665,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("import:start", { bookId: id, type: "canon" });
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importCanon(id, fromBookId);
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "import_canon", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createImportCanonTool(pipeline, id),
+        workId: id,
+        parameters: { parentBookId: fromBookId },
+        signal: c.req.raw.signal,
+      });
       broadcast("import:complete", { bookId: id, type: "canon" });
-      return c.json({ ok: true });
+      return c.json({ ok: true, result: action.data });
     } catch (e) {
       broadcast("import:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5688,9 +5709,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       });
       const sourceText = await readFile(join(root, material.markdownPath), "utf-8");
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importFanficCanon(id, sourceText, material.title, "canon");
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import", "inkos-fanfic-writing"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "refresh_fanfic_canon", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createRefreshFanficCanonTool(pipeline, root, id, { defaultSkills: skills }),
+        workId: id,
+        parameters: { sourceText, sourceName: material.title, mode: "canon" },
+        signal: c.req.raw.signal,
+      });
       broadcast("import:complete", { bookId: id, type: "canon-file", materialId: material.id });
-      return c.json({ ok: true, material });
+      return c.json({ ok: true, material, result: action.data });
     } catch (error) {
       broadcast("import:error", { bookId: id, type: "canon-file", error: String(error) });
       return c.json({ error: String(error) }, 500);
@@ -5734,7 +5765,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       });
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default" },
+        binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default", risk: "recoverable-write" },
         tool: createFanficBookTool(pipeline, root, { defaultSkills: skills }),
         parameters: {
           title: bookConfig.title,
@@ -5814,7 +5845,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         });
         await executeExplicitCapabilityTool({
           projectRoot: root,
-          binding: { capabilityId: "adaptation", actionId: "spinoff_create", profileId: "workspace-default" },
+          binding: { capabilityId: "adaptation", actionId: "spinoff_create", profileId: "workspace-default", risk: "recoverable-write" },
           tool: createSpinoffBookTool(pipeline, root, { defaultSkills: skills }),
           parameters: {
             title: bookConfig.title,
@@ -5878,7 +5909,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         });
         await executeExplicitCapabilityTool({
           projectRoot: root,
-          binding: { capabilityId: "adaptation", actionId: "imitation_create", profileId: "workspace-default" },
+          binding: { capabilityId: "adaptation", actionId: "imitation_create", profileId: "workspace-default", risk: "recoverable-write" },
           tool: createImitationBookTool(pipeline, root, { defaultSkills: skills }),
           parameters: {
             title: bookConfig.title,
@@ -6032,7 +6063,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     const result = await executeExplicitCapabilityTool({
       projectRoot: root,
-      binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation" },
+      binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation", risk: "recoverable-write" },
       tool: createTranslationCreateTool(root),
       parameters: {
         filePath: body.filePath,
@@ -6108,7 +6139,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const pipeline = new PipelineRunner(await buildPipelineConfig());
       const result = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation" },
+        binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation", risk: "recoverable-write" },
         tool: createTranslationRunTool(pipeline, root, id, { defaultSkills: activatedSkills }),
         workId: id,
         parameters: { batchSize: body.batchSize, maxTokens: body.maxTokens },
@@ -6134,7 +6165,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const body: { format?: "txt" | "md" | "epub"; outputPath?: string } = await c.req.json().catch(() => ({}));
     const result = await executeExplicitCapabilityTool({
       projectRoot: root,
-      binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation" },
+      binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation", risk: "recoverable-write" },
       tool: createTranslationExportTool(root, id),
       workId: id,
       parameters: { format: body.format ?? "md", outputPath: body.outputPath },

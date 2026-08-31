@@ -1,6 +1,6 @@
 import { fetchUrl, searchWeb, type SearchResult } from "../utils/web-search.js";
 
-export type ResearchPurpose = "worldbuilding" | "era" | "profession" | "market" | "fact-check" | "general";
+export type ResearchPurpose = string;
 export type ResearchDepth = "quick" | "standard" | "deep";
 
 export interface ResearchInput {

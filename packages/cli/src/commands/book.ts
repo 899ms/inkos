@@ -86,7 +86,7 @@ bookCommand
 
       await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "longform", actionId: "create_book", profileId: "longform-novel" },
+        binding: { capabilityId: "longform", actionId: "create_book", profileId: "longform-novel", risk: "recoverable-write" },
         tool: createBookFoundationTool(pipeline, {
           language: book.language,
           actionPayload: {

@@ -39,7 +39,7 @@ describe("creative harness mini-flows", () => {
 
     const created = await executeExplicitCapabilityTool({
       projectRoot: root,
-      binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation" },
+      binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation", risk: "recoverable-write" },
       tool: createTranslationCreateTool(root),
       parameters: {
         filePath: "source.md",
@@ -57,7 +57,7 @@ describe("creative harness mini-flows", () => {
 
     const run = await executeExplicitCapabilityTool({
       projectRoot: root,
-      binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation" },
+      binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation", risk: "recoverable-write" },
       tool: createTranslationRunTool(pipeline as never, root, workId, {
         createModel: () => ({
           translateSegments: async (request) => ({
@@ -73,7 +73,7 @@ describe("creative harness mini-flows", () => {
     });
     const exported = await executeExplicitCapabilityTool({
       projectRoot: root,
-      binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation" },
+      binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation", risk: "recoverable-write" },
       tool: createTranslationExportTool(root, workId),
       workId,
       parameters: { format: "md" },
@@ -122,7 +122,7 @@ describe("creative harness mini-flows", () => {
     const currentRevisionId = before.artifacts[0]!.currentRevisionId!;
     await executeExplicitCapabilityTool({
       projectRoot: root,
-      binding: { capabilityId: "workspace", actionId: "replace_work_artifact", profileId: "script" },
+      binding: { capabilityId: "workspace", actionId: "replace_work_artifact", profileId: "script", risk: "recoverable-write" },
       tool: createReplaceWorkArtifactTool(root, "script-work"),
       workId: "script-work",
       parameters: {

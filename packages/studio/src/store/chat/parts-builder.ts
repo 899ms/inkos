@@ -244,7 +244,12 @@ export function buildPartsFromEvents(events: StreamEvent[]): MessagePart[] {
             if (event.isError) exec.error = localizeKnownRuntimeMessage(summarizeToolResult(event.result));
             else exec.result = summarizeToolResult(event.result);
             if (event.details !== undefined) exec.details = event.details;
-            if (!event.isError && (exec.tool === "play_start" || exec.tool === "play_step" || exec.tool === "play_revise")) {
+            if (
+              !event.isError
+              && event.details
+              && typeof event.details === "object"
+              && (event.details as Record<string, unknown>).presentation === "immersive-scene"
+            ) {
               suppressTextAfterPlayTool = true;
             }
             // Mark all remaining stages as completed

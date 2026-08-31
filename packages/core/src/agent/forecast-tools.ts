@@ -8,6 +8,8 @@ import {
 } from "../forecast/runner.js";
 import type { ForecastBranch, NarrativeForecast } from "../forecast/schema.js";
 import { assertSafeBookId } from "../utils/book-id.js";
+import type { ActivatedSkillGuidance } from "./skill-tool.js";
+import { mergeActivatedSkillGuidance } from "../skills/activations.js";
 
 // Narrative forecast tools (RFC #342). All three operate strictly on
 // story/runtime/narrative-forecasts/ — they never modify canonical prose,
@@ -82,6 +84,10 @@ export function createNarrativeForecastCreateTool(
   pipeline: PipelineRunner,
   activeBookId: string | null,
   projectRoot: string,
+  options: {
+    readonly defaultSkills?: ReadonlyArray<ActivatedSkillGuidance>;
+    readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
+  } = {},
 ): AgentTool<typeof ForecastCreateParams> {
   return {
     name: "create_narrative_forecast",
@@ -100,13 +106,21 @@ export function createNarrativeForecastCreateTool(
     ): Promise<AgentToolResult<unknown>> {
       const bookId = resolveForecastBookId("create_narrative_forecast", params.bookId, activeBookId);
       const baseRuntime = pipeline.createAgentContext("forecast", bookId);
+      const runtime = {
+        ...baseRuntime,
+        activatedSkills: mergeActivatedSkillGuidance(
+          options.defaultSkills ?? [],
+          options.activeSkills?.() ?? [],
+          baseRuntime.activatedSkills ?? [],
+        ),
+      };
       const result = await createNarrativeForecast({
         projectRoot,
         bookId,
         divergence: params.divergence,
         branchCount: params.branchCount,
         horizon: params.horizon,
-        runtime: _signal ? { ...baseRuntime, signal: _signal } : baseRuntime,
+        runtime: _signal ? { ...runtime, signal: _signal } : runtime,
         onProgress: (message) => onUpdate?.(textResult(message)),
       });
 

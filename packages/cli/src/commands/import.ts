@@ -1,12 +1,17 @@
 import { Command } from "commander";
-import { loadChaptersFromPath, PipelineRunner, StateManager } from "@actalk/inkos-core";
+import {
+  PipelineRunner,
+  StateManager,
+  createImportCanonTool,
+  createImportChaptersTool,
+  executeExplicitCapabilityTool,
+} from "@actalk/inkos-core";
 import { resolve } from "node:path";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, runWithCliProfileSkills } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatImportCanonComplete,
   formatImportCanonStart,
   formatImportChaptersComplete,
-  formatImportChaptersDiscovery,
   formatImportChaptersResume,
   resolveCliLanguage,
 } from "../localization.js";
@@ -33,7 +38,13 @@ importCommand
 
       if (!opts.json) log(formatImportCanonStart(language, opts.from, targetBookId));
 
-      await pipeline.importCanon(targetBookId, opts.from);
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "import_canon", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createImportCanonTool(pipeline, targetBookId),
+        workId: targetBookId,
+        parameters: { parentBookId: opts.from },
+      });
 
       if (opts.json) {
         log(JSON.stringify({
@@ -83,10 +94,10 @@ importCommand
       }
 
       const fromPath = resolve(opts.from);
-      const chapters = [...await loadChaptersFromPath(fromPath, opts.split)];
-
       if (!opts.json) {
-        log(formatImportChaptersDiscovery(language, chapters.length, bookId));
+        log(language === "en"
+          ? `Reading chapters from "${fromPath}" for import into "${bookId}".`
+          : `正在读取「${fromPath}」，准备导入到「${bookId}」。`);
         if (opts.resumeFrom) {
           log(formatImportChaptersResume(language, opts.resumeFrom));
         }
@@ -94,18 +105,27 @@ importCommand
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
 
-      const result = await runWithCliProfileSkills(
-        pipeline,
-        root,
-        "longform-novel",
-        () => pipeline.importChapters({
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "import_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createImportChaptersTool(pipeline, bookId, root, { defaultSkills: activatedSkills }),
+        workId: bookId,
+        parameters: {
           bookId,
-          chapters,
-          resumeFrom: opts.resumeFrom,
+          sourcePath: fromPath,
+          ...(opts.split ? { splitPattern: opts.split } : {}),
+          ...(opts.resumeFrom ? { resumeFrom: opts.resumeFrom } : {}),
           importMode: opts.series ? "series" : "continuation",
-        }),
-        { extraSkillIds: ["inkos-story-import"] },
-      );
+        },
+      });
+      const result = action.data as {
+        readonly importedCount: number;
+        readonly totalWords: number;
+        readonly nextChapter: number;
+      };
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));

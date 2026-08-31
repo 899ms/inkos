@@ -1,5 +1,12 @@
 import { Command } from "commander";
-import { PipelineRunner, StateManager } from "@actalk/inkos-core";
+import {
+  PipelineRunner,
+  StateManager,
+  createResyncChapterStateTool,
+  createWriteChaptersTool,
+  executeExplicitCapabilityTool,
+  type Observation,
+} from "@actalk/inkos-core";
 import { readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -53,28 +60,34 @@ writeCommand
       const count = parseInt(opts.count, 10);
       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
 
-      const results = [];
-      for (let i = 0; i < count; i++) {
-        if (!opts.json) log(formatWriteNextProgress(language, i + 1, count, bookId));
+      if (!opts.json) log(formatWriteNextProgress(language, 1, count, bookId));
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createWriteChaptersTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
+        workId: bookId,
+        parameters: {
+          instruction: context || "Write the requested consecutive chapters for the active Work.",
+          bookId,
+          chapterCount: count,
+          ...(wordCount ? { chapterWordCount: wordCount } : {}),
+        },
+      });
+      const actionData = action.data as {
+        readonly chapters?: ReadonlyArray<{
+          readonly chapterNumber: number;
+          readonly title: string;
+          readonly wordCount: number;
+          readonly observations: ReadonlyArray<Observation>;
+        }>;
+      } | undefined;
+      const results = [...(actionData?.chapters ?? [])];
 
-        const result = await pipeline.runWithAgentContext(
-          { activatedSkills },
-          () => pipeline.writeNextChapter(bookId, wordCount),
-        );
-        results.push(result);
-
-        if (!opts.json) {
-          for (const line of formatWriteNextResultLines(language, {
-            chapterNumber: result.chapterNumber,
-            title: result.title,
-            wordCount: result.wordCount,
-            observations: result.review.observations,
-          })) {
-            log(line);
-          }
+      if (!opts.json) {
+        for (const result of results) {
+          for (const line of formatWriteNextResultLines(language, result)) log(line);
           log("");
         }
-
       }
 
       if (opts.json) {
@@ -95,7 +108,7 @@ writeCommand
             chapterNumber: r.chapterNumber,
             title: r.title,
             wordCount: r.wordCount,
-            observationCount: r.review.observations.length,
+            observationCount: r.observations.length,
           }))),
         }, config);
       }
@@ -214,10 +227,27 @@ writeCommand
       }));
       const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
-      const result = await pipeline.runWithAgentContext(
-        { activatedSkills },
-        () => pipeline.writeNextChapter(bookId, wordCount),
-      );
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createWriteChaptersTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
+        workId: bookId,
+        parameters: {
+          instruction: opts.brief?.trim() || `Rewrite chapter ${chapter}.`,
+          bookId,
+          chapterCount: 1,
+          ...(wordCount ? { chapterWordCount: wordCount } : {}),
+        },
+      });
+      const result = (action.data as {
+        readonly chapters?: ReadonlyArray<{
+          readonly chapterNumber: number;
+          readonly title: string;
+          readonly wordCount: number;
+          readonly observations: ReadonlyArray<Observation>;
+        }>;
+      } | undefined)?.chapters?.[0];
+      if (!result) throw new Error("Rewrite action completed without a chapter artifact.");
       const language = resolveCliLanguage(book.language);
 
       if (opts.json) {
@@ -227,7 +257,7 @@ writeCommand
           chapterNumber: result.chapterNumber,
           title: result.title,
           wordCount: result.wordCount,
-          observations: result.review.observations,
+          observations: result.observations,
         })) {
           log(line);
         }
@@ -284,16 +314,32 @@ writeCommand
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: opts.brief,
       }));
-      const result = await pipeline.resyncChapterArtifacts(bookId, chapter);
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "resync_chapter_state", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createResyncChapterStateTool(pipeline, bookId, {
+          defaultSkills: activatedSkills,
+          language: book.language,
+        }),
+        workId: bookId,
+        parameters: { bookId, chapterNumber: chapter },
+      });
+      const result = action.data as {
+        readonly chapterNumber: number;
+        readonly observations: ReadonlyArray<Observation>;
+      };
+      const chapterMeta = (await state.loadChapterIndex(bookId)).find((item) => item.number === result.chapterNumber);
+      if (!chapterMeta) throw new Error(`Resync action completed without chapter ${result.chapterNumber}.`);
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
         for (const line of formatWriteNextResultLines(language, {
           chapterNumber: result.chapterNumber,
-          title: result.title,
-          wordCount: result.wordCount,
-          observations: result.review.observations,
+          title: chapterMeta.title,
+          wordCount: chapterMeta.wordCount,
+          observations: result.observations,
         })) {
           log(line);
         }

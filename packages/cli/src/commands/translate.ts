@@ -28,7 +28,7 @@ translateCommand
       const root = findProjectRoot();
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation" },
+        binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation", risk: "recoverable-write" },
         tool: createTranslationCreateTool(root),
         parameters: {
           filePath: opts.from,
@@ -74,7 +74,7 @@ translateCommand
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { quiet: Boolean(opts.json) }));
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation" },
+        binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation", risk: "recoverable-write" },
         tool: createTranslationRunTool(pipeline, root, projectId, { defaultSkills: activatedSkills }),
         workId: projectId,
         parameters: { batchSize: opts.batchSize, maxTokens: opts.maxTokens },
@@ -110,7 +110,7 @@ translateCommand
       const root = findProjectRoot();
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation" },
+        binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation", risk: "recoverable-write" },
         tool: createTranslationExportTool(root, projectId),
         workId: projectId,
         parameters: { format: opts.format, outputPath: opts.output },

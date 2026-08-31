@@ -1150,17 +1150,6 @@ export class PipelineRunner {
     }
   }
 
-  async resyncChapterArtifacts(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
-    const releaseLock = await this.state.acquireBookLock(bookId);
-    try {
-      const result = await this._resyncChapterArtifactsLocked(bookId, chapterNumber);
-      await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId, accept: true });
-      return result;
-    } finally {
-      await releaseLock();
-    }
-  }
-
   async resyncChapterStateAndAudit(
     bookId: string,
     chapterNumber?: number,

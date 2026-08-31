@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { join, resolve, basename } from "node:path";
 import {
   createFanficBookTool,
+  createRefreshFanficCanonTool,
   deriveBookIdFromTitle,
   executeExplicitCapabilityTool,
   PlatformSchema,
@@ -10,7 +11,7 @@ import {
   type BookConfig,
   type FanficMode,
 } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills, runWithCliProfileSkills } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatFanficCanonMissingError,
   formatFanficSourceDirEmptyError,
@@ -72,7 +73,7 @@ fanficCommand
       });
       await executeExplicitCapabilityTool({
         projectRoot: root,
-        binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default" },
+        binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default", risk: "recoverable-write" },
         tool: createFanficBookTool(pipeline, root, { defaultSkills: activatedSkills }),
         parameters: {
           title: book.title,
@@ -175,13 +176,16 @@ fanficCommand
       if (!opts.json) log(`Refreshing fanfic canon for "${bookId}" from ${sourceName}...`);
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
-      await runWithCliProfileSkills(
-        pipeline,
-        root,
-        "longform-novel",
-        () => pipeline.importFanficCanon(bookId, sourceText, sourceName, mode),
-        { extraSkillIds: ["inkos-story-import"] },
-      );
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import", "inkos-fanfic-writing"],
+      });
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "refresh_fanfic_canon", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createRefreshFanficCanonTool(pipeline, root, bookId, { defaultSkills: activatedSkills }),
+        workId: bookId,
+        parameters: { sourceText, sourceName, mode },
+      });
 
       if (opts.json) {
         log(JSON.stringify({ bookId, source: sourceName, refreshedAt: new Date().toISOString() }));

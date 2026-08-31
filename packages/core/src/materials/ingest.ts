@@ -6,7 +6,7 @@ import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath } from "../utils/posix-path.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 
-export type MaterialPurpose = "reference" | "worldbuilding" | "script" | "storyboard" | "research" | "general";
+export type MaterialPurpose = string;
 export type MaterialSourceKind = "url" | "file";
 export type MaterialKind = "webpage" | "pdf" | "text";
 
@@ -24,7 +24,7 @@ export const MaterialAssetSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   kind: z.enum(["webpage", "pdf", "text"]),
-  purpose: z.enum(["reference", "worldbuilding", "script", "storyboard", "research", "general"]),
+  purpose: z.string().trim().min(1),
   source: z.string().min(1),
   mimeType: z.string().min(1),
   markdownPath: z.string().min(1),

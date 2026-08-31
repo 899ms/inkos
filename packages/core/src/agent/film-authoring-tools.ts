@@ -219,8 +219,8 @@ const FillNodeParams = Type.Object({
 
 export type FilmAuthoringLanguage = "zh" | "en";
 
-const NODE_SYSTEM_ZH = `你是互动影游编剧。根据当前图上下文和指令，写出指定节点的完整场景、对白、选项和配图方向。choices[].targetNodeId 必须指向已存在的节点 id。完成后调用 submit_story_node。`;
-const NODE_SYSTEM_EN = `You are an interactive film scriptwriter. Using the current graph context and the instruction, write the requested node's complete scene, dialogue, choices, and image direction. Every choices[].targetNodeId must point to an existing node id. Finish by calling submit_story_node.`;
+const NODE_SYSTEM_ZH = `按已激活的互动影游 Skill 和当前图上下文提交指定节点的完整场景、对白、选项和配图方向。choices[].targetNodeId 必须指向已存在的节点 id。完成后调用 submit_story_node。`;
+const NODE_SYSTEM_EN = `Use the activated interactive-film Skill and current graph context to submit the requested node's complete scene, dialogue, choices, and image direction. Every choices[].targetNodeId must point to an existing node id. Finish by calling submit_story_node.`;
 
 function nodeSystemPrompt(language: FilmAuthoringLanguage): string {
   return language === "en" ? NODE_SYSTEM_EN : NODE_SYSTEM_ZH;

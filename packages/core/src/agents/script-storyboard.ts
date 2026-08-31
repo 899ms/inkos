@@ -361,15 +361,13 @@ export function renderInteractiveFilmSpec(input: InteractiveFilmCreationInput): 
 function buildScriptCreationSystemPrompt(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
     return [
-      "You are a script-creation tool, not a novel-continuation engine.",
-      "Execute the confirmed spec with the activated script-writing Skill.",
+      "Produce the confirmed script artifact with the activated script-writing Skill.",
       "The deliverable must include the exact Markdown headings `## Characters` and `## Script`, followed by a complete performable script rather than a proposal or outline.",
       "Output Markdown. No process notes, no model self-narration, no \"Here is\" preamble.",
     ].join("\n");
   }
   return [
-    "你是剧本创作工具，不是小说续写器。",
-    "按已激活的剧本创作 Skill 执行确认规格。",
+    "按已激活的剧本创作 Skill 生成确认的剧本工件。",
     "交付稿必须包含准确的 Markdown 标题 `## 人物` 和 `## 剧本正文`，并在其后给出完整可排演剧本，不能只交方案或大纲。",
     "输出 Markdown。不要写流程说明、模型自述或“以下是”。",
   ].join("\n");
