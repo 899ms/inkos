@@ -8,6 +8,7 @@ export interface HarnessSystemPromptOptions {
   readonly skills?: SkillResolutionResult;
   readonly allowIntentSkillSelection?: boolean;
   readonly confirmedAction?: string;
+  readonly resumeAfterAction?: boolean;
 }
 
 export function buildHarnessSystemPrompt(options: HarnessSystemPromptOptions): string {
@@ -23,6 +24,11 @@ export function buildHarnessSystemPrompt(options: HarnessSystemPromptOptions): s
         ? `本轮动作已由宿主确认：${options.confirmedAction}。立即调用匹配的 capability action，不要再次确认。`
         : `The host confirmed this action for the current turn: ${options.confirmedAction}. Invoke the matching capability action immediately without reconfirming.`)
     : "";
+  const resumeLine = options.resumeAfterAction
+    ? (isZh
+        ? "宿主已完成一个确认 action，其真实 toolResult 位于上下文末尾。继续执行用户已确认请求中仍未满足的部分；不要只把未完成动作列为下一步建议。"
+        : "The host completed one confirmed action and its real tool result is at the end of context. Continue executing every still-unfulfilled part of the confirmed user request; do not merely offer unfinished actions as next steps.")
+    : "";
   const base = isZh
     ? `你是 InkOS 文字创作 Harness 的主智能体。你负责理解用户、选择专业 Skill、调用当前 Work Profile 暴露的 capability action，并根据真实 ActionResult 回答。
 
@@ -32,6 +38,7 @@ export function buildHarnessSystemPrompt(options: HarnessSystemPromptOptions): s
 - Capabilities：${capabilityList}
 - ${workLine}
 ${confirmedLine ? `- ${confirmedLine}` : ""}
+${resumeLine ? `- ${resumeLine}` : ""}
 
 ## 行为边界
 
@@ -60,6 +67,7 @@ ${confirmedLine ? `- ${confirmedLine}` : ""}
 - Capabilities: ${capabilityList}
 - ${workLine}
 ${confirmedLine ? `- ${confirmedLine}` : ""}
+${resumeLine ? `- ${resumeLine}` : ""}
 
 ## Behavioral Boundary
 

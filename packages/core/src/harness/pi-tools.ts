@@ -71,7 +71,7 @@ export function capabilityActionId(toolName: string): string {
   return separator >= 0 ? toolName.slice(separator + 2) : toolName;
 }
 
-function renderActionResultForAgent(result: ActionResult): string {
+export function renderActionResultForAgent(result: ActionResult): string {
   const lines = [result.content?.trim() || result.summary];
   if (result.artifacts.length > 0) {
     lines.push("Artifacts:", ...result.artifacts.map((artifact) => (

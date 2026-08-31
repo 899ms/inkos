@@ -145,6 +145,8 @@ import {
   type RequestedIntent,
   type SessionKind,
   type AgentSessionAttachment,
+  type ActionResult,
+  type ConfirmedCapabilityBinding,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -1054,7 +1056,8 @@ function hasSuccessfulToolOwnedResponse(execs: ReadonlyArray<CollectedToolExec>)
 
 function hasDomainOwnedResult(details: unknown): boolean {
   if (!details || typeof details !== "object") return false;
-  return typeof (details as Record<string, unknown>).kind === "string";
+  const record = details as Record<string, unknown>;
+  return record.kind === "proposed_action" || record.presentation === "immersive-scene";
 }
 
 function manualToolAssistantMessage(
@@ -1122,7 +1125,11 @@ async function executeConfirmedProductionAction(args: {
   readonly sourceRequestId?: string;
   readonly signal: AbortSignal;
   readonly onTaskChange: (exec: CollectedToolExec) => Promise<void>;
-}): Promise<CollectedToolExec> {
+}): Promise<{
+  readonly execution: CollectedToolExec;
+  readonly actionResult: ActionResult;
+  readonly binding: ConfirmedCapabilityBinding;
+}> {
   const lang = args.language ?? "zh";
   const id = args.taskId;
   const actionPayload = args.actionPayload;
@@ -1530,7 +1537,7 @@ async function executeConfirmedProductionAction(args: {
       details: exec.details,
       isError: false,
     });
-    return exec;
+    return { execution: exec, actionResult, binding };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const result = { content: [{ type: "text", text: message }] };
@@ -4772,7 +4779,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             timestamp: Date.now(),
           }], instruction, { sessionKind });
 
-          const exec = await executeConfirmedProductionAction({
+          const confirmedOutcome = await executeConfirmedProductionAction({
             pipeline,
             root,
             sessionId: bookSession.sessionId,
@@ -4795,6 +4802,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             ),
             ...(playMode ? { playMode } : {}),
           });
+          const exec = confirmedOutcome.execution;
 
           let createdBookId: string | null = null;
           if (exec.status === "completed") {
@@ -4846,22 +4854,112 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             }
           }
 
-          const responseText = exec.result ?? pick(surfaceLanguage, "已完成。", "Done.");
-          const responseForUser = hasDomainOwnedResult(exec.details) ? "" : responseText;
-          // 指令已在任务开始时写入 transcript，这里只补助手工具消息。
-          await appendSessionMessagesUnlessDeleted(root, bookSession.sessionId, [
-            manualToolAssistantMessage(
-              responseText,
-              exec,
-              configuredEntry?.service ?? reqService ?? config.llm.provider,
-              reqModel ?? config.llm.model,
-            ),
-          ], "", manualToolAppendOptions(sessionKind, exec));
+          const continuedToolExecs: CollectedToolExec[] = [];
+          exec.status = "running";
+          exec.completedAt = undefined;
+          exec.logs = [...(exec.logs ?? []), pick(surfaceLanguage, "继续完成确认请求中的剩余动作…", "Continuing the remaining confirmed request...")].slice(-80);
+          await persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId);
+          const continuation = await runAgentSession({
+            model,
+            apiKey: agentApiKey,
+            stream: pipelineClient.stream,
+            proxyUrl: pipelineClient.proxyUrl,
+            pipeline,
+            projectRoot: root,
+            bookId: createdBookId ?? bookSession.bookId ?? agentBookId,
+            sessionKind: bookSession.sessionKind,
+            profileId: bookSession.profileId ?? confirmedOutcome.binding.profileId,
+            workId: bookSession.workId,
+            playMode: bookSession.playMode,
+            actionSource: "free-text",
+            requestedSkills,
+            disabledSkills,
+            attachments: [],
+            sessionId: bookSession.sessionId,
+            language: surfaceLanguage,
+            resumeAction: {
+              toolCallId: exec.id,
+              capabilityId: confirmedOutcome.binding.capabilityId,
+              actionId: confirmedOutcome.binding.actionId,
+              parameters: exec.args ?? {},
+              result: confirmedOutcome.actionResult,
+            },
+            onContextCompression: (event) => {
+              broadcast("context:compression", { sessionId: streamSessionId, ...event });
+            },
+            onEvent: (event) => {
+              if (event.type === "message_update") {
+                const update = event.assistantMessageEvent;
+                if (update.type === "text_delta") {
+                  broadcast("draft:delta", { sessionId: streamSessionId, text: update.delta });
+                } else if (update.type === "thinking_delta") {
+                  broadcast("thinking:delta", { sessionId: streamSessionId, text: (update as { delta?: string }).delta ?? "" });
+                } else if (update.type === "thinking_start") {
+                  broadcast("thinking:start", { sessionId: streamSessionId });
+                } else if (update.type === "thinking_end") {
+                  broadcast("thinking:end", { sessionId: streamSessionId });
+                }
+              }
+              if (event.type === "tool_execution_start") {
+                const actionId = capabilityActionId(event.toolName);
+                const toolExec: CollectedToolExec = {
+                  id: event.toolCallId,
+                  tool: actionId,
+                  label: resolveToolLabel(actionId, undefined, surfaceLanguage),
+                  status: "running",
+                  args: event.args as Record<string, unknown> | undefined,
+                  startedAt: Date.now(),
+                };
+                continuedToolExecs.push(toolExec);
+                exec.logs = [...(exec.logs ?? []), `${toolExec.label}…`].slice(-80);
+                void persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId).catch(() => undefined);
+                broadcast("tool:start", {
+                  sessionId: streamSessionId,
+                  id: event.toolCallId,
+                  tool: event.toolName,
+                  args: event.args,
+                  stages: [],
+                  background: true,
+                  ...(sourceRequestId ? { sourceRequestId } : {}),
+                });
+              }
+              if (event.type === "tool_execution_end") {
+                const toolExec = continuedToolExecs.find((candidate) => candidate.id === event.toolCallId);
+                if (toolExec) {
+                  toolExec.status = event.isError ? "error" : "completed";
+                  toolExec.completedAt = Date.now();
+                  if (event.isError) toolExec.error = extractToolError(event.result);
+                  else toolExec.result = summarizeToolResult(event.result);
+                  toolExec.details = (event.result as { details?: unknown } | undefined)?.details;
+                  exec.logs = [...(exec.logs ?? []), `${toolExec.label}: ${toolExec.status}`].slice(-80);
+                  void persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId).catch(() => undefined);
+                }
+                broadcast("tool:end", {
+                  sessionId: streamSessionId,
+                  id: event.toolCallId,
+                  tool: event.toolName,
+                  result: event.result,
+                  details: toolExec?.details,
+                  isError: event.isError,
+                });
+              }
+            },
+          }, "");
+          exec.status = "completed";
+          exec.completedAt = Date.now();
+          await persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId);
+          const responseText = continuation.responseText
+            || continuation.errorMessage
+            || exec.result
+            || pick(surfaceLanguage, "已完成。", "Done.");
+          const responseForUser = continuation.responseText
+            ? continuation.responseText
+            : hasDomainOwnedResult(exec.details) ? "" : responseText;
           await refreshBookSessionFromTranscript();
           broadcast("agent:complete", { instruction, activeBookId: createdBookId ?? agentBookId, sessionId: bookSession.sessionId, sessionKind });
           return c.json({
             response: responseForUser,
-            details: { toolExecutions: [exec] },
+            details: { toolExecutions: [exec, ...continuedToolExecs] },
             session: {
               sessionId: bookSession.sessionId,
               sessionKind: bookSession.sessionKind,

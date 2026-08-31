@@ -11,6 +11,7 @@ import type {
   ImageContent,
   Message,
   SimpleStreamOptions,
+  ToolResultMessage,
 } from "@mariozechner/pi-ai";
 import type { PipelineRunner } from "../pipeline/runner.js";
 import {
@@ -21,6 +22,7 @@ import {
   createBuiltInWorkProfileRegistry,
   createCapabilityPiTools,
   capabilityActionId,
+  capabilityToolName,
   createHarnessContextTransform,
   resolveSessionHarnessBinding,
   createProductionCapabilityRegistry,
@@ -28,6 +30,8 @@ import {
   type HarnessEpisodeHandle,
   type WorkManifest,
   type WorkProfile,
+  type ActionResult,
+  renderActionResultForAgent,
 } from "../harness/index.js";
 import {
   appendTranscriptEvents,
@@ -124,6 +128,14 @@ export interface AgentSessionConfig {
    * Changing this value evicts the cached Agent so the tool table stays current.
    */
   suppressProductionTools?: boolean;
+  /** Resume Pi after a host-confirmed capability completed outside the loop. */
+  resumeAction?: {
+    readonly toolCallId: string;
+    readonly capabilityId: string;
+    readonly actionId: string;
+    readonly parameters: Record<string, unknown>;
+    readonly result: ActionResult;
+  };
 }
 
 export interface AgentSessionResult {
@@ -505,6 +517,49 @@ function lastAssistantMessage(messages: AgentMessage[]): AssistantMessage | unde
     }
   }
   return undefined;
+}
+
+const ZERO_PI_USAGE: AssistantMessage["usage"] = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function resumedActionMessages(
+  model: Model<Api>,
+  action: NonNullable<AgentSessionConfig["resumeAction"]>,
+): readonly [AssistantMessage, ToolResultMessage<ActionResult>] {
+  const toolName = capabilityToolName(action.capabilityId, action.actionId);
+  const timestamp = Date.now();
+  return [
+    {
+      role: "assistant",
+      content: [{
+        type: "toolCall",
+        id: action.toolCallId,
+        name: toolName,
+        arguments: action.parameters,
+      }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: ZERO_PI_USAGE,
+      stopReason: "toolUse",
+      timestamp,
+    },
+    {
+      role: "toolResult",
+      toolCallId: action.toolCallId,
+      toolName,
+      content: [{ type: "text", text: renderActionResultForAgent(action.result) }],
+      details: action.result,
+      isError: false,
+      timestamp: timestamp + 1,
+    },
+  ];
 }
 
 async function compileHarnessContextText(input: {
@@ -889,6 +944,7 @@ async function runAgentSessionUnlocked(
       ...(isHostConfirmedAction(actionSource, requestedIntent) && requestedIntent
         ? { confirmedAction: requestedIntent }
         : {}),
+      ...(config.resumeAction ? { resumeAfterAction: true } : {}),
     });
     const restoredContextBlock = restoredSystemContext.length > 0
       ? `\n\n## Restored committed context\n${restoredSystemContext.join("\n\n")}`
@@ -997,6 +1053,10 @@ async function runAgentSessionUnlocked(
   const attachmentBlock = buildAttachmentUserBlock(config.attachments, language);
   const promptMessage = attachmentBlock ? `${userMessage}${attachmentBlock}` : userMessage;
   const promptImages = attachmentImages(config.attachments);
+  let parentUuid: string | null = null;
+  let piTurnIndex = 0;
+  let lastAssistantUuid: string | null = null;
+  let skillTurnActive = cached.turnSkills.size > 0;
 
   // ----- Prepare transcript persistence -----
   const requestId = randomUUID();
@@ -1011,8 +1071,45 @@ async function runAgentSessionUnlocked(
     sessionKind,
     profileId: cached.profileId,
     workId: cached.workId,
-    input: promptMessage,
+    input: config.resumeAction ? "" : promptMessage,
   }));
+  if (config.resumeAction) {
+    const [actionAssistant, actionResult] = resumedActionMessages(model, config.resumeAction);
+    const actionAssistantUuid = randomUUID();
+    const actionResultUuid = randomUUID();
+    agent.state.messages = [...agent.state.messages, actionAssistant, actionResult];
+    await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
+      type: "message",
+      version: 1,
+      sessionId,
+      requestId,
+      uuid: actionAssistantUuid,
+      parentUuid: null,
+      seq,
+      role: "assistant",
+      timestamp: actionAssistant.timestamp,
+      piTurnIndex: 0,
+      toolCallId: config.resumeAction!.toolCallId,
+      message: actionAssistant,
+    }));
+    await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
+      type: "message",
+      version: 1,
+      sessionId,
+      requestId,
+      uuid: actionResultUuid,
+      parentUuid: actionAssistantUuid,
+      seq,
+      role: "toolResult",
+      timestamp: actionResult.timestamp,
+      piTurnIndex: 0,
+      toolCallId: config.resumeAction!.toolCallId,
+      sourceToolAssistantUuid: actionAssistantUuid,
+      message: actionResult,
+    }));
+    parentUuid = actionResultUuid;
+    lastAssistantUuid = actionAssistantUuid;
+  }
   const episodeHandle = cached.harnessRuntime.startEpisode({
     profileId: cached.profileId,
     work,
@@ -1026,11 +1123,6 @@ async function runAgentSessionUnlocked(
     episodeFinished = true;
     cached!.currentEpisode = null;
   };
-
-  let parentUuid: string | null = null;
-  let piTurnIndex = 0;
-  let lastAssistantUuid: string | null = null;
-  let skillTurnActive = cached.turnSkills.size > 0;
 
   const persistAgentEvent = async (event: AgentEvent): Promise<void> => {
     if (event.type === "turn_start") {
@@ -1086,7 +1178,9 @@ async function runAgentSessionUnlocked(
       runId: requestId,
       agentRole: "main",
     }, async () => {
-      if (promptImages.length > 0) {
+      if (config.resumeAction) {
+        await agent.continue();
+      } else if (promptImages.length > 0) {
         await agent.prompt(promptMessage, promptImages);
       } else {
         await agent.prompt(promptMessage);

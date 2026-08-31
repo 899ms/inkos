@@ -50,6 +50,7 @@ export {
   createCapabilityPiTools,
   capabilityActionId,
   capabilityToolName,
+  renderActionResultForAgent,
   type CreateCapabilityPiToolsOptions,
 } from "./pi-tools.js";
 export {
