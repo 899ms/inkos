@@ -2874,6 +2874,18 @@ export interface ReadToolOptions {
   readonly scope?: "works" | "project";
 }
 
+export class WorkFileNotFoundError extends Error {
+  readonly code = "WORK_FILE_NOT_FOUND";
+
+  constructor(readonly requestedPath: string) {
+    super(
+      `File not found: ${requestedPath}. `
+      + "Do not guess another path. Call workspace__list_works, then workspace__inspect_work with the exact Work ID, and read one of the returned canonical artifact paths.",
+    );
+    this.name = "WorkFileNotFoundError";
+  }
+}
+
 function resolveReadPath(readRoot: string, requestedPath: string, options: ReadToolOptions): string {
   if (options.allowSystemPaths && isAbsolute(requestedPath)) {
     return resolve(requestedPath);
@@ -2902,7 +2914,15 @@ export function createReadTool(
       params: Static<typeof ReadParams>,
     ): Promise<AgentToolResult<undefined>> {
       const filePath = resolveReadPath(readRoot, params.path, options);
-      const content = await readFile(filePath, "utf-8");
+      let content: string;
+      try {
+        content = await readFile(filePath, "utf-8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new WorkFileNotFoundError(params.path);
+        }
+        throw error;
+      }
       return textResult(content);
     },
   };

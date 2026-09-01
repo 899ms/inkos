@@ -25,6 +25,7 @@ import { loadTranslationManifest } from "../translation/run-store.js";
 import { createSkillRegistry } from "../skills/index.js";
 import { createUseSkillTool, hydrateActivatedSkillGuidance, type ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { PipelineRunner } from "../pipeline/runner.js";
+import { createReadTool } from "../agent/agent-tools.js";
 
 describe("creative harness mini-flows", () => {
   const roots: string[] = [];
@@ -230,6 +231,13 @@ describe("creative harness mini-flows", () => {
     await mkdir(join(root, "works", "play-session", "source", "runs", "main"), { recursive: true });
 
     expect((await listWorkManifests(root)).map((work) => work.id)).toEqual(["script-work"]);
+
+    await expect(createReadTool(root, { scope: "project" }).execute("missing-read", {
+      path: "works/script-work/source/missing.md",
+    })).rejects.toMatchObject({
+      code: "WORK_FILE_NOT_FOUND",
+      requestedPath: "works/script-work/source/missing.md",
+    });
   });
 
   it("retrieves only task-relevant Skill references for the main agent and production worker", async () => {
