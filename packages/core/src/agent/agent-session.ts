@@ -46,6 +46,7 @@ import type { PlayMode, SessionKind } from "../interaction/session.js";
 import type { ActionPayload, ActionSource, RequestedIntent } from "../interaction/action-envelope.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import {
+  applyRequiredProfileSkills,
   createSkillRegistry,
   loadAvailableAgentSkills,
   resolveProfileSkillActivations,
@@ -772,6 +773,7 @@ async function runAgentSessionUnlocked(
   }
   const profileId = work?.profileId ?? config.profileId ?? surfaceBinding.profileId;
   const profile = profiles.require(profileId);
+  const effectiveSkillResolution = applyRequiredProfileSkills(skillResolution, profile);
   const playWorldId = profileId === "interactive-world" ? (workId ?? sessionId) : null;
   const playWorldExists = playWorldId
     ? Boolean(await new PlayStore(projectRoot).loadWorld(playWorldId))
@@ -841,7 +843,7 @@ async function runAgentSessionUnlocked(
       (message as unknown as { readonly role?: unknown }).role !== "system"
     ));
     const turnSkills = new Map<string, ActivatedSkillGuidance>(
-      skillResolution.usedSkills.map((skill) => [skill.id, { skill, resources: [] }]),
+      effectiveSkillResolution.usedSkills.map((skill) => [skill.id, { skill, resources: [] }]),
     );
     const profileSkills = (targetProfileId: string, includeRecommended = false) => (
       resolveProfileSkillActivations(
@@ -939,7 +941,7 @@ async function runAgentSessionUnlocked(
       profile,
       work,
       language,
-      skills: skillResolution,
+      skills: effectiveSkillResolution,
       allowIntentSkillSelection,
       ...(isHostConfirmedAction(actionSource, requestedIntent) && requestedIntent
         ? { confirmedAction: requestedIntent }

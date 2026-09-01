@@ -1,6 +1,21 @@
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import type { WorkProfile } from "../harness/contracts.js";
-import type { AgentSkill } from "./types.js";
+import type { AgentSkill, SkillResolutionResult } from "./types.js";
+
+export function applyRequiredProfileSkills(
+  resolution: SkillResolutionResult,
+  profile: WorkProfile,
+): SkillResolutionResult {
+  const required = resolveProfileSkillActivations(resolution.availableSkills, profile);
+  const used = new Map<string, AgentSkill>();
+  for (const activation of required) used.set(activation.skill.id, activation.skill);
+  for (const skill of resolution.usedSkills) used.set(skill.id, skill);
+  return {
+    ...resolution,
+    usedSkills: [...used.values()],
+    forcedSkillIds: [...new Set([...profile.requiredSkillIds, ...resolution.forcedSkillIds])],
+  };
+}
 
 export function resolveProfileSkillActivations(
   availableSkills: ReadonlyArray<AgentSkill>,

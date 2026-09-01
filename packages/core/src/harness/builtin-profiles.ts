@@ -63,6 +63,7 @@ const PROFILE_INPUTS = [
     id: "visual-asset",
     title: "Visual asset",
     capabilityIds: ["workspace", "visual"],
+    requiredSkillIds: ["inkos-story-cover"],
     artifactKinds: ["image-prompt", "image"],
   },
 ] as const;

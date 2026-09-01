@@ -15,6 +15,7 @@ export {
 } from "./builtin-loader.js";
 export { createSkillRegistry, type CreateSkillRegistryOptions } from "./registry.js";
 export {
+  applyRequiredProfileSkills,
   activatedSkillIds,
   mergeActivatedSkillGuidance,
   resolveProfileSkillActivations,

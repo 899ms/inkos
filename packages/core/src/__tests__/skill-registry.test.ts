@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import { createBuiltInWorkProfileRegistry } from "../harness/builtin-profiles.js";
 import { createSkillRegistry, loadAvailableAgentSkills } from "../skills/index.js";
-import { resolveProfileSkillActivations } from "../skills/activations.js";
+import { applyRequiredProfileSkills, resolveProfileSkillActivations } from "../skills/activations.js";
 import { WorkProfileSchema } from "../harness/contracts.js";
 
 const externalSkill = {
@@ -62,6 +62,33 @@ describe("AgentSkills registry", () => {
     const registry = createSkillRegistry();
 
     expect(registry.resolveSkills({}).usedSkills.map((skill) => skill.id)).toEqual([]);
+  });
+
+  it("applies required profile Skills to the main turn alongside user-forced Skills", () => {
+    const scriptSkill = {
+      id: "inkos-script-writing",
+      name: "Script Writing",
+      description: "Script craft.",
+      body: "Write performable scenes.",
+      source: "builtin" as const,
+    };
+    const registry = createSkillRegistry({ skills: [scriptSkill, externalSkill] });
+    const profile = createBuiltInWorkProfileRegistry().require("script");
+    const effective = applyRequiredProfileSkills(
+      registry.resolveSkills({ requestedSkills: ["writer-distillation"] }),
+      profile,
+    );
+
+    expect(effective.usedSkills.map((skill) => skill.id)).toEqual([
+      "inkos-script-writing",
+      "writer-distillation",
+    ]);
+    expect(effective.forcedSkillIds).toEqual([
+      "inkos-script-writing",
+      "writer-distillation",
+    ]);
+    expect(createBuiltInWorkProfileRegistry().require("visual-asset").requiredSkillIds)
+      .toEqual(["inkos-story-cover"]);
   });
 
   it("fails loudly when a required professional skill is unavailable", () => {
