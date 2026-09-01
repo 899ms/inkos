@@ -1,5 +1,6 @@
 import { BaseAgent } from "./base.js";
 import { completeLongForm } from "../llm/long-form-completion.js";
+import { materializeStoryGraph } from "../interactive-film/generate.js";
 import { InteractiveFilmPackageToolSchema, StoryboardAssetsToolSchema } from "./production-document-tool.js";
 
 export type ScriptTargetFormat = string;
@@ -145,34 +146,34 @@ export class StoryboardCreationAgent extends LongFormProductionAgent {
   }
 }
 
-export class InteractiveFilmCreationAgent extends LongFormProductionAgent {
+export class InteractiveFilmCreationAgent extends BaseAgent {
   get name(): string {
     return "interactive-film-creation-writer";
   }
 
-  async writeInteractiveFilm(input: InteractiveFilmCreationInput): Promise<string> {
+  async createInteractiveFilmPackage(input: InteractiveFilmCreationInput) {
     const language = input.language ?? "zh";
-    const messages = [
+    const { result } = await this.submitStructured([
       { role: "system", content: buildInteractiveFilmCreationSystemPrompt(language) },
       { role: "user", content: buildInteractiveFilmCreationUserPrompt(input, language) },
-    ] as const;
-    const response = await completeLongForm({
-      messages,
-      language,
-      generate: (continuationMessages) => this.chat(continuationMessages, {
-        temperature: 0.5,
-        maxTokens: this.ctx.client.defaults.maxTokens,
-      }),
-      onContinuation: (pass) => this.log?.warn(`[interactive-film] Output limit reached; continuing pass ${pass}.`),
-      recoverAfterContinuation: (fragments) => this.recoverProductionMarkdown(
-        fragments,
-        language,
-        language === "en"
-          ? ["## Story Tree", "## Variables and Flags", "## Ending Paths", "## Interactive Script", "## Storyboard and Image Prompts"]
-          : ["## 剧情树", "## 变量与旗标表", "## 多结局路径", "## 互动剧本", "## 分镜与图像提示词"],
-      ),
+    ], {
+      name: "submit_interactive_film_package",
+      label: "Submit interactive-film package",
+      description: "Submit the complete human-readable interactive-film production package. Each text field is a complete Markdown artifact; imagePrompts preserves shot order.",
+      parameters: InteractiveFilmPackageToolSchema,
+      validate: (result) => {
+        materializeStoryGraph({
+          projectId: "pending",
+          title: input.title,
+          content: result.storyGraph,
+        });
+        return result;
+      },
+    }, {
+      temperature: 0.5,
+      maxTokens: this.ctx.client.defaults.maxTokens,
     });
-    return response.content.trim();
+    return result;
   }
 }
 
@@ -203,27 +204,6 @@ export class ProductionDocumentCompilerAgent extends BaseAgent {
     return result.imagePrompts;
   }
 
-  async compileInteractiveFilmPackage(document: string, language: "zh" | "en" = "zh") {
-    const { result } = await this.submitStructured(
-      [
-        {
-          role: "system",
-          content: language === "en"
-            ? "Project the complete interactive-film deliverable into the typed host package. Preserve the document content; do not invent or summarize missing sections."
-            : "把完整互动影游交付稿投影到宿主结构中。保留原文内容，不发明缺失部分，也不把已有部分概括缩短。",
-        },
-        { role: "user", content: document },
-      ],
-      {
-        name: "submit_interactive_film_package",
-        label: "Submit interactive-film package",
-        description: "Submit the host-consumed sections of the interactive-film deliverable.",
-        parameters: InteractiveFilmPackageToolSchema,
-      },
-      { temperature: 0.1 },
-    );
-    return result;
-  }
 }
 
 export function renderScriptSpec(input: ScriptCreationInput): string {
@@ -483,13 +463,13 @@ function buildInteractiveFilmCreationSystemPrompt(language: "zh" | "en" = "zh"):
   if (language === "en") {
     return [
       "Execute the confirmed spec with the activated interactive-film Skill; unconfirmed choices remain adjustable.",
-      "Output must be Markdown with the specified sections. No model self-narration, process notes, or \"Here is\" preamble.",
+      "Submit the complete package through the result tool. storyTree, flags, script, and storyboard are complete human-readable Markdown artifacts; imagePrompts preserve shot order; storyGraph is the playable graph for the same material.",
       "Every storyboard image prompt must be its own standalone `Prompt: ...` line so downstream asset management can pick it up; include only the visual constraints the user has confirmed.",
     ].join("\n");
   }
   return [
     "按已激活的互动影游 Skill 执行确认规格；未确认选择保持可调整。",
-    "输出必须是 Markdown，包含指定小节。不要写模型自述、流程说明或“以下是”。",
+    "通过结果工具提交完整交付包。storyTree、flags、script、storyboard 是完整且人可读的 Markdown 资产；imagePrompts 保持镜头顺序；storyGraph 是同一内容的可玩图谱。",
     "分镜图提示词必须写成单独的 `Prompt: ...` 行，便于后续资产管理；只写用户确认过的视觉限制。",
   ].join("\n");
 }
@@ -521,6 +501,9 @@ function buildInteractiveFilmCreationUserPrompt(input: InteractiveFilmCreationIn
       "",
       "## Storyboard and Image Prompts",
       "Provide the storyboard; each shot has one standalone `Prompt: ...` line.",
+      "",
+      "## Playable Story Graph",
+      "Submit the complete graph for the same story in storyGraph: exactly one start, at least one meaningful choice with distinct destinations or state consequences, and every path can reach an ending. The opening node may carry the first branching choice directly.",
     ].join("\n");
   }
   return [
@@ -547,6 +530,9 @@ function buildInteractiveFilmCreationUserPrompt(input: InteractiveFilmCreationIn
     "",
     "## 分镜与图像提示词",
     "提交分镜；每个镜头对应一条独立的 `Prompt: ...`。",
+    "",
+    "## 可玩故事图谱",
+    "在 storyGraph 字段提交同一剧情的完整可玩图谱：恰好一个 start，至少一个具有不同去向或状态后果的真实分支选择，且每条路径可达 ending。开场节点可以直接承载分支选择。",
   ].join("\n");
 }
 

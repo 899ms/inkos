@@ -124,3 +124,4 @@ export const StoryStructureToolSchema = Type.Object({
 
 export type StoryNodeContentSubmission = Static<typeof StoryNodeContentToolSchema>;
 export type StoryStructureSubmission = Static<typeof StoryStructureToolSchema>;
+export type StoryGraphContentSubmission = Static<typeof StoryGraphContentToolSchema>;

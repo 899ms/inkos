@@ -1,8 +1,7 @@
 import { access, mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { AgentContext } from "../agents/base.js";
-import { generateStoryGraph } from "../interactive-film/generate.js";
-import type { StoryGraph } from "../interactive-film/graph-schema.js";
+import { materializeStoryGraph } from "../interactive-film/generate.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import {
   InteractiveFilmCreationAgent,
@@ -216,9 +215,7 @@ export async function runInteractiveFilmCreation(
 
   options.onProgress?.("Writing story tree, flags, script, storyboard, and image prompts...");
   const agent = new InteractiveFilmCreationAgent(options.runtime);
-  const packageMarkdown = await agent.writeInteractiveFilm(input);
-  const compiler = new ProductionDocumentCompilerAgent(options.runtime);
-  const compiled = await compiler.compileInteractiveFilmPackage(packageMarkdown, options.language ?? "zh");
+  const compiled = await agent.createInteractiveFilmPackage(input);
   const { storyTree, flags, script, storyboard } = compiled;
   const imagePromptItems = compiled.imagePrompts;
   const imagePrompts = renderImagePrompts(imagePromptItems);
@@ -244,16 +241,11 @@ export async function runInteractiveFilmCreation(
     createdAt: new Date().toISOString(),
   });
 
-  options.onProgress?.("Writing interactive-film story graph...");
-  const graph = await createInteractiveFilmStoryGraph(options.runtime, {
+  options.onProgress?.("Validating interactive-film story graph...");
+  const graph = materializeStoryGraph({
     projectId,
     title: options.title,
-    input,
-    storyTree,
-    flags,
-    script,
-    imagePrompts,
-    onProgress: options.onProgress,
+    content: compiled.storyGraph,
   });
   const artifacts = [
     textArtifact(join(baseDir, "interactive-spec.md"), spec),
@@ -355,68 +347,6 @@ export async function runStoryboardCreation(
     assetsManifestPath: relPath(baseDir, "assets.json"),
     assetsDir: relPath(baseDir, "assets"),
   };
-}
-
-async function createInteractiveFilmStoryGraph(
-  runtime: AgentContext,
-  args: {
-    readonly projectId: string;
-    readonly title: string;
-    readonly input: InteractiveFilmCreationInput;
-    readonly storyTree: string;
-    readonly flags: string;
-    readonly script: string;
-    readonly imagePrompts: string;
-    readonly onProgress?: (message: string) => void;
-  },
-): Promise<StoryGraph> {
-  args.onProgress?.(args.input.language === "en"
-    ? "Building the playable story graph through the structured authoring harness..."
-    : "正在通过结构化创作内核生成可玩故事图谱……");
-  return generateStoryGraph(runtime.client, runtime.model, {
-    projectId: args.projectId,
-    title: args.title,
-    premise: buildInteractiveFilmGraphPremise(args.input, args.storyTree, args.flags, args.script, args.imagePrompts),
-  }, {
-    language: args.input.language,
-    activatedSkills: runtime.activatedSkills,
-    signal: runtime.signal,
-  });
-}
-
-function buildInteractiveFilmGraphPremise(
-  input: InteractiveFilmCreationInput,
-  storyTree: string,
-  flags: string,
-  script: string,
-  imagePrompts: string,
-): string {
-  if ((input.language ?? "zh") === "en") {
-    return [
-      `Creation brief: ${input.requirements}`,
-      input.targetAudience ? `Target audience: ${input.targetAudience}` : "",
-      input.episodeCount ? `Segments/episodes: ${input.episodeCount}` : "",
-      input.episodeDuration ? `Per-segment duration: ${input.episodeDuration}` : "",
-      input.budget ? `Budget: ${input.budget}` : "",
-      input.referenceMode ? `Reference mode: ${input.referenceMode}` : "",
-      `Story tree:\n${storyTree}`,
-      `Variables and flags:\n${flags}`,
-      `Interactive script:\n${script}`,
-      `Image prompts:\n${imagePrompts}`,
-    ].filter(Boolean).join("\n\n");
-  }
-  return [
-    `创作需求：${input.requirements}`,
-    input.targetAudience ? `目标受众：${input.targetAudience}` : "",
-    input.episodeCount ? `段落/集数：${input.episodeCount}` : "",
-    input.episodeDuration ? `单段时长：${input.episodeDuration}` : "",
-    input.budget ? `预算：${input.budget}` : "",
-    input.referenceMode ? `参考模式：${input.referenceMode}` : "",
-    `剧情树：\n${storyTree}`,
-    `变量旗标：\n${flags}`,
-    `互动剧本：\n${script}`,
-    `图像提示词：\n${imagePrompts}`,
-  ].filter(Boolean).join("\n\n");
 }
 
 function formatError(error: unknown): string {

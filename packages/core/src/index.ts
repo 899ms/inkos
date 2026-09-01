@@ -542,8 +542,8 @@ export {
   storyGraphPath,
 } from "./interactive-film/graph-store.js";
 export {
-  generateStoryGraph,
-  type GenerateStoryGraphInput,
+  materializeStoryGraph,
+  type MaterializeStoryGraphInput,
 } from "./interactive-film/generate.js";
 export {
   WorldAnchorSchema,
