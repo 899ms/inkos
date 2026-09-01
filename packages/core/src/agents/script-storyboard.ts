@@ -26,12 +26,6 @@ export interface StoryboardCreationInput {
   readonly granularity?: string;
   readonly maxShots?: number;
   readonly language?: "zh" | "en";
-  readonly segment?: {
-    readonly label: string;
-    readonly index: number;
-    readonly count: number;
-    readonly estimatedShots: number;
-  };
 }
 
 export interface InteractiveFilmCreationInput {
@@ -47,8 +41,12 @@ export interface InteractiveFilmCreationInput {
   readonly language?: "zh" | "en";
 }
 
-abstract class LongFormProductionAgent extends BaseAgent {
-  protected async recoverProductionMarkdown(
+export class ScriptCreationAgent extends BaseAgent {
+  get name(): string {
+    return "script-creation-writer";
+  }
+
+  private async recoverProductionMarkdown(
     fragments: string,
     language: "zh" | "en",
     requiredHeadings: readonly string[],
@@ -86,13 +84,6 @@ abstract class LongFormProductionAgent extends BaseAgent {
     });
     return response.content.trim();
   }
-}
-
-export class ScriptCreationAgent extends LongFormProductionAgent {
-  get name(): string {
-    return "script-creation-writer";
-  }
-
   async writeScript(input: ScriptCreationInput): Promise<string> {
     const language = input.language ?? "zh";
     const messages = [
@@ -384,11 +375,6 @@ function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, langu
       "## Full Source Material",
       input.sourceText?.trim()
         || "The user did not provide full source material; write an extensible storyboard draft strictly from the storyboard spec and user requirements.",
-      ...(input.segment ? [
-        "",
-        "## Current Production Segment",
-        `Write only ${input.segment.label} (${input.segment.index + 1}/${input.segment.count}) in this call. The global shot cap is NOT the shot count for this call. Preserve all global requirements and follow the exact scene/segment shot count when the user confirmed one. Do not summarize or write any other segment.`,
-      ] : []),
       "",
       "## Output Format",
       `# ${input.title} Storyboard`,
@@ -408,11 +394,6 @@ function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, langu
     "",
     "## 完整源素材",
     input.sourceText?.trim() || "用户没有提供完整源素材；请严格根据分镜规格和用户要求写一个可继续扩展的分镜稿。",
-    ...(input.segment ? [
-      "",
-      "## 当前生产分段",
-      `本次只写${input.segment.label}（${input.segment.index + 1}/${input.segment.count}）。全局镜头上限不是本次镜头数。保留全部全局要求；用户已确认本场/本段镜头数时严格按该数量执行。不要概括或生成任何其他分段。`,
-    ] : []),
     "",
     "## 输出格式",
     `# ${input.title} 分镜`,
