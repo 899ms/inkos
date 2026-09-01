@@ -1,7 +1,7 @@
 import { BaseAgent } from "./base.js";
 import { completeLongForm } from "../llm/long-form-completion.js";
 import { materializeStoryGraph } from "../interactive-film/generate.js";
-import { InteractiveFilmPackageToolSchema, StoryboardAssetsToolSchema } from "./production-document-tool.js";
+import { InteractiveFilmPackageToolSchema, StoryboardPackageToolSchema } from "./production-document-tool.js";
 
 export type ScriptTargetFormat = string;
 
@@ -117,32 +117,29 @@ export class ScriptCreationAgent extends LongFormProductionAgent {
   }
 }
 
-export class StoryboardCreationAgent extends LongFormProductionAgent {
+export class StoryboardCreationAgent extends BaseAgent {
   get name(): string {
     return "storyboard-creation-writer";
   }
 
-  async writeStoryboard(input: StoryboardCreationInput): Promise<string> {
+  async writeStoryboard(input: StoryboardCreationInput) {
     const language = input.language ?? "zh";
-    const messages = [
+    const { result } = await this.submitStructured([
       { role: "system", content: buildStoryboardCreationSystemPrompt(language) },
       { role: "user", content: buildStoryboardCreationUserPrompt(input, language) },
-    ] as const;
-    const response = await completeLongForm({
-      messages,
-      language,
-      generate: (continuationMessages) => this.chat(continuationMessages, {
-        temperature: 0.45,
-        maxTokens: this.ctx.client.defaults.maxTokens,
-      }),
-      onContinuation: (pass) => this.log?.warn(`[storyboard] Output limit reached; continuing pass ${pass}.`),
-      recoverAfterContinuation: (fragments) => this.recoverProductionMarkdown(
-        fragments,
-        language,
-        language === "en" ? ["## Storyboard", "## Image Prompts"] : ["## 分镜表", "## 图像提示词"],
-      ),
+    ], {
+      name: "submit_storyboard_package",
+      label: "Submit storyboard package",
+      description: "Submit the complete human-readable storyboard and its generation-ready image prompts in shot order.",
+      parameters: StoryboardPackageToolSchema,
+    }, {
+      temperature: 0.45,
+      maxTokens: this.ctx.client.defaults.maxTokens,
     });
-    return response.content.trim();
+    return {
+      storyboard: result.storyboard.trim(),
+      imagePrompts: result.imagePrompts.map((prompt) => prompt.trim()).filter(Boolean),
+    };
   }
 }
 
@@ -175,35 +172,6 @@ export class InteractiveFilmCreationAgent extends BaseAgent {
     });
     return result;
   }
-}
-
-export class ProductionDocumentCompilerAgent extends BaseAgent {
-  get name(): string {
-    return "production-document-compiler";
-  }
-
-  async compileStoryboardAssets(document: string, language: "zh" | "en" = "zh"): Promise<ReadonlyArray<string>> {
-    const { result } = await this.submitStructured(
-      [
-        {
-          role: "system",
-          content: language === "en"
-            ? "Read the complete storyboard and submit its generation-ready shot image prompts in document order. Do not invent shots or rewrite prompts."
-            : "读取完整分镜稿，按文档顺序提交每个镜头可直接生图的提示词。不要发明镜头，也不要改写提示词。",
-        },
-        { role: "user", content: document },
-      ],
-      {
-        name: "submit_storyboard_assets",
-        label: "Submit storyboard assets",
-        description: "Submit image prompts extracted semantically from the storyboard artifact.",
-        parameters: StoryboardAssetsToolSchema,
-      },
-      { temperature: 0.1 },
-    );
-    return result.imagePrompts;
-  }
-
 }
 
 export function renderScriptSpec(input: ScriptCreationInput): string {
@@ -395,12 +363,12 @@ function buildStoryboardCreationSystemPrompt(language: "zh" | "en" = "zh"): stri
   if (language === "en") {
     return [
       "Execute the confirmed visual spec with the activated storyboard Skill; unconfirmed choices remain adjustable.",
-      "Output Markdown. No model self-narration or process explanation.",
+      "Submit the complete human-readable storyboard and its image prompts together through the result tool. No model self-narration or process explanation.",
     ].join("\n");
   }
   return [
     "按已激活的分镜 Skill 执行确认的视觉规格；未确认选择保持可调整。",
-    "输出 Markdown。不要写模型自述或流程解释。",
+    "通过结果工具同时提交完整可读分镜和对应图像提示词。不要写模型自述或流程解释。",
   ].join("\n");
 }
 

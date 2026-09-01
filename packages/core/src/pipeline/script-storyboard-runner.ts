@@ -5,7 +5,6 @@ import { materializeStoryGraph } from "../interactive-film/generate.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import {
   InteractiveFilmCreationAgent,
-  ProductionDocumentCompilerAgent,
   ScriptCreationAgent,
   StoryboardCreationAgent,
   renderInteractiveFilmSpec,
@@ -306,12 +305,12 @@ export async function runStoryboardCreation(
 
   options.onProgress?.("Writing storyboard and image prompts...");
   const agent = new StoryboardCreationAgent(options.runtime);
-  const storyboard = await agent.writeStoryboard(input);
-  const compiler = new ProductionDocumentCompilerAgent(options.runtime);
+  const storyboardPackage = await agent.writeStoryboard(input);
+  const storyboard = storyboardPackage.storyboard;
   await persistCandidateArtifacts(options.projectRoot, projectId, [
     textArtifact(join(baseDir, "storyboard.md"), storyboard),
   ]);
-  const imagePromptItems = await compiler.compileStoryboardAssets(storyboard, options.language ?? "zh");
+  const imagePromptItems = storyboardPackage.imagePrompts;
   const imagePrompts = renderImagePrompts(imagePromptItems);
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "source"));
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "generated"));

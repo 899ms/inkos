@@ -1,8 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import { StoryGraphContentToolSchema } from "../interactive-film/tool-schemas.js";
 
-export const StoryboardAssetsToolSchema = Type.Object({
-  imagePrompts: Type.Array(Type.String({ description: "One generation-ready image prompt for a storyboard shot." })),
+export const StoryboardPackageToolSchema = Type.Object({
+  storyboard: Type.String({ minLength: 1 }),
+  imagePrompts: Type.Array(
+    Type.String({ minLength: 1, description: "One generation-ready image prompt for a storyboard shot." }),
+    { minItems: 1 },
+  ),
 });
 
 export const InteractiveFilmPackageToolSchema = Type.Object({
