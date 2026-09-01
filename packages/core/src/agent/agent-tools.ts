@@ -43,7 +43,7 @@ import {
   activatedSkillIds,
   mergeActivatedSkillGuidance,
 } from "../skills/activations.js";
-import { listWorkManifests, loadWorkManifest } from "../harness/work-store.js";
+import { listWorkManifests, loadWorkManifest, mergeWorkMetadata } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { StoryNodeToolSchema } from "../interactive-film/tool-schemas.js";
 
@@ -1309,6 +1309,7 @@ export function createFanficBookTool(
       await runPipelineWithAgentContext(pipeline, signal, activatedSkills, () => (
         pipeline.initFanficBook(book, source.text, source.name, mode)
       ));
+      await mergeWorkMetadata(projectRoot, book.id, { creationKind: "fanfic" });
       return textResult(
         `Created fanfiction book "${book.title}" (${book.id}) in ${mode} mode.`,
         {
@@ -1368,6 +1369,7 @@ export function createSpinoffBookTool(
       await runPipelineWithAgentContext(pipeline, signal, activatedSkills, () => (
         pipeline.initSpinoffBook(book, parentBookId, params.direction)
       ));
+      await mergeWorkMetadata(projectRoot, book.id, { creationKind: "spinoff" });
       return textResult(
         `Created side-story book "${book.title}" (${book.id}) from "${parent.title}".`,
         {
@@ -1424,6 +1426,7 @@ export function createImitationBookTool(
       await runPipelineWithAgentContext(pipeline, signal, activatedSkills, () => (
         pipeline.initImitationBook(book, reference.text, params.storyIdea, reference.name)
       ));
+      await mergeWorkMetadata(projectRoot, book.id, { creationKind: "imitation" });
       return textResult(
         `Created imitation book "${book.title}" (${book.id}) with a persisted style guide.`,
         {
@@ -1529,6 +1532,7 @@ export function createContinuationImportTool(
         }
         throw error;
       }
+      await mergeWorkMetadata(projectRoot, bookId, { creationKind: "continuation" });
       return textResult(
         `Imported ${result.importedCount} chapter(s) into "${bookId}". Next chapter: ${result.nextChapter}.`,
         {

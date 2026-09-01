@@ -119,6 +119,7 @@ export {
   workManifestPath,
   createWorkManifest,
   loadWorkManifest,
+  mergeWorkMetadata,
   saveWorkManifest,
   listWorkManifests,
 } from "./work-store.js";

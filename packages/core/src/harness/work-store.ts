@@ -61,6 +61,21 @@ export async function saveWorkManifest(projectRoot: string, manifest: WorkManife
   });
 }
 
+export async function mergeWorkMetadata(
+  projectRoot: string,
+  workId: string,
+  metadata: Readonly<Record<string, unknown>>,
+): Promise<WorkManifest> {
+  const current = await loadWorkManifest(projectRoot, workId);
+  const updated = WorkManifestSchema.parse({
+    ...current,
+    metadata: { ...current.metadata, ...metadata },
+    updatedAt: new Date().toISOString(),
+  });
+  await saveWorkManifest(projectRoot, updated);
+  return updated;
+}
+
 export async function listWorkManifests(
   projectRoot: string,
   profileId?: string,

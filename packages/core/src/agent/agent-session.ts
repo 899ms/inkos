@@ -47,9 +47,12 @@ import type { ActionPayload, ActionSource, RequestedIntent } from "../interactio
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import {
   applyRequiredProfileSkills,
+  applyRequiredWorkSkills,
   createSkillRegistry,
   loadAvailableAgentSkills,
+  mergeActivatedSkillGuidance,
   resolveProfileSkillActivations,
+  resolveWorkSkillActivations,
 } from "../skills/index.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { PlayStore } from "../play/play-store.js";
@@ -773,7 +776,10 @@ async function runAgentSessionUnlocked(
   }
   const profileId = work?.profileId ?? config.profileId ?? surfaceBinding.profileId;
   const profile = profiles.require(profileId);
-  const effectiveSkillResolution = applyRequiredProfileSkills(skillResolution, profile);
+  const effectiveSkillResolution = applyRequiredWorkSkills(
+    applyRequiredProfileSkills(skillResolution, profile),
+    work,
+  );
   const playWorldId = profileId === "interactive-world" ? (workId ?? sessionId) : null;
   const playWorldExists = playWorldId
     ? Boolean(await new PlayStore(projectRoot).loadWorld(playWorldId))
@@ -852,6 +858,7 @@ async function runAgentSessionUnlocked(
         { includeRecommended },
       )
     );
+    const workSkills = resolveWorkSkillActivations(skillResolution.availableSkills, work);
     const allowIntentSkillSelection = actionSource === "free-text"
       && skillResolution.forcedSkillIds.length === 0;
     const intentSkillTool = allowIntentSkillSelection
@@ -879,8 +886,12 @@ async function runAgentSessionUnlocked(
       attachmentPaths: () => cached?.currentAttachmentPaths ?? [],
       activeSkills: () => [...turnSkills.values()],
       workerSkills: (agent) => {
-        if (agent === "architect" || agent === "writer") return profileSkills("longform-novel");
-        if (agent === "auditor" || agent === "reviser") return profileSkills("longform-novel", true);
+        if (agent === "architect" || agent === "writer") {
+          return mergeActivatedSkillGuidance(profileSkills("longform-novel"), workSkills);
+        }
+        if (agent === "auditor" || agent === "reviser") {
+          return mergeActivatedSkillGuidance(profileSkills("longform-novel", true), workSkills);
+        }
         return [];
       },
       profileSkills,

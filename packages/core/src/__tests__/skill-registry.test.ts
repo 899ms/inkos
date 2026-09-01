@@ -5,8 +5,13 @@ import { describe, expect, it } from "vitest";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import { createBuiltInWorkProfileRegistry } from "../harness/builtin-profiles.js";
 import { createSkillRegistry, loadAvailableAgentSkills } from "../skills/index.js";
-import { applyRequiredProfileSkills, resolveProfileSkillActivations } from "../skills/activations.js";
+import {
+  applyRequiredProfileSkills,
+  applyRequiredWorkSkills,
+  resolveProfileSkillActivations,
+} from "../skills/activations.js";
 import { WorkProfileSchema } from "../harness/contracts.js";
+import { createWorkManifest } from "../harness/work-store.js";
 
 const externalSkill = {
   id: "writer-distillation",
@@ -89,6 +94,49 @@ describe("AgentSkills registry", () => {
     ]);
     expect(createBuiltInWorkProfileRegistry().require("visual-asset").requiredSkillIds)
       .toEqual(["inkos-story-cover"]);
+  });
+
+  it("keeps a derived Work's professional Skill active after its creation turn", () => {
+    const skills = [
+      {
+        id: "inkos-long-writing",
+        name: "Long Writing",
+        description: "Long-form craft.",
+        body: "Preserve long-form continuity.",
+        source: "builtin" as const,
+      },
+      {
+        id: "inkos-fanfic-writing",
+        name: "Fanfic Writing",
+        description: "Fan-fiction craft.",
+        body: "Preserve source canon and the allowed divergence.",
+        source: "builtin" as const,
+      },
+    ];
+    const registry = createSkillRegistry({ skills });
+    const work = createWorkManifest({
+      id: "fanfic-work",
+      title: "Fanfic Work",
+      profileId: "longform-novel",
+      language: "en",
+      metadata: { creationKind: "fanfic" },
+    });
+    const effective = applyRequiredWorkSkills(
+      applyRequiredProfileSkills(
+        registry.resolveSkills({}),
+        createBuiltInWorkProfileRegistry().require("longform-novel"),
+      ),
+      work,
+    );
+
+    expect(effective.usedSkills.map((skill) => skill.id)).toEqual([
+      "inkos-long-writing",
+      "inkos-fanfic-writing",
+    ]);
+    expect(effective.forcedSkillIds).toEqual([
+      "inkos-long-writing",
+      "inkos-fanfic-writing",
+    ]);
   });
 
   it("fails loudly when a required professional skill is unavailable", () => {

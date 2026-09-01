@@ -16,9 +16,12 @@ export {
 export { createSkillRegistry, type CreateSkillRegistryOptions } from "./registry.js";
 export {
   applyRequiredProfileSkills,
+  applyRequiredWorkSkills,
   activatedSkillIds,
   mergeActivatedSkillGuidance,
   resolveProfileSkillActivations,
+  resolveWorkSkillActivations,
+  requiredWorkSkillIds,
 } from "./activations.js";
 export {
   AgentSkillSchema,
