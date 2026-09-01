@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream, getModel, getEnvApiKey } from "@mariozechner/pi-ai";
+import { getModel, getEnvApiKey } from "@mariozechner/pi-ai";
 import type {
   Model,
   Api,
@@ -383,17 +383,6 @@ export function turnHasObservableOutcome(messages: ReadonlyArray<AgentMessage>):
   });
 }
 
-function hasDomainOwnedPresentationTail(messages: ReadonlyArray<AgentMessage>): boolean {
-  const last = messages.at(-1) as {
-    readonly role?: unknown;
-    readonly isError?: unknown;
-    readonly details?: unknown;
-  } | undefined;
-  if (last?.role !== "toolResult" || last.isError === true) return false;
-  const details = last.details as { readonly presentation?: unknown } | undefined;
-  return details?.presentation === "immersive-scene";
-}
-
 async function runInAgentSessionQueue<T>(
   projectRoot: string,
   sessionId: string,
@@ -538,25 +527,6 @@ const ZERO_PI_USAGE: AssistantMessage["usage"] = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
-
-function localAssistantStopStream(model: Model<Api>) {
-  const stream = createAssistantMessageEventStream();
-  const message: AssistantMessage = {
-    role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: ZERO_PI_USAGE,
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-  queueMicrotask(() => {
-    stream.push({ type: "done", reason: "stop", message });
-    stream.end(message);
-  });
-  return stream;
-}
 
 function resumedActionMessages(
   model: Model<Api>,
@@ -979,7 +949,6 @@ async function runAgentSessionUnlocked(
     const restoredContextBlock = restoredSystemContext.length > 0
       ? `\n\n## Restored committed context\n${restoredSystemContext.join("\n\n")}`
       : "";
-    let domainOwnedPresentationTail = false;
     const agent = new Agent({
       initialState: {
         model,
@@ -1028,15 +997,8 @@ async function runAgentSessionUnlocked(
         }),
         onContextCompression,
       }),
-      convertToLlm: (messages) => {
-        domainOwnedPresentationTail = hasDomainOwnedPresentationTail(messages);
-        return convertAgentMessagesForModel(messages);
-      },
+      convertToLlm: convertAgentMessagesForModel,
       streamFn: (streamModel, context, options) => {
-        if (domainOwnedPresentationTail) {
-          domainOwnedPresentationTail = false;
-          return localAssistantStopStream(streamModel);
-        }
         const firstActivePlayDecision = playWorldExists
           && context.messages.at(-1)?.role === "user";
         const streamOptions = firstActivePlayDecision
