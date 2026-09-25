@@ -158,9 +158,10 @@ export async function processTuiAgentInput(params: {
   const createdBookId = extractCreatedBookId(result.messages);
   const activeBookId = createdBookId ?? resolvedBookId;
   const proposedAction = extractProposedAction(result.messages);
-  const responseText = proposedAction
+  const failure = result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined);
+  const responseText = failure ?? (proposedAction
     ? formatProposedAction(proposedAction, language)
-    : result.responseText;
+    : result.responseText);
 
   const completedSession = {
     ...nextSession,
@@ -171,7 +172,7 @@ export async function processTuiAgentInput(params: {
     ...(activeBookId ? { activeBookId } : {}),
     ...(proposedAction ? { pendingProposedAction: proposedAction } : {}),
     currentExecution: {
-      status: "completed" as const,
+      status: failure ? "failed" as const : "completed" as const,
       ...(activeBookId ? { bookId: activeBookId } : {}),
       ...(params.session.activeChapterNumber ? { chapterNumber: params.session.activeChapterNumber } : {}),
       stageLabel: "agent",

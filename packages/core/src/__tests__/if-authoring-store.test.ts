@@ -1,5 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readdir } from "node:fs/promises";
+import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { createWorkManifest, saveWorkManifest, loadWorkManifest } from "../harness/work-store.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyGraphDelta, loadAuthoringState, revertToSnapshot } from "../interactive-film/authoring-store.js";
@@ -18,6 +20,7 @@ describe("authoring-store", () => {
   });
 
   it("applies a delta onto an empty graph, persists graph + bumps rev", async () => {
+    await saveWorkManifest(root,createWorkManifest({id:'p',title:'Film title',profileId:'interactive-film',language:'en'}));
     const { graph, rev } = await applyGraphDelta({
       projectRoot: root, projectId: "p",
       delta: StoryGraphDeltaSchema.parse({
@@ -27,9 +30,13 @@ describe("authoring-store", () => {
       phase: "structure",
     });
     expect(rev).toBe(1);
+    expect(graph.title).toBe('Film title');
     expect(graph.nodes.map(n => n.id)).toEqual(["s"]);
     expect((await loadStoryGraph(root, "p"))?.worldAnchor?.storyCore).toBe("核心A");
     expect(await loadAuthoringState(root, "p")).toEqual({ phase: "structure", rev: 1 });
+    const work = await loadWorkManifest(root,'p');
+    const artifact = work.artifacts.find(a=>a.revisions.some(r=>r.id===a.currentRevisionId&&r.path==='source/story-graph.json'))!;
+    expect(artifact.revisions.find(r=>r.id===artifact.currentRevisionId)?.checksum).toBe('sha256:'+createHash('sha256').update(await readFile(join(root,'works/p/source/story-graph.json'))).digest('hex'));
   });
 
   it("writes a snapshot before applying, and revert restores it", async () => {
@@ -38,6 +45,9 @@ describe("authoring-store", () => {
     // snapshot 1 captured the state before the 2nd apply (storyCore v1)
     const reverted = await revertToSnapshot({ projectRoot: root, projectId: "p", rev: 1 });
     expect(reverted.worldAnchor?.storyCore).toBe("v1");
+    expect((await loadAuthoringState(root,'p')).rev).toBe(3);
+    expect((await revertToSnapshot({projectRoot:root,projectId:'p',rev:2})).worldAnchor?.storyCore).toBe('v2');
+    expect((await loadAuthoringState(root,'p')).rev).toBe(4);
     const snaps = await readdir(join(root, "works", "p", "source", "snapshots"));
     expect(snaps.length).toBeGreaterThanOrEqual(1);
   });

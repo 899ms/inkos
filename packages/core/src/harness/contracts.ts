@@ -31,6 +31,7 @@ export const WorkLineageSchema = z.object({
   relation: HarnessIdSchema,
   sourceWorkId: WorkResourceIdSchema,
   sourceArtifactId: WorkResourceIdSchema.optional(),
+  sourceRevisionId: HarnessIdSchema.optional(),
 }).strict();
 export type WorkLineage = z.infer<typeof WorkLineageSchema>;
 
@@ -123,6 +124,10 @@ export const WorkProfileSchema = z.object({
   recommendedSkillIds: z.array(HarnessIdSchema),
   artifactKinds: z.array(HarnessIdSchema),
   confirmation: ConfirmationPolicySchema,
+  contextRecipe: z.object({ id: HarnessIdSchema, sourceIds: z.array(HarnessIdSchema) }).optional(),
+  artifactSchemas: z.record(z.string(), z.enum(["text", "json", "short-manuscript", "short-package", "translation-manifest", "translation-glossary", "translation-chapter", "story-graph"])).default({}),
+  qualityCriteria: z.array(z.string()).default([]),
+  production: z.object({ maxChaptersPerCall: z.number().int().positive().optional(), minChapterLengthRatio: z.number().positive().max(1).optional() }).default({}),
 }).strict();
 export type WorkProfile = z.infer<typeof WorkProfileSchema>;
 

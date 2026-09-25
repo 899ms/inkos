@@ -1,6 +1,7 @@
 export {
   createReadTool,
   createShortFictionRunTool,
+  createShortFictionReviseTool,
   createScriptCreationTool,
   createStoryboardCreationTool,
   createInteractiveFilmCreationTool,
@@ -25,6 +26,7 @@ export {
 export {
   createTranslationCreateTool,
   createTranslationRunTool,
+  createTranslationRevisionTool,
   createTranslationExportTool,
 } from "../harness/tools/translation.js";
 export {

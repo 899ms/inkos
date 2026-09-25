@@ -14,11 +14,12 @@ test-project/
 .gstack/
 .worktrees/
 docs/*
+!docs/harness-result-first-redesign.md
 novel-to-comic-research.docx
 .pnpm-store/
 tmp/
 interactive-films/
-output/playwright/
+output/
 autoresearch/
 .playwright-cli/
 .superpowers/

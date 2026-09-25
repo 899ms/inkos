@@ -90,6 +90,7 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
     if (!existing) {
       throw new Error(`cannot resolve unknown hook ${hookId}`);
     }
+    if (existing.status === "superseded") throw Object.assign(new Error(`Cannot resolve superseded hook ${hookId}`), { code: "HOOK_SUPERSEDED" });
     hooksById.set(hookId, {
       ...existing,
       status: "resolved",
@@ -102,10 +103,12 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
     if (!existing) {
       throw new Error(`cannot defer unknown hook ${hookId}`);
     }
+    if (existing.status === "superseded") throw Object.assign(new Error(`Cannot defer superseded hook ${hookId}`), { code: "HOOK_SUPERSEDED" });
     hooksById.set(hookId, {
       ...existing,
       status: "deferred",
-      lastAdvancedChapter: Math.max(existing.lastAdvancedChapter, delta.chapter),
+      // Postponing a promise is not evidence that its narrative advanced.
+      // Keep the last supported advancement rather than inventing one here.
     });
   }
 
@@ -119,6 +122,12 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
 }
 
 function mergeHookRecord(existing: HookRecord, incoming: HookRecord): HookRecord {
+  if (existing.status === "superseded") return existing;
+  if (incoming.status === "superseded") {
+    if (existing.status === "resolved") throw Object.assign(new Error(`Cannot withdraw resolved history ${existing.hookId}`), { code: "HOOK_RESOLVED_HISTORY" });
+    if (!incoming.notes.trim()) throw Object.assign(new Error(`Withdrawal authority is required for ${existing.hookId}`), { code: "HOOK_WITHDRAWAL_REASON_REQUIRED" });
+    return { ...existing, status: "superseded", notes: `${existing.notes}\n${incoming.notes.trim()}`.trim() };
+  }
   const advanced = Math.max(existing.lastAdvancedChapter, incoming.lastAdvancedChapter);
 
   return {

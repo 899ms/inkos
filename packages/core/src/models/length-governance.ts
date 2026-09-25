@@ -6,6 +6,8 @@ export type LengthCountingMode = z.infer<typeof LengthCountingModeSchema>;
 export const LengthSpecSchema = z.object({
   target: z.number().int().min(1),
   countingMode: LengthCountingModeSchema,
+  minChapterLength: z.number().int().min(1).optional(),
+  maxChapterLength: z.number().int().min(1).optional(),
 }).strict();
 
 export type LengthSpec = z.infer<typeof LengthSpecSchema>;

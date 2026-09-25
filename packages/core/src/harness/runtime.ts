@@ -1,3 +1,7 @@
+import { withWorkMutationScope, runInWorkMutationQueue } from "../utils/work-mutation-scope.js";
+import { StateManager } from "../state/manager.js";
+import { withExecutionEvidence } from "./execution-evidence.js";
+import { actionFailureFacts } from "./action-observation.js";
 import { randomUUID } from "node:crypto";
 import {
   HARNESS_VERSION,
@@ -16,12 +20,13 @@ import { WorkProfileRegistry } from "./profile-registry.js";
 
 export type ActionRequestSource = "agent" | "explicit";
 
-const workMutationQueues = new Map<string, Promise<void>>();
 
 export interface HarnessEpisodeHandle {
   readonly episode: CreativeEpisode;
   readonly profile: WorkProfile;
   readonly work: WorkManifest | null;
+  readonly authorRequest?: string;
+  readonly baselineWork?: WorkManifest | null;
 }
 
 export class ActionConfirmationRequiredError extends Error {
@@ -48,7 +53,10 @@ export class CreativeHarnessRuntime {
     readonly work?: WorkManifest | null;
     readonly episodeId?: string;
     readonly startedAt?: string;
+    readonly authorRequest?: string;
+    readonly baselineWork?: WorkManifest | null;
   }): HarnessEpisodeHandle {
+    this.episodes.recoverInterruptedEpisodes();
     const profile = this.profiles.require(input.profileId);
     const work = input.work ?? null;
     if (work && work.profileId !== profile.id) {
@@ -67,9 +75,10 @@ export class CreativeHarnessRuntime {
       episodeId: episode.id,
       workId: episode.workId,
       type: "episode-started",
-      payload: { profileId: profile.id },
+      payload: { profileId: profile.id, ...(input.authorRequest ? {authorRequest:input.authorRequest} : {}),
+        baseline: (input.baselineWork === undefined ? work : input.baselineWork)?.artifacts.map(a=>({artifactId:a.id,revisionId:a.currentRevisionId})) ?? null },
     }, episode.startedAt);
-    return { episode, profile, work };
+    return { episode, profile, work, authorRequest: input.authorRequest, baselineWork: input.baselineWork === undefined ? work : input.baselineWork };
   }
 
   async executeAction(input: {
@@ -97,6 +106,8 @@ export class CreativeHarnessRuntime {
       });
       throw new ActionConfirmationRequiredError(capability.id, action.id, action.risk);
     }
+    const actionExecutionId = `action-${randomUUID()}`;
+    let actionWorkId = this.episodes.requireEpisode(input.handle.episode.id).workId;
     try {
       const invoke = async () => {
         if (input.signal?.aborted) throw input.signal.reason;
@@ -106,7 +117,7 @@ export class CreativeHarnessRuntime {
           type: "action-started",
           capabilityId: capability.id,
           actionId: action.id,
-          payload: { risk: action.risk, source: input.source },
+          payload: { actionExecutionId, risk: action.risk, source: input.source, parameters: input.parameters },
         });
         const context: CapabilityExecutionContext = {
           projectRoot: this.projectRoot,
@@ -119,20 +130,36 @@ export class CreativeHarnessRuntime {
             this.episodes.append(event);
           },
         };
-        return this.capabilities.invoke(
+        return withExecutionEvidence((type, payload) => {
+          if (type === "work-artifacts-synced" && typeof payload.workId === "string") {
+            actionWorkId = payload.workId;
+            if (!this.episodes.requireEpisode(input.handle.episode.id).workId) this.episodes.bindWork(input.handle.episode.id, actionWorkId);
+          }
+          this.episodes.append({
+            episodeId: input.handle.episode.id, workId: actionWorkId, capabilityId: capability.id, actionId: action.id,
+            type, payload: { ...payload, actionExecutionId },
+          });
+        }, () => this.capabilities.invoke(
           capability.id,
           action.id,
           context,
           input.parameters,
-        );
+        ), input.handle.profile, input.handle.work, input.handle.authorRequest, input.handle.baselineWork);
       };
-      const result = action.risk === "read" || !input.handle.work
+      const result = action.risk === "read" || !input.handle.work || action.managesWorkLock
         ? await invoke()
         : await runInWorkMutationQueue(
             `${this.projectRoot}\0${input.handle.work.id}`,
-            invoke,
+            () => withWorkMutationScope(this.projectRoot, input.handle.work!.id,
+              () => new StateManager(this.projectRoot).acquireBookLock(input.handle.work!.id), invoke),
           );
       const episodeWorkId = bindCreatedWork(this.episodes, input.handle, result);
+      if (input.signal?.aborted) {
+        this.episodes.append({ episodeId: input.handle.episode.id, workId: episodeWorkId,
+          type: "action-output-retained", capabilityId: capability.id, actionId: action.id,
+          payload: { actionExecutionId, result } });
+        input.signal.throwIfAborted();
+      }
       this.episodes.append({
         episodeId: input.handle.episode.id,
         workId: episodeWorkId,
@@ -140,6 +167,8 @@ export class CreativeHarnessRuntime {
         capabilityId: capability.id,
         actionId: action.id,
         payload: {
+          actionExecutionId,
+          result,
           status: result.status,
           summary: result.summary,
           artifactCount: result.artifacts.length,
@@ -148,13 +177,14 @@ export class CreativeHarnessRuntime {
       });
       return result;
     } catch (error) {
+      const { message, ...failure } = actionFailureFacts(error);
       this.episodes.append({
         episodeId: input.handle.episode.id,
-        workId: input.handle.episode.workId,
+        workId: actionWorkId,
         type: input.signal?.aborted ? "action-cancelled" : "action-failed",
         capabilityId: capability.id,
         actionId: action.id,
-        payload: { error: error instanceof Error ? error.message : String(error) },
+        payload: { actionExecutionId, error: message, ...failure },
       });
       throw error;
     }
@@ -181,27 +211,11 @@ function bindCreatedWork(
   handle: HarnessEpisodeHandle,
   result: ActionResult,
 ): string | null {
-  if (handle.episode.workId) return handle.episode.workId;
+  const current = episodes.requireEpisode(handle.episode.id);
+  if (current.workId) return current.workId;
   const workIds = new Set(result.artifacts.map((artifact) => artifact.workId));
   if (workIds.size !== 1) return null;
   return episodes.bindWork(handle.episode.id, [...workIds][0]!).workId;
-}
-
-async function runInWorkMutationQueue<T>(key: string, task: () => Promise<T>): Promise<T> {
-  const previous = workMutationQueues.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const queued = previous.catch(() => undefined).then(() => gate);
-  workMutationQueues.set(key, queued);
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    release();
-    if (workMutationQueues.get(key) === queued) workMutationQueues.delete(key);
-  }
 }
 
 export function isActionAuthorized(

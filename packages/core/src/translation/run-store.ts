@@ -9,9 +9,12 @@ import {
   TranslationChapterFileSchema,
   TranslationGlossarySchema,
   TranslationProjectManifestSchema,
+  validateTranslationManifestOwnership,
+  normalizeTranslationArtifactPath,
 } from "./types.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { workDirectory } from "../harness/work-store.js";
+import { safeChildPath } from "../utils/path-safety.js";
 
 export function translationProjectDir(projectRoot: string, projectId: string): string {
   return join(workDirectory(projectRoot, projectId), "source");
@@ -26,14 +29,14 @@ export async function loadTranslationManifest(
   projectId: string,
 ): Promise<TranslationProjectManifest> {
   const path = translationManifestPath(projectRoot, projectId);
-  return TranslationProjectManifestSchema.parse(JSON.parse(await readFile(path, "utf-8")));
+  return validateTranslationManifestOwnership(TranslationProjectManifestSchema.parse(JSON.parse(await readFile(path, "utf-8"))),projectId);
 }
 
 export async function saveTranslationManifest(
   projectRoot: string,
   manifest: TranslationProjectManifest,
 ): Promise<void> {
-  const parsed = TranslationProjectManifestSchema.parse(manifest);
+  const parsed = validateTranslationManifestOwnership(TranslationProjectManifestSchema.parse(manifest),manifest.id);
   await writeFile(translationManifestPath(projectRoot, parsed.id), JSON.stringify(parsed, null, 2), "utf-8");
 }
 
@@ -41,7 +44,7 @@ export async function loadTranslationChapter(
   projectRoot: string,
   chapterPath: string,
 ): Promise<TranslationChapterFile> {
-  return TranslationChapterFileSchema.parse(JSON.parse(await readFile(join(projectRoot, chapterPath), "utf-8")));
+  return TranslationChapterFileSchema.parse(JSON.parse(await readFile(safeChildPath(projectRoot, chapterPath), "utf-8")));
 }
 
 export async function saveTranslationChapter(
@@ -50,7 +53,7 @@ export async function saveTranslationChapter(
   chapter: TranslationChapterFile,
 ): Promise<void> {
   const parsed = TranslationChapterFileSchema.parse(chapter);
-  await writeFile(join(projectRoot, chapterPath), JSON.stringify(parsed, null, 2), "utf-8");
+  await writeFile(safeChildPath(projectRoot, chapterPath), JSON.stringify(parsed, null, 2), "utf-8");
 }
 
 export async function loadTranslationGlossary(
@@ -89,7 +92,7 @@ export async function saveTranslationProgress(
     rootDir: projectRoot,
     writes: [
       {
-        relativePath: chapterPath,
+        relativePath: normalizeTranslationArtifactPath(projectId,chapterPath),
         content: `${JSON.stringify(chapter, null, 2)}\n`,
       },
       {

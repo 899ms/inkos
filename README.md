@@ -51,9 +51,17 @@ InkOS 是一个面向故事创作与多语言翻译的 AI Agent 系统：长篇�
 
 > 💡 **写小说，先给 Agent 接一层专业数据** —— 写小说不只缺模型，更缺素材。推荐搭配 [**火花数据API（huohuaapi）**](https://huohuaapi.com/)：按调用计费的小说 / 网文创作数据，让 Agent 动笔前先查小说正文、章节结构、人物设定、文风和创作方法等带来源素材，而不是只靠 Prompt 硬凑一份“剧情提纲”。
 
-## v1.8.0 - 统一 Pi Agent Harness 与专业创作内核
+## v2.0.0 - 统一 Pi Agent Harness 与专业创作内核
 
-InkOS 1.8.0 把“Chat Agent 调工具”和“各类作品管线”收敛成一套围绕 pi-agent 的生产 harness。模型负责理解、提议和调用能力；InkOS 负责确认、上下文、状态、原子落盘和产物真实性。长篇、短篇、剧本、分镜、互动影游、Play 与翻译继续保留各自的专业方法，但共享同一套执行、检索、观测和恢复基础设施。
+本分支为 2.0 开发版本，使用本地构建进行验证。旧项目先运行 `inkos work migrate --json` 查看升级清单，再运行 `inkos work migrate --apply` 导入统一创作库；原目录与早期版本清单备份会保留，冲突不会覆盖已有作品。
+
+迁移会转换 1.x 的书籍默认配置、规则和状态快照，保留正文、原始目录及未填写的历史信息。旧写作控制字段保留在原件中，2.0 使用 Profile 的操作策略。缺少运行时状态的项目以草稿进入创作库，需完成状态重建后再继续生产。
+
+本地开发与真实生产验收统一使用 kkaiapi（`https://api.kkaiapi.com/v1`）：文字按 DeepSeek V4 Flash / Pro 分工，封面使用 `gpt-image-2`。在项目 `llm.cover` 中配置服务和模型，CLI 与 Studio 读取同一配置，封面可复用 kkaiapi 服务密钥。
+
+已有短篇可以在作品对话中要求按审稿意见整篇修订，或运行 `inkos short revise <story-id> --instruction "修复审稿指出的时间线与证据链问题"`。系统会更新相关章节、大纲和销售包，再次审稿，并保留原稿版本。
+
+InkOS 2.0 把“Chat Agent 调工具”和“各类作品管线”收敛成一套围绕 pi-agent 的生产 harness。模型负责理解、提议和调用能力；InkOS 负责确认、上下文、状态、原子落盘和产物真实性。长篇、短篇、剧本、分镜、互动影游、Play 与翻译继续保留各自的专业方法，但共享同一套执行、检索、观测和恢复基础设施。
 
 - **模型配置**：Studio 内置多服务配置、模型路由和封面服务配置；支持 [kkaiapi](https://kkaiapi.com/) / OpenRouter 等全球主流模型聚合入口，以及自定义 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 服务。
 - **单一生产 Harness**：Studio Chat、TUI、`inkos interact` 与生产 worker 共用 pi-agent 工具循环和结构化 action/result；既有 pipeline 降为可直接调用、可中断、可观测的确定性能力，不再维护平行的自然语言决策内核。
@@ -98,7 +106,7 @@ InkOS 1.8.0 把“Chat Agent 调工具”和“各类作品管线”收敛成一
 
 ### 安装
 
-需要 **Node.js 22 或更高版本**。
+需要 **Node.js 22.16 或更高版本**。
 
 ```bash
 npm i -g @actalk/inkos
@@ -161,6 +169,8 @@ inkos init my-novel
 cd my-novel
 inkos
 ```
+
+请从启动日志显示的本机地址打开 Studio。默认本地服务只接受同源浏览器请求；自定义嵌入或反向代理可通过服务启动参数 `allowedOrigins` 明确配置可信来源。
 
 打开 Studio 后进入「模型配置」：
 

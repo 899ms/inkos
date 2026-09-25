@@ -84,6 +84,10 @@ async function readErrorMessage(res: Response): Promise<string> {
   return localizeKnownRuntimeMessage(`${res.status} ${res.statusText}`.trim());
 }
 
+export class ApiResponseError extends Error {
+  constructor(message: string, readonly status: number, readonly payload: unknown) { super(message); }
+}
+
 export async function fetchJson<T>(
   path: string,
   init: RequestInit = {},
@@ -98,7 +102,8 @@ export async function fetchJson<T>(
   const res = await fetchImpl(url, init);
 
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res));
+    const payload = await res.clone().json().catch(() => undefined);
+    throw new ApiResponseError(await readErrorMessage(res), res.status, payload);
   }
 
   if (res.status === 204) {

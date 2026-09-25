@@ -1,9 +1,13 @@
 import type { SSEMessage } from "./use-sse";
+import { useEffect } from "react";
 import { useNewSSEMessages } from "./use-sse";
 import type { HashRoute } from "./use-hash-route";
 import { useChatStore } from "../store/chat";
 import { bookKey, mergeSessionIds, updateSession } from "../store/chat/slices/message/runtime";
 import { clearBookCreateSessionId, getBookCreateSessionId } from "../pages/chat-page-state";
+import type { AgentResponse } from "../store/chat/types";
+
+type SessionTarget = NonNullable<AgentResponse["session"]> & { sessionId: string; workId: string; profileId: string; previousWorkId?: string | null };
 
 /**
  * 监听全局 SSE 事件中与 session 有关的两类消息：
@@ -18,7 +22,29 @@ export function useSessionEvents(
   route: HashRoute,
   setRoute: (route: HashRoute) => void,
 ): void {
+  const activeSessionId = useChatStore(state => state.activeSessionId);
+  const activeSession = useChatStore(state => state.activeSessionId ? state.sessions[state.activeSessionId] : undefined);
+  useEffect(() => {
+    const target = activeSession?.pendingWorkTarget;
+    if (!activeSessionId || !target || activeSession.isChatStreaming || activeSession.isStreaming) return;
+    if (!["chat", "book", "book-create", "work-chat", "film-author"].includes(route.page)) return;
+    const routeWorkId = route.page === "work-chat" ? route.workId : route.page === "book" ? route.bookId : undefined;
+    if (routeWorkId && routeWorkId !== target.fromWorkId && routeWorkId !== target.workId) return;
+    useChatStore.setState(state => ({ sessions: updateSession(state.sessions, activeSessionId, () => ({ pendingWorkTarget: undefined })) }));
+    if (getBookCreateSessionId() === activeSessionId) clearBookCreateSessionId();
+    setRoute(target.profileId === "longform-novel" ? { page: "book", bookId: target.workId }
+      : { page: "work-chat", workId: target.workId, profileId: target.profileId });
+  }, [activeSessionId, activeSession, route, setRoute]);
   useNewSSEMessages(sse.messages, (recent) => {
+    if (recent.event === "session:target") {
+      const target = recent.data as SessionTarget;
+      if (!target?.sessionId || !target.workId || !target.profileId) return;
+      useChatStore.setState(state => ({ sessions: updateSession(state.sessions, target.sessionId, session => ({
+        pendingWorkTarget: { workId: target.workId, profileId: target.profileId,
+          fromWorkId: target.previousWorkId ?? session.workId ?? session.bookId },
+      })) }));
+      return;
+    }
     if (recent.event === "session:title") {
       const data = recent.data as { sessionId?: string; title?: string } | null;
       if (!data?.sessionId || !data.title) return;
@@ -53,7 +79,7 @@ export function useSessionEvents(
         };
       });
 
-      if (getBookCreateSessionId() === sessionId) {
+      if (getBookCreateSessionId() === sessionId && !useChatStore.getState().sessions[sessionId]?.pendingWorkTarget) {
         clearBookCreateSessionId();
         if (route.page === "book-create") {
           setRoute({ page: "book", bookId });

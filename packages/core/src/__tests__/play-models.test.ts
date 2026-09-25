@@ -42,8 +42,9 @@ describe("Play model contracts", () => {
     }).toEqual({ action: "look", entity: "clue-brass-filings", elapsed: "约十秒" });
   });
 
-  it("rejects aliases, missing ids, coercions, and extra fields instead of repairing them", () => {
-    expect(() => PlayActionIntentSchema.parse({ actionKind: "investigate", intent: "检查" })).toThrow();
+  it("accepts descriptive action labels while rejecting missing ids, coercions and extra fields", () => {
+    expect(PlayActionIntentSchema.parse({ actionKind: "investigate", intent: "检查" }).actionKind).toBe("investigate");
+    expect(() => PlayActionIntentSchema.parse({ actionKind: " ", intent: "检查" })).toThrow();
     expect(() => PlayMutationSchema.parse({
       eventId: "evt-2",
       turn: "2",

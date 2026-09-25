@@ -4,6 +4,7 @@ import { BaseAgent, type AgentContext } from "../agents/base.js";
 import {
   PlayActionIntentSchema,
   PlayMutationSchema,
+  isPlayEvidenceEntityType,
   type PlayActionIntent,
   type PlayMutation,
 } from "../models/play.js";
@@ -18,6 +19,9 @@ export interface PlayOpeningStateInput {
 }
 
 export interface PlayTurnInput {
+  readonly validateMutation?: (mutation:PlayMutation)=>void;
+  readonly currentSuggestedActions?: readonly string[];
+  readonly choiceCount?:number;
   readonly turn: number;
   readonly input: string;
   readonly context: string;
@@ -101,15 +105,13 @@ const PlayMutationResultSchema = Type.Object({
   notes: Type.Array(Type.String()),
 });
 
-const EVIDENCE_ENTITY_TYPES = new Set(["evidence", "clue", "claim", "proof_chain"]);
-
 function validateMutationSubmission(
   raw: Static<typeof PlayMutationResultSchema>,
 ): Static<typeof PlayMutationResultSchema> {
   const submittedTypes = new Map(raw.entities.map((entity) => [entity.id, entity.type]));
   for (const transition of raw.evidenceTransitions) {
     const submittedType = submittedTypes.get(transition.entityId);
-    if (submittedType && !EVIDENCE_ENTITY_TYPES.has(submittedType)) {
+    if (submittedType && !isPlayEvidenceEntityType(submittedType)) {
       throw new Error(
         `evidenceTransitions may reference only evidence, clue, claim, or proof_chain entities; ${transition.entityId} is ${submittedType}. `
         + "Use an evidentiary entity type for a physical clue, or remove its evidence transition.",
@@ -122,7 +124,7 @@ function validateMutationSubmission(
       edge.fromId === "actor_player"
       && edge.value?.role === "holding"
       && targetType
-      && EVIDENCE_ENTITY_TYPES.has(targetType)
+      && isPlayEvidenceEntityType(targetType)
       && edge.value.physical !== true
     ) {
       throw new Error(
@@ -134,10 +136,7 @@ function validateMutationSubmission(
 }
 
 const PlayActionResultSchema = Type.Object({
-  actionKind: Type.Union([
-    Type.Literal("look"), Type.Literal("say"), Type.Literal("move"),
-    Type.Literal("do"), Type.Literal("wait"),
-  ]),
+  actionKind: Type.String({ minLength: 1, description: "A short descriptive label for the player's action. This records the action; it does not select a command or constrain what the player can do." }),
   targetEntityLabel: Type.Optional(Type.String()),
   targetLocationLabel: Type.Optional(Type.String()),
   intent: Type.String(),
@@ -155,7 +154,7 @@ const OPENING_STATE_TOOL = {
   validate: validateMutationSubmission,
 } as const;
 
-function playTurnTool(mode: "open" | "guided") {
+function playTurnTool(mode: "open" | "guided",choiceCount?:number,validateMutation?: (mutation:PlayMutation)=>void,turn=0) {
   return {
     name: "submit_play_turn",
     label: "Submit play turn",
@@ -168,14 +167,20 @@ function playTurnTool(mode: "open" | "guided") {
       sceneText: Type.String({ minLength: 1 }),
       suggestedActions: mode === "open"
         ? Type.Array(Type.String({ minLength: 1 }), { maxItems: 0 })
-        : Type.Array(Type.String({ minLength: 1 })),
+        : Type.Array(Type.String({ minLength: 1 }),{uniqueItems:true,...(choiceCount!==undefined?{minItems:choiceCount,maxItems:choiceCount}:{})}),
     }),
     validate: (result: {
       readonly action: Static<typeof PlayActionResultSchema>;
       readonly mutation: Static<typeof PlayMutationResultSchema>;
       readonly sceneText: string;
       readonly suggestedActions: string[];
-    }) => ({ ...result, mutation: validateMutationSubmission(result.mutation) }),
+    }) => {
+      const mutation=validateMutationSubmission(result.mutation);
+      const transition=mutationFromStructuredResult(mutation,turn,result.action.actionKind);
+      if(!hasMutationResult(transition))throw Object.assign(new Error("Play turn state was empty; submit a concrete state transition before committing the turn."),{code:"PLAY_MUTATION_EMPTY"});
+      validateMutation?.(transition);
+      return {...result,mutation};
+    },
   } as const;
 }
 
@@ -216,7 +221,7 @@ export class PlayTurnAgent extends BaseAgent {
     const { result } = await this.submitStructured([
       { role: "system", content: buildTurnSystemPrompt(input.mode, language) },
       { role: "user", content: buildTurnUserPrompt(input, language) },
-    ], playTurnTool(input.mode), { temperature: 0.4, maxTokens: 8192 });
+    ], playTurnTool(input.mode,input.choiceCount,input.validateMutation,input.turn), { temperature: 0.4, maxTokens: 8192 });
     const action = PlayActionIntentSchema.parse(result.action);
     const mutation = mutationFromStructuredResult(result.mutation, input.turn, action.actionKind);
     if (!hasMutationResult(mutation)) {
@@ -227,6 +232,26 @@ export class PlayTurnAgent extends BaseAgent {
       suggestedActions: result.suggestedActions,
     });
     return { ...scene, action, mutation };
+  }
+
+  async renderExisting(input: PlayTurnInput): Promise<PlaySceneRender> {
+    const preserveChoices = input.currentSuggestedActions !== undefined;
+    const { result } = await this.submitStructured([
+      { role: "system", content: "Rewrite the supplied scene while preserving every established action, fact, count, time, identity and outcome. This is the settled scene after the previous action, not a new player turn. Current state and original scene are authoritative. " + (preserveChoices ? "Return only narrative sceneText. Keep the supplied choices possible; their labels are separate interface elements, so do not append the choice list to sceneText." : "Return narrative sceneText and grounded suggestedActions as separate fields; do not append the choice list to sceneText.") + " Do not invent or change world facts." },
+      { role: "user", content: JSON.stringify({turn:input.turn,language:input.language??"zh",worldContract:input.worldPremise,
+        settledContextAndScene:input.context,previousPlayerAction:input.input,rewriteRequest:input.replayContext,
+        ...(preserveChoices?{unchangedSuggestedActions:input.currentSuggestedActions}:{})}) },
+    ], {
+      name: "submit_play_scene",
+      label: "Submit rewritten scene",
+      description: "Rewrite the existing scene without changing the applied world state.",
+      parameters: preserveChoices ? Type.Object({ sceneText: Type.String({ minLength: 1 }) }, { additionalProperties: false }) : Type.Object({
+        sceneText: Type.String({ minLength: 1 }),
+        suggestedActions: Type.Array(Type.String({ minLength: 1 }), input.mode === "open" ? { maxItems: 0 } : {uniqueItems:true,...(input.choiceCount!==undefined?{minItems:input.choiceCount,maxItems:input.choiceCount}:{})}),
+      }),
+      validate: (value) => preserveChoices ? value : PlaySceneRenderSchema.parse(value),
+    }, { temperature: 0.3, maxTokens: 4096 });
+    return PlaySceneRenderSchema.parse({ sceneText: result.sceneText, suggestedActions: input.currentSuggestedActions ?? ("suggestedActions" in result ? result.suggestedActions : []) });
   }
 }
 
@@ -339,6 +364,7 @@ function buildTurnSystemPrompt(mode: "open" | "guided", language: "zh" | "en"): 
     ? [
         "Apply the activated play-world Skill and resolve one coherent interactive-fiction turn.",
         "In one submission, normalize the player's literal action, project the authoritative world mutation, and render the resulting scene. The prose and mutation must describe the same facts.",
+        "Current active relationships and state slots take precedence over the opening premise and older entity descriptions. Check the actual holder, location and completed obligations before writing dialogue or choices. Do not restore a completed handover or payment merely because the opening described it as pending; another transfer requires a new supported action. Update an entity description when this turn makes its mutable facts obsolete.",
         "Reuse exact roster ids. The player id is always actor_player. Every concrete named person, place, object, clue, evidence item, organization, or relationship introduced in sceneText must exist in mutation or the supplied context.",
         "Physical holdings use an actor_player edge with value.role=holding; when the held target is evidence, clue, claim, or proof_chain, also set value.physical=true. Knowledge is observed rather than held. Use stateSlots only when the world contract authorizes that tracking.",
         "Only evidence, clue, claim, and proof_chain entities may appear in evidenceTransitions. A tangible object that participates in an evidence lifecycle must use an evidentiary entity type rather than item.",
@@ -349,6 +375,7 @@ function buildTurnSystemPrompt(mode: "open" | "guided", language: "zh" | "en"): 
     : [
         "应用已激活的开放世界 Skill，完成一个前后一致的互动叙事回合。",
         "一次提交中同时归一玩家原话、投影权威世界变化并写出结果场景；正文与 mutation 必须描述同一组事实。",
+        "当前有效关系和状态槽优先于开场前提及较早的实体描述。写对白和选项前核对实际持有人、位置和已完成事项；不能因为开场曾要求归还或付款，就把已完成交接或付款重新当作待办。再次转移必须有新的实际动作支持。本回合让实体描述中的可变事实过时时，同时更新该实体描述。",
         "复用名册精确 id，玩家 id 永远是 actor_player。sceneText 中新增的具体具名人物、地点、物件、线索、证据、组织或关系，必须已经存在于 mutation 或给定上下文。",
         "实际持有使用 actor_player 指向实体且 value.role=holding；持有的目标若是 evidence、clue、claim、proof_chain，还必须设置 value.physical=true。知道的信息属于 observed，不是 holding。只有世界契约允许时才使用 stateSlots。",
         "只有 evidence、clue、claim、proof_chain 实体可以进入 evidenceTransitions；需要证据生命周期的实物必须使用证据类实体类型，不能同时标成普通 item。",

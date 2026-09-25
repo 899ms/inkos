@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync, lstatSync } from "node:fs";
+import { join } from "node:path";
 import { WorkProfileRegistry } from "./profile-registry.js";
 import { WorkProfileSchema, type WorkProfile } from "./contracts.js";
 
@@ -75,6 +77,11 @@ export function builtInWorkProfiles(): ReadonlyArray<WorkProfile> {
     description: "description" in input ? input.description : "",
     requiredSkillIds: "requiredSkillIds" in input ? input.requiredSkillIds : [],
     recommendedSkillIds: "recommendedSkillIds" in input ? input.recommendedSkillIds : [],
+    contextRecipe: { id: input.id, sourceIds: ["task", "skills", "work"] },
+    artifactSchemas: input.id === "short-fiction" ? { "source/final/short-story.json": "short-manuscript", "source/final/sales-package.json":"short-package" }
+      : input.id === "translation" ? { "source/manifest.json": "translation-manifest", "source/glossary.json": "translation-glossary" } : {},
+    qualityCriteria: [],
+    production: {},
     confirmation: {
       inferredMutation: "execute",
       explicitRecoverableMutation: "execute",
@@ -83,8 +90,18 @@ export function builtInWorkProfiles(): ReadonlyArray<WorkProfile> {
   }));
 }
 
-export function createBuiltInWorkProfileRegistry(): WorkProfileRegistry {
+export function createBuiltInWorkProfileRegistry(projectRoot?: string): WorkProfileRegistry {
   const registry = new WorkProfileRegistry();
   for (const profile of builtInWorkProfiles()) registry.register(profile);
+  if (projectRoot) {
+    const directory = join(projectRoot, ".inkos", "profiles");
+    let files: string[] = [];
+    try { files = readdirSync(directory); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    for (const file of files.filter(file => file.endsWith(".json")).sort()) {
+      const path = join(directory, file);
+      if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new Error("Profile must be a regular file");
+      registry.replace(WorkProfileSchema.parse(JSON.parse(readFileSync(path, "utf8"))));
+    }
+  }
   return registry;
 }

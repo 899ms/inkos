@@ -3,12 +3,27 @@ import {
   CreativeEpisodeStore,
   listWorkManifests,
   loadWorkManifest,
+  migrateLegacyWorks,
 } from "@actalk/inkos-core";
 import { join } from "node:path";
 import { findProjectRoot, log, logError } from "../utils.js";
 
 export const workCommand = new Command("work")
   .description("Inspect creative Works, artifacts, revisions, and Episodes");
+
+workCommand.command("migrate")
+  .description("Preview or copy legacy projects into the Work library")
+  .option("--apply", "Apply the migration, retaining original directories")
+  .option("--source <path>", "Migrate one legacy directory, for example books/my-book")
+  .option("--json", "Output JSON")
+  .action(async (opts: { apply?: boolean; source?: string; json?: boolean }) => {
+    try {
+      const results = await migrateLegacyWorks(findProjectRoot(), opts);
+      if (opts.json) log(JSON.stringify({ applied: opts.apply === true, results }, null, 2));
+      else for (const item of results) log(`${item.source} | ${item.status} | ${item.fileCount ?? 0} files${item.error ? ` | ${item.error}` : ""}`);
+      if (results.some((item) => item.status === "invalid" || item.status === "conflict")) process.exitCode = 1;
+    } catch (error) { logError(String(error)); process.exitCode = 1; }
+  });
 
 workCommand
   .command("list")

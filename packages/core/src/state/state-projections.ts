@@ -117,5 +117,5 @@ export function renderCurrentStateProjection(
 }
 
 function escapeTableCell(value: string | number): string {
-  return String(value).replace(/\|/g, "\\|").trim();
+  return String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>").trim();
 }

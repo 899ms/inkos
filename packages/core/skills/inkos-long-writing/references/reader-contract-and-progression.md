@@ -21,3 +21,5 @@ When the user specifies proportions between story lines, realize each active lin
 ## Preserve causal ownership
 
 Consequences come from character choices under constraints. Do not solve pressure through coincidence, unexplained competence, or an antagonist becoming careless. When a new fact changes the route, show how it was discovered and why it matters now.
+
+Separate the date an event occurred from the date the protagonist discovers it. If canon places a stocktake, death, transfer or report in the past, stage the discovery of its evidence without moving the event into the present. Before a character opens, moves or alters an important object, preserve its established holder, access rules and visible handoff.

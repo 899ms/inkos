@@ -16,11 +16,12 @@ export async function executeExplicitCapabilityTool(input: {
   readonly workId?: string | null;
   readonly episodeId?: string;
   readonly conversationId?: string;
+  readonly authorRequest?: string;
   readonly signal?: AbortSignal;
   readonly onUpdate?: (partialResult: unknown) => void;
 }): Promise<ActionResult> {
   const work = input.workId ? await loadWorkManifest(input.projectRoot, input.workId) : null;
-  const profiles = createBuiltInWorkProfileRegistry();
+  const profiles = createBuiltInWorkProfileRegistry(input.projectRoot);
   const workProfile = work ? profiles.require(work.profileId) : null;
   const profile = workProfile?.capabilityIds.includes(input.binding.capabilityId)
     ? workProfile
@@ -32,6 +33,7 @@ export async function executeExplicitCapabilityTool(input: {
   const handle = runtime.startEpisode({
     profileId: profile.id,
     work: episodeWork,
+    authorRequest: input.authorRequest,
     ...(input.episodeId ? { episodeId: input.episodeId } : {}),
   });
   try {

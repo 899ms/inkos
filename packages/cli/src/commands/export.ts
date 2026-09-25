@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { StateManager, writeExportArtifact } from "@actalk/inkos-core";
+import { StateManager, writeExportArtifact, ChapterExportSourceError } from "@actalk/inkos-core";
 import { join } from "node:path";
 import { findProjectRoot, resolveBookId, log, logError } from "../utils.js";
 
@@ -34,7 +34,7 @@ export const exportCommand = new Command("export")
       }
     } catch (e) {
       if (opts.json) {
-        log(JSON.stringify({ error: String(e) }));
+        log(JSON.stringify({ error: String(e), ...(e instanceof ChapterExportSourceError ? {code:e.code,details:e.details} : {}) }));
       } else {
         logError(`Failed to export: ${e}`);
       }

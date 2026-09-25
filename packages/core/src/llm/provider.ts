@@ -36,7 +36,7 @@ export interface StreamProgress {
 
 export type OnStreamProgress = (progress: StreamProgress) => void;
 
-const INKOS_USER_AGENT = "InkOS/1.3.5";
+const INKOS_USER_AGENT = "InkOS/2.0.0";
 const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 8192 * 3;
 const TRANSIENT_LLM_RETRIES = 2;
 const DEFAULT_FIRST_STREAM_EVENT_TIMEOUT_MS = 120_000;
@@ -61,14 +61,39 @@ export class LLMStreamInactivityError extends Error {
   }
 }
 
-interface StreamActivityDeadline {
+export class LLMRequestTimeoutError extends Error {
+  readonly code = "LLM_REQUEST_TIMEOUT";
+  constructor(readonly timeoutMs: number) {
+    super(`LLM request did not complete within ${timeoutMs}ms`);
+    this.name = "LLMRequestTimeoutError";
+  }
+}
+
+/** Buffered responses have a total request deadline, not a stream inactivity clock. */
+export function createRequestDeadline(callerSignal?: AbortSignal) {
+  const timeoutMs = readPositiveTimeout(process.env.INKOS_LLM_REQUEST_TIMEOUT_MS, 300_000);
+  const controller = new AbortController();
+  let error: LLMRequestTimeoutError | undefined;
+  const timer = setTimeout(() => {
+    error = new LLMRequestTimeoutError(timeoutMs);
+    controller.abort(error);
+  }, timeoutMs);
+  timer.unref?.();
+  return {
+    signal: callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal,
+    timeoutError: () => error,
+    stop: () => clearTimeout(timer),
+  };
+}
+
+export interface StreamActivityDeadline {
   readonly signal: AbortSignal;
   readonly activity: () => void;
   readonly stop: () => void;
   readonly timeoutError: () => LLMStreamInactivityError | undefined;
 }
 
-function createStreamActivityDeadline(
+export function createStreamActivityDeadline(
   callerSignal?: AbortSignal,
   defaults: Required<StreamDeadlineOptions> = {
     firstEventTimeoutMs: DEFAULT_FIRST_STREAM_EVENT_TIMEOUT_MS,
@@ -140,31 +165,47 @@ export function guardAssistantMessageStream<TApi extends PiApi>(
           const next = await nextWithAbort(iterator, deadline.signal);
           if (next.done) break;
           const event = next.value;
-          deadline.activity();
-          if (["text_delta", "toolcall_start", "toolcall_delta", "toolcall_end"].includes(event.type)) {
+          if (("delta" in event && event.delta.length > 0)
+            || event.type === "toolcall_start" || event.type === "toolcall_end"
+            || event.type === "done" || event.type === "error") deadline.activity();
+          if (event.type === "error" && externallyVisibleEvents === 0
+            && isTransientLLMHttpError(new Error(event.error.errorMessage ?? ""))) {
+            throw new Error(event.error.errorMessage);
+          }
+          if (((event.type === "text_delta" || event.type === "toolcall_delta") && event.delta.length > 0)
+            || event.type === "toolcall_start" || event.type === "toolcall_end") {
             externallyVisibleEvents += 1;
           }
           terminalSeen ||= event.type === "done" || event.type === "error";
-          guarded.push(event);
+          guarded.push(event.type === "done" && event.reason === "length"
+            ? { ...event, message: { ...event.message, content: event.message.content.filter((part) => part.type !== "toolCall") } }
+            : event);
         }
         if (!terminalSeen) throw new Error("LLM stream ended without a terminal event");
         return;
       } catch (error) {
         lastError = deadline.timeoutError() ?? error;
-        const retryableZeroEventTimeout = externallyVisibleEvents === 0
-          && lastError instanceof LLMStreamInactivityError
+        const retryableZeroEventFailure = externallyVisibleEvents === 0
+          && !(lastError instanceof LLMStreamInactivityError)
+          && (isTransientLLMHttpError(lastError) || isTransientLLMTransportError(lastError))
           && !callerSignal?.aborted
           && attempt < TRANSIENT_LLM_RETRIES;
-        if (!retryableZeroEventTimeout) break;
+        if (!retryableZeroEventFailure) break;
+        deadline.stop();
+        if (!(lastError instanceof LLMStreamInactivityError)) {
+          try { await abortableDelay(800 * (attempt + 1), callerSignal); }
+          catch (error) { lastError = error; break; }
+        }
       } finally {
         deadline.stop();
       }
     }
-    const message: AssistantMessage = {
+    const message: AssistantMessage & {errorCode?: string} = {
       role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
       stopReason: callerSignal?.aborted ? "aborted" : "error",
       errorMessage: lastError instanceof Error ? lastError.message : String(lastError),
+      ...(lastError instanceof LLMStreamInactivityError ? {errorCode:"MODEL_STREAM_INACTIVITY"} : {}),
       timestamp: Date.now(),
     };
     guarded.push({ type: "error", reason: message.stopReason === "aborted" ? "aborted" : "error", error: message });
@@ -746,13 +787,14 @@ function isIncompleteLLMResponseError(error: unknown): boolean {
 function isRetryableLLMError(error: unknown): boolean {
   // PartialResponseError = 流在生成中途被掐断（网关切长连接等）。重试会完整
   // 重新生成一次，比把半截内容当成功交付（截断的章节/设定文件）要正确。
+  if (error instanceof LLMStreamInactivityError || error instanceof LLMRequestTimeoutError) return false;
   return error instanceof PartialResponseError
     || isIncompleteLLMResponseError(error)
     || isTransientLLMTransportError(error)
     || isTransientLLMHttpError(error);
 }
 
-async function withTransientLLMRetry<T>(
+export async function withTransientLLMRetry<T>(
   run: (attempt: number) => Promise<T>,
   options?: { readonly enabled?: boolean; readonly signal?: AbortSignal },
 ): Promise<T> {

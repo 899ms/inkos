@@ -8,6 +8,39 @@ import {
   transcriptPath,
 } from "./session-transcript.js";
 import { deriveBookSessionFromTranscript } from "./session-transcript-restore.js";
+import { loadWorkManifest } from "../harness/work-store.js";
+
+/** Commit the execution target after a successful host-owned creation action.
+ * Compare and append inside the transcript queue so a stale caller cannot
+ * retarget a conversation that has already moved elsewhere.
+ */
+export async function transitionSessionToWork(projectRoot: string, sessionId: string, expectedWorkId: string | null, workId: string): Promise<BookSession> {
+  const work = await loadWorkManifest(projectRoot, workId);
+  await appendTranscriptEvents(projectRoot, sessionId, ({ events, nextSeq }) => {
+    if (!events.some(event => event.type === "session_created")) throw Object.assign(new Error("Session no longer exists."), { code: "SESSION_NOT_FOUND" });
+    let currentWorkId: string | null = null;
+    let currentBookId: string | null = null;
+    let currentProfileId: string | undefined;
+    for (const event of events) {
+      if (event.type !== "session_created" && event.type !== "session_metadata_updated") continue;
+      if (event.workId !== undefined) currentWorkId = event.workId;
+      if (event.bookId !== undefined) currentBookId = event.bookId;
+      if (event.profileId !== undefined) currentProfileId = event.profileId;
+    }
+    const current = currentWorkId ?? currentBookId;
+    const bookId = work.profileId === "longform-novel" ? work.id : null;
+    if (current === work.id && currentBookId === bookId && currentProfileId === work.profileId) return [];
+    if (current !== expectedWorkId) throw Object.assign(new Error("The session execution target has changed."), {
+      code: "SESSION_TARGET_CONFLICT", expectedWorkId, actualWorkId: current,
+    });
+    const now = Date.now();
+    return [{ type: "session_metadata_updated", version: 1, sessionId, seq: nextSeq, timestamp: now, updatedAt: now,
+      workId: work.id, profileId: work.profileId, bookId, sessionKind: bookId ? "book" : "work" }];
+  });
+  const session = await loadBookSession(projectRoot, sessionId);
+  if (!session) throw Object.assign(new Error("Session no longer exists."), { code: "SESSION_NOT_FOUND" });
+  return session;
+}
 
 /**
  * 从 messages 数组里取第一条 user 消息作为会话标题。
@@ -60,6 +93,7 @@ async function appendSessionCreatedEvent(
       ...(session.proposalAction ? { proposalAction: session.proposalAction } : {}),
       ...(session.playMode ? { playMode: session.playMode } : {}),
       ...(session.modelOverride ? { modelOverride: session.modelOverride } : {}),
+      ...(session.serviceOverride ? { serviceOverride: session.serviceOverride } : {}),
       title: session.title,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
@@ -78,6 +112,7 @@ async function appendSessionMetadataUpdatedEvent(
     readonly proposalAction?: string;
     readonly playMode?: PlayMode;
     readonly modelOverride?: string;
+    readonly serviceOverride?: string;
     readonly title?: string | null;
     readonly updatedAt: number;
   },
@@ -96,6 +131,7 @@ async function appendSessionMetadataUpdatedEvent(
     ...(metadata.proposalAction ? { proposalAction: metadata.proposalAction } : {}),
     ...(metadata.playMode ? { playMode: metadata.playMode } : {}),
     ...(metadata.modelOverride ? { modelOverride: metadata.modelOverride } : {}),
+    ...(metadata.serviceOverride ? { serviceOverride: metadata.serviceOverride } : {}),
     ...("title" in metadata ? { title: metadata.title } : {}),
   }]);
 }
@@ -121,6 +157,7 @@ export async function persistBookSession(
     ...(session.proposalAction ? { proposalAction: session.proposalAction } : {}),
     ...(session.playMode ? { playMode: session.playMode } : {}),
     ...(session.modelOverride ? { modelOverride: session.modelOverride } : {}),
+    ...(session.serviceOverride ? { serviceOverride: session.serviceOverride } : {}),
     title: session.title,
     updatedAt: session.updatedAt,
   });
@@ -135,6 +172,7 @@ export interface BookSessionSummary {
   readonly proposalAction?: string;
   readonly playMode?: PlayMode;
   readonly modelOverride?: string;
+  readonly serviceOverride?: string;
   readonly title: string | null;
   readonly messageCount: number;
   readonly createdAt: number;
@@ -173,6 +211,7 @@ export async function listBookSessions(
         proposalAction: session.proposalAction,
         playMode: session.playMode,
         modelOverride: session.modelOverride,
+        serviceOverride: session.serviceOverride,
         title: session.title,
         messageCount: session.messages.length,
         createdAt: session.createdAt,
@@ -237,6 +276,7 @@ export async function createAndPersistBookSession(
     readonly workId?: string | null;
     readonly proposalAction?: string;
     readonly modelOverride?: string;
+    readonly serviceOverride?: string;
   },
 ): Promise<BookSession> {
   // 如果指定了 sessionId 且对应文件已存在，视为幂等操作直接返回（支持"用户发消息时才持久化 draft"流程）
@@ -250,6 +290,7 @@ export async function createAndPersistBookSession(
         || (options && "workId" in options && existing.workId !== options.workId)
         || (options?.proposalAction && existing.proposalAction !== options.proposalAction)
         || (options?.modelOverride && existing.modelOverride !== options.modelOverride)
+        || (options?.serviceOverride && existing.serviceOverride !== options.serviceOverride)
       ) {
         await appendSessionMetadataUpdatedEvent(projectRoot, sessionId, {
           ...(sessionKind ? { sessionKind } : {}),
@@ -258,6 +299,7 @@ export async function createAndPersistBookSession(
           ...(options && "workId" in options ? { workId: options.workId } : {}),
           ...(options?.proposalAction ? { proposalAction: options.proposalAction } : {}),
           ...(options?.modelOverride ? { modelOverride: options.modelOverride } : {}),
+          ...(options?.serviceOverride ? { serviceOverride: options.serviceOverride } : {}),
           updatedAt: Date.now(),
         });
         return await loadBookSession(projectRoot, sessionId) ?? existing;

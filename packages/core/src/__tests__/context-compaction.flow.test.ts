@@ -15,6 +15,24 @@ import {
 } from "../harness/index.js";
 
 describe("context assembly mini-flow", () => {
+  it('retains exact progress and recent failures without recompacting the same completed history',async()=>{
+    let calls=0;
+    const transform=createHarnessContextTransform({projectRoot:'/tmp',work:null,profile:createBuiltInWorkProfileRegistry().require('workspace-default'),budgetTokens:2000,
+      conversationCompactor:async()=>{calls++;return 'All requested files were read.';}});
+    const user={role:'user',content:'Read files a and b, then export.',timestamp:1};
+    const history=[user,{role:'assistant',content:[{type:'toolCall',id:'a',name:'workspace__read',arguments:{path:'works/w/source/a.md'}}]},
+      {role:'toolResult',toolCallId:'a',toolName:'workspace__read',isError:false,content:[{type:'text',text:'Real source paragraph. '.repeat(2000)}]}] as never[];
+    await transform(history);
+    const failure={role:'toolResult',toolCallId:'b',toolName:'workspace__read',isError:true,content:[{type:'text',text:'{"code":"WORK_PATH_IS_DIRECTORY"}'}]};
+    const next=await transform([...history,{role:'assistant',content:[{type:'toolCall',id:'b',name:'workspace__read',arguments:{path:'works/w/source/'}}]},failure] as never[]);
+    expect(calls).toBe(1);
+    expect(next.at(-1)).toEqual(failure);
+    const receipt=next.find(m=>m.role==='user'&&typeof m.content==='string'&&m.content.startsWith('<host_execution_progress>')) as {content:string};
+    const progress=JSON.parse(receipt.content.split('\n')[1]!);
+    expect(progress.totals).toEqual({successful:1,failed:1,uniqueReadPaths:1});
+    expect(progress.readPaths).toEqual(['works/w/source/a.md']);
+    expect(progress.recent.at(-1)).toMatchObject({status:'error',arguments:{path:'works/w/source/'}});
+  });
   const roots: string[] = [];
 
   afterEach(async () => {
@@ -124,8 +142,37 @@ describe("context assembly mini-flow", () => {
     ] as never);
 
     expect(receivedHistory).toContain("Earlier decision and tool outcome");
+    const { convertAgentMessagesForModel } = await import("../agent/agent-session.js");
+    const delivered = convertAgentMessagesForModel(result);
+    expect(delivered).toEqual(result);
+    expect(delivered[0]).toMatchObject({role:"user",content:expect.any(String)});
     expect(JSON.stringify(result)).toContain("conversation_summary");
     expect(JSON.stringify(result)).toContain("Apply that decision to the next chapter");
     expect(phases).toEqual(["start", "end"]);
+  });
+
+  it("compacts completed reads within the active turn while preserving the user's request", async () => {
+    const profile = createBuiltInWorkProfileRegistry().require("workspace-default");
+    const user = {role:"user",content:"Write the next three chapters.",timestamp:1};
+    let history = "";
+    const transform = createHarnessContextTransform({projectRoot:"/tmp",work:null,profile,budgetTokens:220,
+      conversationCompactor:async (request)=>{history=request.history;return "Read works/novel/source/outline.md; writing remains pending.";},
+    });
+    const result = await transform([user,
+      {role:"assistant",content:[{type:"toolCall",id:"read-1",name:"workspace__read",arguments:{path:"works/novel/source/outline.md"}}]},
+      {role:"toolResult",toolCallId:"read-1",toolName:"workspace__read",content:[{type:"text",text:"A complete source paragraph. ".repeat(200)}],isError:false},
+    ] as never);
+    const records = history.split("\n").map((line)=>JSON.parse(line));
+    expect(records.map((record)=>record.role)).toEqual(["assistant","toolResult"]);
+    expect(records[1].toolCallId).toBe("read-1");
+    expect(result.at(-1)).toEqual(user);
+    expect(result.some((message)=>message.role==="toolResult")).toBe(false);
+    history = "";
+    const smallResult = {role:"toolResult",toolCallId:"read-2",toolName:"workspace__read",content:[{type:"text",text:"Ready"}],isError:false,details:{preview:"UI metadata. ".repeat(5000)}};
+    const uncompressed = await transform([user,
+      {role:"assistant",content:[{type:"toolCall",id:"read-2",name:"workspace__read",arguments:{}}]},smallResult,
+    ] as never);
+    expect(history).toBe("");
+    expect(uncompressed.at(-1)).toEqual(smallResult);
   });
 });

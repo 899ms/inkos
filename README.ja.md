@@ -36,9 +36,11 @@ InkOS は、物語創作と多言語翻訳のための AI Agent システムで�
 
 > 💡 **主要モデルをキー 1 本で** —— InkOS には [**kkaiapi**](https://en.kkaiapi.com/) の併用がおすすめです。Claude / GPT / Gemini / DeepSeek / Kimi / Qwen / GLM と画像モデルを扱える OpenAI 互換ゲートウェイとして、base URL `https://api.kkaiapi.com/v1` をカスタムサービスに設定すれば、複数プロバイダーのアカウントを行き来せずに Studio でモデルを切り替えられます。
 
-## v1.8.0 統一 Pi Agent Harness と専門創作カーネル
+## v2.0.0 統一 Pi Agent Harness と専門創作カーネル
 
-InkOS 1.8.0 は、Chat Agent と各作品パイプラインを一つの pi-agent 中心 harness に統合します。モデルは理解・提案・能力呼び出しを担当し、InkOS は確認、コンテキスト、状態、原子的な保存、成果物の真実性を管理します。長編、短編、脚本、絵コンテ、インタラクティブ影遊、Play、翻訳は、それぞれの専門手法を保ちながら、実行・検索・観測・復旧基盤を共有します。
+1.x からの移行は `inkos work migrate --json` で確認し、`inkos work migrate --apply` で実行します。書籍の既定値、ルール、状態スナップショットを変換し、元のディレクトリと未記入の履歴情報を保持します。旧執筆設定は原本に残り、2.0 は Profile の操作方針を使います。実行状態が不足する作品は、再構築が必要な下書きとして登録されます。
+
+InkOS 2.0 は、Chat Agent と各作品パイプラインを一つの pi-agent 中心 harness に統合します。モデルは理解・提案・能力呼び出しを担当し、InkOS は確認、コンテキスト、状態、原子的な保存、成果物の真実性を管理します。長編、短編、脚本、絵コンテ、インタラクティブ影遊、Play、翻訳は、それぞれの専門手法を保ちながら、実行・検索・観測・復旧基盤を共有します。
 
 - **モデル設定**：Studio はサービス設定、モデルルーティング、表紙サービス、[kkaiapi](https://en.kkaiapi.com/) / OpenRouter などのモデル集約入口、カスタム OpenAI-compatible エンドポイントに対応します。
 - **単一の production harness**：Studio Chat、TUI、`inkos interact`、production worker が pi-agent のツールループと型付き action/result 境界を共有します。既存 pipeline は並行する自然言語判断エンジンではなく、決定論的で中断可能な能力になります。
@@ -88,7 +90,7 @@ InkOS 1.8.0 は、Chat Agent と各作品パイプラインを一つの pi-agent
 
 ### インストール
 
-**Node.js 22 以降**が必要です。
+**Node.js 22.16 以降**が必要です。
 
 ```bash
 npm i -g @actalk/inkos
@@ -124,7 +126,9 @@ cd my-novel
 inkos
 ```
 
-Studio を開き、**モデル設定**へ進みます：
+起動ログに表示されたローカル URL から Studio を開いてください。既定のローカルサーバーは同一オリジンのブラウザー要求を受け付けます。独自の埋め込みやリバースプロキシでは、起動オプション `allowedOrigins` で信頼するオリジンを指定できます。
+
+**モデル設定**へ進みます：
 
 1. Google Gemini、Moonshot、MiniMax、DeepSeek、kkaiapi、OpenRouter、またはカスタムエンドポイントを選択。
 2. API Key を貼り付けて接続をテスト。

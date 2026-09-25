@@ -20,6 +20,25 @@ export interface ChatPageSessionSummary {
   readonly messageCount: number;
 }
 
+export interface WorkSessionBinding {
+  readonly workId: string;
+  readonly profileId: string;
+}
+
+/** Keep the Work-session affordance after a creation chat becomes bound to its result Work. */
+export function resolveWorkSessionBinding(input: {
+  readonly routeWorkId?: string;
+  readonly routeProfileId?: string;
+  readonly sessionWorkId?: string | null;
+  readonly sessionProfileId?: string | null;
+}): WorkSessionBinding | null {
+  const routeWorkId = input.routeWorkId?.trim();
+  const workId = routeWorkId || input.sessionWorkId?.trim();
+  const profileId = input.routeProfileId?.trim()
+    || (!routeWorkId || routeWorkId === input.sessionWorkId ? input.sessionProfileId?.trim() : undefined);
+  return workId && profileId ? { workId, profileId } : null;
+}
+
 const BOOK_CREATE_SESSION_KEY = "inkos.book-create.session-id";
 const PROJECT_CHAT_SESSION_KEY = "inkos.project-chat.session-id";
 

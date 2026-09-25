@@ -19,14 +19,7 @@ export function summarizeStoryGraph(graph: StoryGraph): string {
 }
 
 export function buildFilmAuthoringContext(graph: StoryGraph): string {
-  const blocks: string[] = [summarizeStoryGraph(graph)];
-  if (graph.characters.length > 0) {
-    const chars = graph.characters.map((c) => {
-      const vp = c.voiceProfile;
-      const voice = vp ? [vp.speakingRhythm, vp.vocabulary].filter(Boolean).join(" / ") : "";
-      return `- ${c.name}（${c.role}）动机：${c.motivation}${voice ? ` 口吻：${voice}` : ""}`;
-    });
-    blocks.push(["角色档案：", ...chars].join("\n"));
-  }
-  return blocks.join("\n\n");
+  // A later scene can depend on any earlier clue or conversation, not just an
+  // adjacent node. The shared worker context budget handles large graphs.
+  return JSON.stringify(graph);
 }

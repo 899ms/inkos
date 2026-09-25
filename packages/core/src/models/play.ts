@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-export const PlayActionKindSchema = z.enum(["look", "say", "move", "do", "wait"]);
+const PLAY_EVIDENCE_ENTITY_TYPES = new Set(['evidence','clue','claim','proof_chain']);
+export function isPlayEvidenceEntityType(type:string):boolean {
+  return PLAY_EVIDENCE_ENTITY_TYPES.has(type);
+}
+
+// Descriptive event metadata, not an executable command or a closed game taxonomy.
+export const PlayActionKindSchema = z.string().trim().min(1);
 export type PlayActionKind = z.infer<typeof PlayActionKindSchema>;
 
 export const PlayActionIntentSchema = z.object({

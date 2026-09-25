@@ -86,9 +86,10 @@ export {
 export {
   createTranslationCreateTool,
   createTranslationRunTool,
+  createTranslationRevisionTool,
   createTranslationExportTool,
 } from "./tools/translation.js";
-export { createReplaceWorkArtifactTool } from "./tools/work-artifacts.js";
+export { createReplaceWorkArtifactTool, createAdoptWorkRevisionTool } from "./tools/work-artifacts.js";
 export {
   CreativeHarnessRuntime,
   ActionConfirmationRequiredError,
@@ -129,3 +130,6 @@ export {
   createCurrentArtifact,
 } from "./artifact-revisions.js";
 export { syncWorkSourceArtifacts, createInitialWorkManifestWrite } from "./source-sync.js";
+export { migrateLegacyWorks, type LegacyMigrationItem } from "./legacy-migration.js";
+
+export { createShortProductionStageTools } from "./tools/short-production.js";

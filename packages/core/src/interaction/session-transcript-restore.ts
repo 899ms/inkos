@@ -332,6 +332,20 @@ export function committedMessageEvents(events: TranscriptEvent[], sessionKind?: 
     .sort((a, b) => a.seq - b.seq);
 }
 
+function visibleMessageEvents(events: TranscriptEvent[]): MessageEvent[] {
+  return events.flatMap((event): MessageEvent[] => {
+    if (event.type === "message" && event.visibility === "model") return [];
+    if (event.type === "message") return [event];
+    if (event.type !== "request_failed") return [];
+    return [{
+      version: 1, sessionId: event.sessionId, seq: event.seq, timestamp: event.timestamp,
+      type: "message", requestId: event.requestId, uuid: `failure-${event.seq}`,
+      parentUuid: null, role: "system",
+      message: { role: "system", content: event.error, timestamp: event.timestamp },
+    }];
+  }).sort((a,b)=>a.seq-b.seq);
+}
+
 function requestIdsUsingSkill(events: ReadonlyArray<MessageEvent>): Set<string> {
   const ids = new Set<string>();
   for (const event of events) {
@@ -444,13 +458,15 @@ function messageEventToInteractionMessage(
   if (event.role === "toolResult") return null;
 
   if (event.role === "user") {
-    const content = textFromContent(raw.content);
+    const input = event.display?.userInput;
+    const content = input ? [input.text, "", input.language === "en" ? "Attachments:" : "附件：",
+      ...input.attachments.map(attachment => `- ${attachment.filename}`)].join("\n") : textFromContent(raw.content);
     return content ? { role: "user", content, timestamp: event.timestamp } : null;
   }
 
   if (event.role === "assistant") {
-    const rawText = textFromContent(raw.content);
-    const content = options.suppressAssistantText ? "" : rawText;
+    const rawText = event.display?.completion?.message ?? textFromContent(raw.content);
+    const content = event.display?.completion?.message ?? (options.suppressAssistantText ? "" : rawText);
     const thinking = options.suppressThinking
       ? undefined
       : joinThinking([
@@ -650,6 +666,7 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
       const currentText = textFromContent(raw.content).trim();
       const displayedToolExecutions = event.display?.toolExecutions as ToolExecution[] | undefined;
       const hasDisplay = !!currentThinking
+        || !!event.display?.completion
         || (!isSkillRequest && !!event.display?.thinking)
         || !!displayedToolExecutions?.length;
       if (
@@ -713,6 +730,7 @@ export async function deriveBookSessionFromTranscript(
   let proposalAction = created?.type === "session_created" ? created.proposalAction : undefined;
   let playMode: PlayMode | undefined = created?.type === "session_created" ? created.playMode : undefined;
   let modelOverride = created?.type === "session_created" ? created.modelOverride : undefined;
+  let serviceOverride = created?.type === "session_created" ? created.serviceOverride : undefined;
   let title = created?.type === "session_created" ? created.title : null;
   const createdAt = created?.type === "session_created"
     ? created.createdAt
@@ -737,11 +755,14 @@ export async function deriveBookSessionFromTranscript(
     if ("proposalAction" in event && event.proposalAction !== undefined) proposalAction = event.proposalAction;
     if ("playMode" in event && event.playMode !== undefined) playMode = event.playMode;
     if ("modelOverride" in event && event.modelOverride !== undefined) modelOverride = event.modelOverride;
+    if ("serviceOverride" in event && event.serviceOverride !== undefined) serviceOverride = event.serviceOverride;
     if ("title" in event && event.title !== undefined) title = event.title;
     updatedAt = Math.max(updatedAt, event.updatedAt);
   }
 
-  const messages = messageEventsToInteractionMessages(committedMessageEvents(events));
+  // Failed or interrupted requests remain visible to the author. Model replay
+  // separately uses committedMessageEvents to avoid replaying unfinished calls.
+  const messages = messageEventsToInteractionMessages(visibleMessageEvents(events));
 
   if (title === null) {
     title = firstUserMessageTitle(messages);
@@ -756,6 +777,7 @@ export async function deriveBookSessionFromTranscript(
     proposalAction,
     playMode,
     modelOverride,
+    serviceOverride,
     title,
     messages,
     createdAt,

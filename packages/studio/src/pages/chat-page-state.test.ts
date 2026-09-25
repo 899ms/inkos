@@ -8,11 +8,32 @@ import {
   getProjectChatSessionId,
   pickModelSelection,
   pickProjectChatSessionId,
+  resolveWorkSessionBinding,
   setBookCreateSessionId,
   setProjectChatSessionId,
   isChatScrollNearBottom,
   shouldShowPlayChoicePanel,
 } from "./chat-page-state";
+
+describe("resolveWorkSessionBinding", () => {
+  it("keeps a creation chat actionable after its session binds to a Work", () => {
+    expect(resolveWorkSessionBinding({
+      sessionWorkId: "new-script",
+      sessionProfileId: "script",
+    })).toEqual({ workId: "new-script", profileId: "script" });
+  });
+
+  it("uses the explicit Work route and rejects incomplete bindings", () => {
+    expect(resolveWorkSessionBinding({
+      routeWorkId: "route-work",
+      routeProfileId: "storyboard",
+      sessionWorkId: "stale-work",
+      sessionProfileId: "script",
+    })).toEqual({ workId: "route-work", profileId: "storyboard" });
+    expect(resolveWorkSessionBinding({ sessionWorkId: "orphan" })).toBeNull();
+    expect(resolveWorkSessionBinding({routeWorkId:"new-book",sessionWorkId:"old-world",sessionProfileId:"interactive-world"})).toBeNull();
+  });
+});
 
 describe("book-create session localStorage helpers", () => {
   const storage = new Map<string, string>();

@@ -12,7 +12,7 @@ export const StateManifestSchema = z.object({
 
 export type StateManifest = z.infer<typeof StateManifestSchema>;
 
-export const HookStatusSchema = z.enum(["open", "progressing", "deferred", "resolved"]);
+export const HookStatusSchema = z.enum(["open", "progressing", "deferred", "resolved", "superseded"]);
 export type HookStatus = z.infer<typeof HookStatusSchema>;
 
 export const HookRecordSchema = z.object({
@@ -21,7 +21,8 @@ export const HookRecordSchema = z.object({
   type: z.string().min(1),
   status: HookStatusSchema,
   lastAdvancedChapter: z.number().int().min(0),
-  expectedPayoff: z.string().min(1),
+  // A stored hook may have an unspecified payoff. New candidates require one.
+  expectedPayoff: z.string(),
   notes: z.string(),
   dependsOn: z.array(z.string().min(1)).optional(),
   paysOffInArc: z.string().optional(),
@@ -106,7 +107,7 @@ export type HookOps = z.infer<typeof HookOpsSchema>;
 
 export const NewHookCandidateSchema = z.object({
   type: z.string().min(1),
-  expectedPayoff: z.string(),
+  expectedPayoff: z.string().min(1),
   notes: z.string(),
 }).strict();
 

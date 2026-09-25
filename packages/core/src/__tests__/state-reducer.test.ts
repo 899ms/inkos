@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { applyRuntimeStateDelta, type RuntimeStateSnapshot } from "../state/state-reducer.js";
 
 describe("runtime state reducer contract", () => {
+  it("keeps advancement history when a hook is deferred and advances it on resolution", () => {
+    const operations={chapter:1,factOps:{upsert:[],expire:[]},hookOps:{upsert:[],mention:[],resolve:[],defer:["ledger"]},newHookCandidates:[]};
+    const deferred=applyRuntimeStateDelta({snapshot:snapshot(),delta:operations});
+    expect(deferred.hooks.hooks[0]).toMatchObject({status:"deferred",lastAdvancedChapter:0});
+    const repeated=applyRuntimeStateDelta({snapshot:deferred,delta:{...operations,chapter:2}});
+    expect(repeated.hooks).toEqual(deferred.hooks);
+    const resolved=applyRuntimeStateDelta({snapshot:repeated,delta:{...operations,chapter:3,hookOps:{upsert:[],mention:[],resolve:["ledger"],defer:[]}}});
+    expect(resolved.hooks.hooks[0]).toMatchObject({status:"resolved",lastAdvancedChapter:3});
+  });
+
   it("applies facts, exact hook operations, and one chapter summary", () => {
     const next = applyRuntimeStateDelta({
       snapshot: snapshot(),

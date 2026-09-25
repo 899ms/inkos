@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
+import { subscribeStudioEvents, type StudioEventStream } from "../lib/studio-events";
 
 export interface SSEMessage {
   readonly event: string;
@@ -27,6 +28,7 @@ export const STUDIO_SSE_EVENTS = [
   "agent:complete",
   "agent:error",
   "session:title",
+  "session:target",
   "audit:start",
   "audit:complete",
   "audit:error",
@@ -86,11 +88,11 @@ export function useNewSSEMessages(
 export function useSSE(url = "/api/v1/events") {
   const [messages, setMessages] = useState<ReadonlyArray<SSEMessage>>([]);
   const [connected, setConnected] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
+  const esRef = useRef<StudioEventStream | null>(null);
   const seqRef = useRef(0);
 
   useEffect(() => {
-    const es = new EventSource(url);
+    const es = subscribeStudioEvents(url);
     esRef.current = es;
 
     es.onopen = () => setConnected(true);

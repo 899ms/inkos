@@ -44,7 +44,7 @@ export class StateValidatorAgent extends BaseAgent {
       : "用中文回答。";
 
     const systemPrompt = `Validate the derived truth projection against the current chapter and supplied authority using the activated long-writing Skill. ${langInstruction}
-Do not rewrite the chapter or silently resolve contradictory sources. Set reconciliationRequired=true only when a different truth projection can resolve the mismatch; a contradiction inside the chapter or between authorities remains an observation and does not authorize another settlement pass. Submit the decision and concrete evidence through the validation tool.`;
+Do not rewrite the chapter or silently resolve contradictory sources. A hook marked superseded retains an explicitly withdrawn plan for history; its original premise is not active canon or a future promise. Verify its notes against the current withdrawal authority, rather than requiring that premise to occur in the chapter. Set reconciliationRequired=true only when a different truth projection can resolve the mismatch; a contradiction inside the chapter or between authorities remains a reported observation and does not authorize another settlement pass. Submit the Boolean decision and a concise Markdown report with concrete evidence through the validation tool. Use an empty report when there are no findings.`;
 
     const authorityBlock = this.buildAuthorityContextBlock(authorityContext);
 
@@ -78,11 +78,15 @@ ${chapterContent}`;
           label: language === "en" ? "Submit state validation" : "提交状态对账",
           description: "Submit whether state reconciliation is required and the concrete evidence.",
           parameters: StateValidationToolSchema,
+          validate: result => {
+            if(result.reconciliationRequired && !result.reportMarkdown.trim()) throw Object.assign(new Error(JSON.stringify({code:"STATE_RECONCILIATION_REASON_REQUIRED",instruction:"Explain the projection mismatch that requires recalculation."})),{code:"STATE_RECONCILIATION_REASON_REQUIRED"});
+            return result;
+          },
         },
-        { temperature: 0.1 },
+        { temperature: 0.1, maxTokens: Math.min(8192, this.ctx.client.defaults.maxTokens) },
       );
       return {
-        observations: result.observations,
+        observations: result.reportMarkdown.trim() ? [{code:result.reconciliationRequired ? "state-reconciliation" : "state-projection-review",summary:result.reportMarkdown.trim(),evidence:[]}] : [],
         consistent: !result.reconciliationRequired,
         reconciliationRequired: result.reconciliationRequired,
       };

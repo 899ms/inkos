@@ -90,6 +90,7 @@ export async function validateChapterTruthPersistence(params: {
       oldState: params.previousTruth.oldState,
       oldHooks: params.previousTruth.oldHooks,
       originalValidation: validation,
+      authorityContext: params.authorityContext,
       language: params.language,
       logWarn: params.logWarn,
       logger: params.logger,

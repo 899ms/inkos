@@ -26,6 +26,8 @@ export interface CapabilityAction<TParameters extends TSchema = TSchema> {
   readonly description: string;
   readonly risk: ActionRisk;
   readonly requiresConfirmation?: boolean;
+  /** Trusted implementation owns short snapshot/commit locks and exact artifact receipts. */
+  readonly managesWorkLock?: boolean;
   readonly defaultSkillIds?: ReadonlyArray<string>;
   readonly parameters: TParameters;
   execute(context: CapabilityExecutionContext, input: Static<TParameters>): Promise<ActionResult>;

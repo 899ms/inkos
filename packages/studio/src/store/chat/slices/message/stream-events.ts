@@ -41,7 +41,7 @@ interface AttachSessionStreamListenersInput {
   sessionId: string;
   streamTs: number;
   sourceRequestId?: string;
-  streamEs: EventSource;
+  streamEs: import("../../../../lib/studio-events").StudioEventStream;
   set: SliceSet;
   get: SliceGet;
 }
@@ -316,6 +316,30 @@ export function attachSessionStreamListeners({
   const flushProgressThrottles = () => {
     for (const throttle of progressThrottles.values()) throttle.flush();
   };
+
+  // Reconcile from the server after reconnect, or when a detached HTTP round
+  // terminates. The transcript and request identity remain authoritative.
+  streamEs.addEventListener("session:snapshot", (event: MessageEvent) => {
+    const runtime = get().sessions[sessionId];
+    if (!runtime?.detachedChatRequestId || runtime.stream !== streamEs) return;
+    try {
+      const data = JSON.parse(event.data);
+      if (data.session?.sessionId !== sessionId) return;
+      flushTextDeltas();
+      void get().loadSessionDetail(sessionId, true, data);
+    } catch { /* A malformed event cannot change execution state. */ }
+  });
+  streamEs.addEventListener("request:snapshot", (event: MessageEvent) => {
+    const runtime = get().sessions[sessionId];
+    if (!runtime?.detachedChatRequestId || runtime.stream !== streamEs) return;
+    try {
+      const data = JSON.parse(event.data);
+      if (!sessionMatchesEvent(sessionId, data) || data.status === "running") return;
+      if (data.requestId !== runtime.detachedChatRequestId) return;
+      flushTextDeltas();
+      void get().loadSessionDetail(sessionId, true);
+    } catch { /* Reconnect will read the saved state again. */ }
+  });
 
   streamEs.addEventListener("draft:complete", flushTextDeltas);
   streamEs.addEventListener("draft:error", flushTextDeltas);

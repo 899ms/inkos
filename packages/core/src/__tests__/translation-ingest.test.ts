@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import JSZip from "jszip";
 import { createTranslationProjectFromFile } from "../translation/index.js";
 import { segmentTranslationText } from "../translation/text.js";
+import {loadWorkManifest} from "../harness/work-store.js";
 
 vi.mock("unpdf", () => ({
   getDocumentProxy: vi.fn(async () => ({ fake: true })),
@@ -105,6 +106,13 @@ describe("translation ingestion", () => {
     expect(created.manifest.sourceLanguage).toBe("zh");
     expect(created.manifest.targetLanguage).toBe("en");
     expect(created.manifest.chapters).toHaveLength(2);
+    const work=await loadWorkManifest(root,created.manifest.id);
+    expect(work.artifacts.filter(a=>a.id.includes("chapter")).map(a=>({id:a.id,path:a.revisions[0]?.path}))).toEqual([
+      {id:"source-chapter-0001",path:"source/source/chapter-0001.json"},
+      {id:"translated-chapter-0001",path:"source/translated/chapter-0001.json"},
+      {id:"source-chapter-0002",path:"source/source/chapter-0002.json"},
+      {id:"translated-chapter-0002",path:"source/translated/chapter-0002.json"},
+    ]);
     expect(created.manifest.chapters[0]?.segmentCount).toBeGreaterThanOrEqual(2);
 
     const persisted = await readJson<typeof created.manifest>(join(root, created.manifestPath));

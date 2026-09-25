@@ -22,7 +22,7 @@ export async function createTranslationProjectFromFile(
   const now = new Date().toISOString();
   const id = `${now.replace(/[:.]/g, "-")}-${slug(source.title)}`;
   const baseDir = join("works", id, "source");
-  const writes: AtomicFileWrite[] = [];
+  const writes: AtomicFileWrite[] = input.sourceText !== undefined ? [{ relativePath: join(baseDir, "source-input.md"), content: input.sourceText }] : [];
 
   const chapters: TranslationChapterManifest[] = [];
   for (const [index, chapter] of source.chapters.entries()) {
@@ -64,7 +64,7 @@ export async function createTranslationProjectFromFile(
     updatedAt: now,
     source: {
       kind: source.kind,
-      path: source.sourcePath,
+      path: input.sourceText !== undefined ? toPosixPath(join(baseDir, "source-input.md")) : source.sourcePath,
       charCount: source.charCount,
       ...(source.totalPages !== undefined ? { totalPages: source.totalPages } : {}),
     },
@@ -72,7 +72,7 @@ export async function createTranslationProjectFromFile(
   };
   const manifestPath = join(baseDir, "manifest.json");
   const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
-  const glossaryContent = `${JSON.stringify({ terms: [] }, null, 2)}\n`;
+  const glossaryContent = `${JSON.stringify({ terms: input.glossary ?? [] }, null, 2)}\n`;
   const reviewContent = "# Translation Review\n\nPending.\n";
   writes.push(
     { relativePath: manifestPath, content: manifestContent },
@@ -85,10 +85,10 @@ export async function createTranslationProjectFromFile(
     profileId: "translation",
     language: manifest.targetLanguage,
     now,
-    metadata: { sourceLanguage: manifest.sourceLanguage, targetLanguage: manifest.targetLanguage },
+    metadata: { sourceLanguage: manifest.sourceLanguage, targetLanguage: manifest.targetLanguage, sourceOrigin: input.sourceText !== undefined ? "inline" : "file" },
   });
-  const artifacts = writes.map((write, index) => createCurrentArtifact({
-    artifactId: `translation-${index + 1}`,
+  const artifacts = writes.map((write) => createCurrentArtifact({
+    artifactId: toPosixPath(relative(baseDir,write.relativePath)).replace(/\.(json|md)$/,"").replaceAll("/","-"),
     artifactKind: translationArtifactKind(write.relativePath),
     path: toPosixPath(relative(join("works", id), write.relativePath)),
     content: write.content,

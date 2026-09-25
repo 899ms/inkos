@@ -87,6 +87,13 @@ describe("session transcript restore", () => {
 
     expect(restored).toHaveLength(1);
     expect(restored[0]).toMatchObject({ role: "user", content: "hi" });
+    await appendTranscriptEvent(projectRoot, {
+      type:"request_failed",version:1,sessionId:"s1",requestId:"r2",seq:6,timestamp:6,error:"MODEL_STREAM_IDLE",
+    });
+    const visible = await deriveBookSessionFromTranscript(projectRoot,"s1");
+    expect(visible?.messages.map((message)=>({role:message.role,timestamp:message.timestamp})))
+      .toEqual([{role:"user",timestamp:2},{role:"user",timestamp:5},{role:"system",timestamp:6}]);
+    expect(await restoreAgentMessagesFromTranscript(projectRoot,"s1")).toHaveLength(1);
   });
 
   it("恢复 committed 工具轮次的原生 pi 消息", async () => {

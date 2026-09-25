@@ -31,6 +31,7 @@ export const DialogueLineSchema = z.object({
   speaker: z.string(),
   text: z.string(),
   emotion: z.string().default(""),
+  condition: ConditionSchema.optional(),
 }).strict();
 export type DialogueLine = z.infer<typeof DialogueLineSchema>;
 

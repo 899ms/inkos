@@ -11,7 +11,9 @@ import {
   loadBookSession,
   renameBookSession,
   SessionAlreadyBoundError,
+  transitionSessionToWork,
 } from "../interaction/book-session-store.js";
+import { createWorkManifest, saveWorkManifest } from "../harness/work-store.js";
 import { appendManualSessionMessages, readTranscriptEvents } from "../interaction/session-transcript.js";
 
 describe("book session transcript flow", () => {
@@ -58,6 +60,22 @@ describe("book session transcript flow", () => {
     expect(bound).toMatchObject({ bookId: "book-a", profileId: "longform-novel", workId: "book-a" });
     await expect(bindBookSessionToBook(root, "bind-flow", "book-b"))
       .rejects.toBeInstanceOf(SessionAlreadyBoundError);
+  });
+
+  it("moves the execution target with a compare-and-set while preserving conversation and model selection", async () => {
+    for (const id of ["parent", "child", "other"]) await saveWorkManifest(root, createWorkManifest({ id, title: id,
+      profileId: id === "parent" ? "longform-novel" : "script", language: "en" }));
+    await createAndPersistBookSession(root, "parent", "target-flow", "book", { modelOverride: "fixture", serviceOverride: "custom:fixture" });
+    await appendManualSessionMessages(root, "target-flow", [{ role: "user", content: "Create a derived script", timestamp: Date.now() } as never]);
+    const before = await loadBookSession(root, "target-flow");
+    const child = await transitionSessionToWork(root, "target-flow", "parent", "child");
+    expect(child).toMatchObject({ workId: "child", bookId: null, sessionKind: "work", profileId: "script",
+      modelOverride: "fixture", serviceOverride: "custom:fixture", messages: before!.messages });
+    await expect(transitionSessionToWork(root, "target-flow", "parent", "other")).rejects.toMatchObject({ code: "SESSION_TARGET_CONFLICT", actualWorkId: "child" });
+    expect((await loadBookSession(root, "target-flow"))?.workId).toBe("child");
+    const count = (await readTranscriptEvents(root, "target-flow")).length;
+    await transitionSessionToWork(root, "target-flow", "parent", "child");
+    expect((await readTranscriptEvents(root, "target-flow")).length).toBe(count);
   });
 
   it("persists the selected model with the canonical session", async () => {

@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import { recoverAtomicFileSets } from "@actalk/inkos-core";
+import { findProjectRoot } from "./utils.js";
 import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
 import { configCommand } from "./commands/config.js";
@@ -103,5 +105,11 @@ export async function runProgram(
   hooks: ProgramHooks = {},
 ): Promise<void> {
   const program = createProgram(hooks);
+  program.hook("preAction", async () => {
+    let root: string;
+    try { root = findProjectRoot(); }
+    catch { return; } // init and help may run outside a project.
+    await recoverAtomicFileSets(root, true);
+  });
   await program.parseAsync(argv);
 }

@@ -67,11 +67,15 @@ export const agentCommand = new Command("agent")
         fullInstruction,
       );
 
+      const failure = result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined);
       if (opts.json) {
         log(JSON.stringify({ result }));
+      } else if (failure) {
+        logError(failure);
       } else if (!opts.quiet && result.responseText.trim()) {
         log(result.responseText);
       }
+      if (failure) process.exitCode = 1;
     } catch (e) {
       if (opts.json) {
         log(JSON.stringify({ error: String(e) }));

@@ -44,9 +44,11 @@ Thanks to [ByteDance Volcano Engine](https://www.volcengine.com/activity/ai618?u
 
 > 💡 **One key for global frontier models** — pair InkOS with [**kkaiapi**](https://en.kkaiapi.com/): an OpenAI-compatible gateway for Claude, GPT, Gemini, DeepSeek, Kimi, Qwen, GLM, and image models. Add it as a custom service with base URL `https://api.kkaiapi.com/v1`, then switch models in Studio without juggling multiple provider accounts.
 
-## v1.8.0 Unified Pi Agent Harness and Professional Creation Kernel
+## v2.0.0 Unified Pi Agent Harness and Professional Creation Kernel
 
-InkOS 1.8.0 converges the Chat Agent and every production workflow on one pi-agent-centered harness. Models understand, propose, and invoke capabilities; InkOS owns confirmation, context, state, atomic persistence, and artifact truth. Long fiction, short fiction, scripts, storyboards, interactive films, Play, and translation keep their own craft methods while sharing execution, retrieval, observation, and recovery infrastructure.
+Preview a 1.x upgrade with `inkos work migrate --json`, then apply it with `inkos work migrate --apply`. Migration converts book defaults, rules and state snapshots while retaining the original directories and unspecified historical values. The original files retain retired writing settings; 2.0 uses Profile action policies. Projects missing runtime state enter the library as drafts requiring reconstruction.
+
+InkOS 2.0 converges the Chat Agent and every production workflow on one pi-agent-centered harness. Models understand, propose, and invoke capabilities; InkOS owns confirmation, context, state, atomic persistence, and artifact truth. Long fiction, short fiction, scripts, storyboards, interactive films, Play, and translation keep their own craft methods while sharing execution, retrieval, observation, and recovery infrastructure.
 
 - **Model setup**: Studio includes provider settings, model routing, cover-service settings, [kkaiapi](https://en.kkaiapi.com/) / OpenRouter aggregator entries, and custom OpenAI-compatible endpoints.
 - **One production harness**: Studio Chat, TUI, `inkos interact`, and production workers share the pi-agent tool loop and typed action/result boundary. Existing pipelines are deterministic, interruptible capabilities rather than parallel natural-language decision engines.
@@ -96,7 +98,7 @@ InkOS 1.8.0 converges the Chat Agent and every production workflow on one pi-age
 
 ### Install
 
-Requires **Node.js 22 or later**.
+Requires **Node.js 22.16 or later**.
 
 ```bash
 npm i -g @actalk/inkos
@@ -157,7 +159,9 @@ cd my-novel
 inkos
 ```
 
-Open Studio, then go to **Model Settings**:
+Open Studio at the local URL printed at startup. The local server accepts same-origin browser requests by default; custom embeddings or reverse proxies can declare trusted origins through the server's `allowedOrigins` startup option.
+
+Then go to **Model Settings**:
 
 1. Choose a service such as Google Gemini, Moonshot, MiniMax, DeepSeek, kkaiapi, OpenRouter, or a custom endpoint.
 2. Paste the API key and test the connection.

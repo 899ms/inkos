@@ -3,6 +3,36 @@ export interface SplitChapter {
   readonly content: string;
 }
 
+const NUMBERED_HEADING = /^#{0,6}\s*(?:第([零〇○Ｏ０一二三四五六七八九十百千万\d]+)(章|回)(?:[:：]|\s+)?\s*(.*)|Chapter\s+(\d+|[IVXLCDM]+)[.:]?\s*(.*))$/i;
+
+/** Numbered document syntax shared by persistence, export and import. */
+export function readChapterHeading(line: string): {number:number;title:string;language:'zh'|'en'} | undefined {
+  const match=NUMBERED_HEADING.exec(line.trim());
+  if(!match)return undefined;
+  const ordinal=match[1]??match[4]!;
+  let number=Number(ordinal);
+  if(!Number.isFinite(number)){
+    if(match[4]){
+      const values:Record<string,number>={I:1,V:5,X:10,L:50,C:100,D:500,M:1000};
+      const digits=[...ordinal.toUpperCase()].map(c=>values[c]!);
+      number=digits.reduce((sum,value,index)=>sum+(value<(digits[index+1]??0)?-value:value),0);
+    }else{
+      const digits:Record<string,number>={'零':0,'〇':0,'○':0,'Ｏ':0,'０':0,'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9};
+      const units:Record<string,number>={'十':10,'百':100,'千':1000,'万':10000};
+      let total=0,section=0,value=0;
+      for(const character of ordinal){
+        const unit=units[character];
+        if(!unit){value=value*10+(digits[character]??Number(character));continue;}
+        if(unit===10000){total+=(section+value||1)*unit;section=0;}else section+=(value||1)*unit;
+        value=0;
+      }
+      number=total+section+value;
+    }
+  }
+  if(!Number.isSafeInteger(number)||number<0)return undefined;
+  return{number,title:(match[3]??match[5]??'').trim(),language:match[1]?'zh':'en'};
+}
+
 /**
  * Split a single text file into chapters by matching title lines.
  *
@@ -19,18 +49,27 @@ export function splitChapters(
   text: string,
   pattern?: string,
 ): ReadonlyArray<SplitChapter> {
-  const defaultPattern = /^#{0,2}\s*(?:第[零〇○Ｏ０一二三四五六七八九十百千万\d]+(?:章|回)(?:[:：]|\s+)?\s*(.*)|Chapter\s+(?:\d+|[IVXLCDM]+)(?:\.|:|\s+)?\s*(.*))/i;
-  const regex = pattern ? new RegExp(pattern, "m") : defaultPattern;
+  const regex = pattern ? new RegExp(pattern, "m") : undefined;
 
   const lines = text.split("\n");
-  const chapters: Array<{ title: string; startLine: number }> = [];
+  const chapters: Array<{ title: string; startLine: number; number?: number }> = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const match = lines[i]!.match(regex);
-    if (match) {
+    const heading = regex ? undefined : readChapterHeading(lines[i]!);
+    const match = regex ? lines[i]!.match(regex) : undefined;
+    if (heading || match) {
+      const previous=chapters.at(-1);
+      // Consecutive aliases of the same numbered heading wrap one chapter.
+      // Never discard an empty chapter with a different number or intervening prose.
+      if(heading&&previous?.number===heading.number&&!lines.slice(previous.startLine+1,i).join('\n').trim()){
+        previous.title ||= heading.title;
+        previous.startLine=i;
+        continue;
+      }
       chapters.push({
-        title: (match[1] ?? match[2] ?? "").trim(),
+        title: heading?.title ?? (match?.[1] ?? match?.[2] ?? "").trim(),
         startLine: i,
+        ...(heading?{number:heading.number}:{}),
       });
     }
   }

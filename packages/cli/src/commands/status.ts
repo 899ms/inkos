@@ -46,7 +46,8 @@ export const statusCommand = new Command("status")
           status: book.status,
           genre: book.genre,
           platform: book.platform,
-          chapters: persistedChapterCount,
+          chapters: index.length,
+          chapterFiles: persistedChapterCount,
           targetChapters: book.targetChapters,
           totalWords,
           avgWordsPerChapter: avgWords,
@@ -67,7 +68,8 @@ export const statusCommand = new Command("status")
           log(`  ${book.title} (${id})`);
           log(`    Status: ${book.status}`);
           log(`    Platform: ${book.platform} | Genre: ${book.genre}`);
-          log(`    Chapters: ${persistedChapterCount} / ${book.targetChapters}`);
+          log(`    Chapters: ${index.length} / ${book.targetChapters}`);
+          if (persistedChapterCount !== index.length) log(`    Chapter files: ${persistedChapterCount}; the file count differs from the chapter index.`);
           log(`    Words: ${totalWords.toLocaleString()} (avg ${avgWords}/ch)`);
           log(`    Review observations: ${observationCount} across ${chaptersWithObservations} chapter(s)`);
 

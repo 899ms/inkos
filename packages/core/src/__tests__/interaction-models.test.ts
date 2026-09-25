@@ -104,7 +104,8 @@ describe("interaction models", () => {
     expect(ContinuationImportActionPayloadSchema.parse({
       title: "雾港续章",
       sourcePath: ".inkos/uploads/novel.txt",
-    })).toMatchObject({ title: "雾港续章" });
+      instruction: "Keep the cabinet locked",
+    })).toMatchObject({ title: "雾港续章", instruction: "Keep the cabinet locked" });
     expect(ContinuationImportActionPayloadSchema.safeParse({
       sourcePath: "novel.txt",
       targetRoute: "import:continuation",

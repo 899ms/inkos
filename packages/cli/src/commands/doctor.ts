@@ -129,7 +129,7 @@ export const doctorCommand = new Command("doctor")
     // 1. Check Node.js version
     const nodeVersion = process.version;
     checks.push({
-      name: "Node.js >= 22",
+      name: "Node.js >= 22.16",
       ...evaluateNodeRuntimeSupport({ nodeVersion }),
     });
     checks.push({

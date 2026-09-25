@@ -2,7 +2,7 @@ import { Type, type Static } from "@sinclair/typebox";
 
 const VarValueToolSchema = Type.Union([Type.Number(), Type.String(), Type.Boolean()]);
 
-const ConditionToolSchema = Type.Object({
+export const ConditionToolSchema = Type.Object({
   var: Type.String({ minLength: 1 }),
   op: Type.Union([
     Type.Literal(">="),
@@ -21,7 +21,7 @@ const EffectToolSchema = Type.Object({
   value: VarValueToolSchema,
 }, { additionalProperties: false });
 
-const ChoiceToolSchema = Type.Object({
+export const ChoiceToolSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
   text: Type.String(),
   targetNodeId: Type.String({ minLength: 1 }),
@@ -34,6 +34,7 @@ const DialogueLineToolSchema = Type.Object({
   speaker: Type.String(),
   text: Type.String(),
   emotion: Type.String(),
+  condition: Type.Optional(ConditionToolSchema),
 }, { additionalProperties: false });
 
 const ImageSlotToolSchema = Type.Object({
@@ -55,7 +56,7 @@ const NodeTypeToolSchema = Type.Union([
 const StoryNodeFields = {
   title: Type.String(),
   type: NodeTypeToolSchema,
-  sceneDesc: Type.String(),
+  sceneDesc: Type.String({description:"Always-visible scene description. At shared nodes it must be true for every incoming state. Put state-specific spoken facts in dialogue entries with an explicit condition."}),
   dialogue: Type.Array(DialogueLineToolSchema),
   choices: Type.Array(ChoiceToolSchema),
   imageSlot: Type.Optional(ImageSlotToolSchema),
@@ -69,6 +70,11 @@ const StoryNodeFields = {
 export const StoryNodeContentToolSchema = Type.Object(StoryNodeFields, {
   additionalProperties: false,
 });
+
+export const StoryNodeRevisionToolSchema = Type.Object({
+  sceneDesc: StoryNodeFields.sceneDesc,
+  dialogue: StoryNodeFields.dialogue,
+}, {additionalProperties: false});
 
 export const StoryNodeToolSchema = Type.Object({
   id: Type.String({ minLength: 1 }),

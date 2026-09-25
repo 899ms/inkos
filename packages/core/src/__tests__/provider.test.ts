@@ -6,6 +6,7 @@ import {
   type LLMClient,
 } from "../llm/provider.js";
 import { runWithAgentTrajectory } from "../llm/agent-trajectory.js";
+import { readFile } from "node:fs/promises";
 
 // ── Mock @mariozechner/pi-ai ──────────────────────────────────────────────────
 // We intercept streamSimple so tests don't hit the network.
@@ -290,7 +291,8 @@ describe("chatCompletion via pi-ai", () => {
     await chatCompletion(client, "test-model", [{ role: "user", content: "hi" }]);
 
     const opts = mockStreamSimple.mock.calls[0]?.[2] as { headers?: Record<string, string> };
-    expect(opts.headers).toMatchObject({ "User-Agent": "InkOS/1.3.5", "X-Valid": "ok" });
+    const version=JSON.parse(await readFile(new URL('../../package.json',import.meta.url),'utf8')).version;
+    expect(opts.headers).toMatchObject({ "User-Agent": `InkOS/${version}`, "X-Valid": "ok" });
     expect(opts.headers).not.toHaveProperty("X-Bad");
   });
 

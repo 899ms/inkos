@@ -1,7 +1,7 @@
 import type { LLMClient } from "../llm/provider.js";
 import { runWorkerAgentTool } from "../agent/worker-agent.js";
 import { Type } from "@sinclair/typebox";
-import { appendActivatedSkillGuidance } from "../agents/base.js";
+import { prepareWorkerMessages } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import type { TranslationModelPort, TranslationSegment } from "./types.js";
 import { ObservationToolSchema } from "../agents/review-tool.js";
@@ -33,8 +33,18 @@ export function createLLMTranslationModel(input: {
   readonly signal?: AbortSignal;
 }): TranslationModelPort {
   return {
+    async reviseSegment(request){
+      return runWorkerAgentTool(input.client,input.model,await prepareWorkerMessages(input,[
+        {role:"system",content:"Revise only the supplied translated paragraph according to the instruction. Preserve all facts, identities, terminology and point of view in its source. Use neighboring paragraphs only for continuity. Return the complete revised target text, without commentary."},
+        {role:"user",content:JSON.stringify(request)},
+      ],input.maxTokens??4096,"translation-revision"),{
+        name:"submit_translation_revision",label:"Revise one translated paragraph",description:"Submit only the revised target paragraph.",
+        parameters:Type.Object({target:Type.String({minLength:1})}),
+        validate:result=>{if(!result.target.trim())throw Object.assign(new Error("A translated paragraph cannot be empty"),{code:"TRANSLATION_TARGET_EMPTY"});return{target:result.target.trim()};},
+      },{temperature:0.2,maxTokens:input.maxTokens??4096,signal:input.signal});
+    },
     async translateSegments(request) {
-      const parsed = await runWorkerAgentTool(input.client, input.model, appendActivatedSkillGuidance([
+      const parsed = await runWorkerAgentTool(input.client, input.model, await prepareWorkerMessages(input, [
         {
           role: "system",
           content: [
@@ -55,13 +65,14 @@ export function createLLMTranslationModel(input: {
             })),
           }, null, 2),
         },
-      ], input.activatedSkills), {
+      ], input.maxTokens ?? 8192, "translation"), {
         name: "submit_translation",
         label: "Submit translation",
         description: "Submit translated segments and glossary updates.",
         parameters: TranslationResultToolSchema,
+        validate:result=>{validateTranslatedSegments(result.segments,request.segments);return result;},
       }, { temperature: 0.2, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
-      return {
+  return {
         ...(parsed.chapterTitle?.trim()
           ? { chapterTitle: parsed.chapterTitle.trim() }
           : {}),
@@ -74,7 +85,7 @@ export function createLLMTranslationModel(input: {
       };
     },
     async reviewChapter(request) {
-      const parsed = await runWorkerAgentTool(input.client, input.model, appendActivatedSkillGuidance([
+      const parsed = await runWorkerAgentTool(input.client, input.model, await prepareWorkerMessages(input, [
         {
           role: "system",
           content: [
@@ -96,7 +107,7 @@ export function createLLMTranslationModel(input: {
             })),
           }, null, 2),
         },
-      ], input.activatedSkills), {
+      ], 4096, "translation-review"), {
         name: "submit_translation_review",
         label: "Submit translation review",
         description: "Submit the translation review.",
@@ -121,6 +132,7 @@ function validateTranslatedSegments(
   const sourceIndex = new Set(sourceSegments.map((segment) => segment.index));
   const byIndex = new Map<number, { readonly index: number; readonly target: string; readonly notes?: string }>();
   for (const item of value) {
+    if(!item.target.trim())throw Object.assign(new Error(`Translation returned an empty target for segment ${item.index}.`),{code:"TRANSLATION_TARGET_EMPTY",segmentIndex:item.index});
     if (!sourceIndex.has(item.index)) throw new Error(`Translation returned unknown segment index ${item.index}.`);
     if (byIndex.has(item.index)) throw new Error(`Translation returned duplicate segment index ${item.index}.`);
     byIndex.set(item.index, {

@@ -40,6 +40,21 @@ export function resolveCoverProviderPreset(service: string | undefined): CoverPr
   return COVER_PROVIDER_PRESETS.find((provider) => provider.service === service);
 }
 
+/** Resolve UI-qualified references only against this provider's known model IDs. */
+export function normalizeCoverModelReference(requested: string | undefined, preset: CoverProviderPreset, configured?: string): string {
+  const fallback = configured?.trim() || preset.defaultModel;
+  const value = requested?.trim();
+  if (!value) return fallback;
+  const known = new Set([fallback, ...preset.models]);
+  if (known.has(value)) return value;
+  for (const model of known) {
+    for (const label of [preset.service, preset.label]) {
+      if ([`${label} ${model}`, `${label}/${model}`, `${label} · ${model}`].includes(value)) return model;
+    }
+  }
+  return value;
+}
+
 export function normalizeCoverBaseUrl(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();

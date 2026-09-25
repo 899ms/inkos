@@ -15,10 +15,11 @@ import {
   type PlayTurnResult,
 } from "./play-agents.js";
 import { createPlayDB } from "./play-db-factory.js";
-import { applyPlayMutation, seedPlayGraph, type PlayReducerDB } from "./play-reducer.js";
+import { applyPlayMutation, seedPlayGraph, validatePlayMutation, type PlayReducerDB } from "./play-reducer.js";
 import { PlayStore, type PlayWorld } from "./play-store.js";
+import { createPlayPresentation } from "./play-presentation.js";
 import type { PlayGraphSnapshot } from "./play-db.js";
-import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { syncWorkSourceArtifacts, captureWorkSourceState, changedWorkSourcePaths } from "../harness/source-sync.js";
 import { compileContext, ContextSourceRegistry, type ContextFragment } from "../harness/context-compiler.js";
 import { createBuiltInWorkProfileRegistry } from "../harness/builtin-profiles.js";
 import { semanticInputBudget } from "../llm/semantic-input.js";
@@ -36,7 +37,10 @@ export interface PlayOpeningStateLike {
 }
 
 export interface PlayTurnLike {
+  readonly renderExisting?: (input: Parameters<PlayTurnLike["run"]>[0]) => Promise<PlaySceneRender>;
   readonly run: (input: {
+    readonly validateMutation?: (mutation:PlayMutation)=>void;
+    readonly choiceCount?:number;
     readonly turn: number;
     readonly input: string;
     readonly context: string;
@@ -44,6 +48,7 @@ export interface PlayTurnLike {
     readonly mode: "open" | "guided";
     readonly language?: "zh" | "en";
     readonly worldPremise?: string;
+    readonly currentSuggestedActions?: readonly string[];
   }) => Promise<PlayTurnResult>;
 }
 
@@ -65,6 +70,12 @@ export interface PlayStepResult extends PlaySceneRender {
   readonly mutation: PlayMutation;
 }
 
+function assertPlayChoices(world:{mode:'open'|'guided';choiceCount?:number},actions:readonly string[]):void{
+  const expected=world.mode==='open'?0:world.choiceCount;
+  if(expected!==undefined&&actions.length!==expected)throw Object.assign(new Error(`Expected ${expected} guided choices; received ${actions.length}`),{code:'PLAY_CHOICE_COUNT_MISMATCH',expected,actual:actions.length});
+  if(actions.some(a=>!a.trim())||new Set(actions.map(a=>a.trim())).size!==actions.length)throw Object.assign(new Error('Choices must be nonempty and distinct'),{code:'PLAY_CHOICES_INVALID'});
+}
+
 export interface PlayReplayResult extends PlayStepResult {
   readonly previousVariantId?: string;
   readonly variantId?: string;
@@ -75,6 +86,7 @@ export interface PlayVariantRestoreResult {
   readonly turn: number;
   readonly variantId: string;
   readonly sceneText: string;
+  readonly suggestedActions?: readonly string[];
 }
 
 export interface PlayOpeningSeedResult {
@@ -133,6 +145,7 @@ export class PlayRunner {
     readonly sceneText: string;
     readonly suggestedActions?: readonly string[];
   }): Promise<PlayOpeningSeedResult | null> {
+    const sourceBefore = await captureWorkSourceState(this.options.projectRoot, this.options.worldId);
     const world = await this.store.ensureWorldDefinition(this.options.worldId);
     await this.store.ensureRun(this.options.worldId, this.options.runId);
     const existing = readGraphSnapshot(this.db);
@@ -174,11 +187,12 @@ export class PlayRunner {
       );
     }
     await this.store.writeProjection(this.options.worldId, this.options.runId, "projections/state.md", renderStateBrief({ action, mutation }));
-    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true });
+    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true , acceptPaths: await changedWorkSourcePaths(this.options.projectRoot, this.options.worldId, sourceBefore) });
     return { mutation };
   }
 
   async step(input: string, options: { readonly replayContext?: string } = {}): Promise<PlayStepResult> {
+    const sourceBefore = await captureWorkSourceState(this.options.projectRoot, this.options.worldId);
     const rawInput = input.trim();
     if (!rawInput) throw new Error("Play input is empty.");
 
@@ -187,7 +201,7 @@ export class PlayRunner {
     const turn = (await this.store.readEvents(this.options.worldId, this.options.runId)).length + 1;
     try {
       const result = await this.executeStep(rawInput, turn, options);
-      await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true });
+      await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true , acceptPaths: await changedWorkSourcePaths(this.options.projectRoot, this.options.worldId, sourceBefore) });
       return result;
     } catch (error) {
       try {
@@ -210,15 +224,18 @@ export class PlayRunner {
     const worldContext = renderPlayWorldContext(world, language);
     const context = await this.buildContextBrief(sceneBrief, language, world, rawInput);
     const turnResult = await this.turnAgent.run({
+      validateMutation:mutation=>validatePlayMutation(this.db,mutation),
       turn,
       input: rawInput,
       context,
       replayContext: options.replayContext,
       mode: world.mode,
+      choiceCount:world.choiceCount,
       language,
       worldPremise: worldContext,
     });
     const action = PlayActionIntentSchema.parse(turnResult.action);
+    assertPlayChoices(world,turnResult.suggestedActions);
     const finalMutation = PlayMutationSchema.parse(turnResult.mutation);
     const render: PlaySceneRender = {
       sceneText: turnResult.sceneText,
@@ -257,7 +274,7 @@ export class PlayRunner {
         worldContract: world.worldContract,
         visualContract: world.visualContract,
       });
-      await this.store.writeProjection(this.options.worldId, this.options.runId, "projections/scene.md", `${render.sceneText}\n`);
+      await this.store.savePresentation(this.options.worldId, this.options.runId, createPlayPresentation(turn, render.sceneText, render.suggestedActions));
       await this.store.appendTranscriptTurn(this.options.worldId, this.options.runId, {
         role: "user",
         content: rawInput,
@@ -266,6 +283,7 @@ export class PlayRunner {
       await this.store.appendTranscriptTurn(this.options.worldId, this.options.runId, {
         role: "assistant",
         content: render.sceneText,
+        suggestedActions: [...render.suggestedActions],
         timestamp: Date.now(),
       });
     } catch (error) {
@@ -290,7 +308,8 @@ export class PlayRunner {
     };
   }
 
-  async regenerateLastTurn(input?: string): Promise<PlayReplayResult> {
+  async regenerateLastTurn(input?: string, instruction?: string, options?: { readonly preserveChoices?: boolean }): Promise<PlayReplayResult> {
+    const sourceBefore = await captureWorkSourceState(this.options.projectRoot, this.options.worldId);
     const events = await this.store.readEvents(this.options.worldId, this.options.runId);
     const last = events.at(-1);
     if (!last) throw new Error("No Play turn to regenerate.");
@@ -313,14 +332,69 @@ export class PlayRunner {
     if (!checkpoint) {
       throw new Error(`Missing checkpoint before turn ${last.turn}; cannot regenerate safely.`);
     }
-    await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, checkpoint, db);
-    const result = await this.step(replayedInput, {
-      replayContext: buildReplayContext({
-        originalInput: last.rawInput,
-        replacementInput: input?.trim(),
-        language: (await this.store.ensureWorldDefinition(this.options.worldId)).language,
-      }),
-    });
+    if (!input?.trim() || input.trim() === last.rawInput) {
+      if (!currentGraph || !this.turnAgent.renderExisting) {
+        throw Object.assign(new Error("Scene-only regeneration is unavailable."), { code: "PLAY_SCENE_REWRITE_UNAVAILABLE" });
+      }
+      const current = await this.store.captureRunSnapshot(this.options.worldId, this.options.runId, {
+        id: `regenerated-turn-${last.turn}`, turn: last.turn, graph: currentGraph,
+      });
+      const world = await this.store.ensureWorldDefinition(this.options.worldId);
+      const keptChoices = options?.preserveChoices
+        ? world.mode === "open" ? [] : await this.store.readCurrentSuggestedActions(this.options.worldId, this.options.runId, last.turn, current.sceneProjection)
+        : undefined;
+      if (options?.preserveChoices && keptChoices === undefined) throw Object.assign(new Error("The current choices have no matching saved render; regenerate the turn's choices before a scene-only rewrite."), { code: "PLAY_CHOICES_UNAVAILABLE" });
+      if (keptChoices) assertPlayChoices(world, keptChoices);
+      const generated = await this.turnAgent.renderExisting({
+        turn: last.turn, input: last.rawInput, mode: world.mode, choiceCount:world.choiceCount,language: world.language,
+        worldPremise: renderPlayWorldContext(world, world.language),
+        context: await this.buildContextBrief(current.sceneProjection, world.language, world, last.rawInput),
+        replayContext: [buildReplayContext({ originalInput: last.rawInput, language: world.language }), instruction?.trim()].filter(Boolean).join("\n\n"),
+        currentSuggestedActions: keptChoices,
+      });
+      const render = { ...generated, suggestedActions: keptChoices ?? generated.suggestedActions };
+      const transcript = current.transcriptRaw.trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+      assertPlayChoices(world,render.suggestedActions);
+      if (transcript.at(-1)?.role !== "assistant") throw new Error("Latest Play transcript has no assistant scene.");
+      transcript[transcript.length - 1] = { ...transcript.at(-1), content: render.sceneText, suggestedActions: [...render.suggestedActions] };
+      const rewritten = { ...current, presentation: createPlayPresentation(last.turn, render.sceneText, render.suggestedActions),
+        sceneProjection: `${render.sceneText}\n`, transcriptRaw: transcript.map(row => JSON.stringify(row)).join("\n") + "\n" };
+      try {
+        await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, rewritten, db);
+        await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true , acceptPaths: await changedWorkSourcePaths(this.options.projectRoot, this.options.worldId, sourceBefore) });
+      } catch (error) {
+        await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, current, db);
+        throw error;
+      }
+      const variantId = await this.store.saveVariant(this.options.worldId, this.options.runId, last.turn, rewritten);
+      const state = await this.store.loadCurrentState(this.options.worldId, this.options.runId);
+      return { ...render, previousVariantId, variantId, replayedInput,
+        action: PlayActionIntentSchema.parse(state?.lastAction),
+        mutation: PlayMutationSchema.parse({ eventId: last.id, turn: last.turn, actionKind: last.actionKind,
+          summary: last.outcomeSummary, entities: { upsert: [] }, edges: { upsert: [], expire: [] },
+          stateSlots: { upsert: [] }, evidence: { transitions: [] }, blocked: false, blockedReason: "", notes: [] }),
+      };
+    }
+    const original = previousVariantId
+      ? await this.store.loadVariant(this.options.worldId, this.options.runId, last.turn, previousVariantId)
+      : null;
+    let result: PlayStepResult;
+    try {
+      await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, checkpoint, db);
+      result = await this.step(replayedInput, {
+        replayContext: buildReplayContext({
+          originalInput: last.rawInput,
+          replacementInput: input?.trim(),
+          language: (await this.store.ensureWorldDefinition(this.options.worldId)).language,
+        }),
+      });
+    } catch (error) {
+      if (original) {
+        await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, original, db);
+        await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true , acceptPaths: await changedWorkSourcePaths(this.options.projectRoot, this.options.worldId, sourceBefore) });
+      }
+      throw error;
+    }
     const nextGraph = readGraphSnapshot(this.db);
     const variantId = nextGraph
       ? await this.store.saveVariant(
@@ -346,17 +420,22 @@ export class PlayRunner {
     readonly turn: number;
     readonly variantId: string;
   }): Promise<PlayVariantRestoreResult> {
+    const sourceBefore = await captureWorkSourceState(this.options.projectRoot, this.options.worldId);
     const db = requireRestorableGraphDB(this.db);
     const snapshot = await this.store.loadVariant(this.options.worldId, this.options.runId, input.turn, input.variantId);
     if (!snapshot) {
       throw new Error(`Play variant not found: turn ${input.turn} / ${input.variantId}`);
     }
-    await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, snapshot, db);
-    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true });
+    const restoredPaths = await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, snapshot, db);
+    await syncWorkSourceArtifacts({ projectRoot: this.options.projectRoot, workId: this.options.worldId, accept: true,
+      acceptPaths: [...restoredPaths, ...await changedWorkSourcePaths(this.options.projectRoot, this.options.worldId, sourceBefore)],
+    });
+    const presentation = await this.store.readPresentation(this.options.worldId, this.options.runId);
     return {
       turn: input.turn,
       variantId: input.variantId,
-      sceneText: snapshot.sceneProjection.trim(),
+      sceneText: presentation?.sceneText ?? snapshot.sceneProjection.trim(),
+      ...(presentation?.suggestedActions ? { suggestedActions: presentation.suggestedActions } : {}),
     };
   }
 
@@ -367,10 +446,12 @@ export class PlayRunner {
     intent: string,
   ): Promise<string> {
     const stateBrief = await this.readOptionalProjection("projections/state.md");
+    const transcript = await this.store.readTranscript(this.options.worldId, this.options.runId);
     const worldContext = renderPlayWorldContext(world, language);
     const graph = readGraphSnapshot(this.db);
+    const activeEdges = (graph?.edges ?? []).filter(edge => edge.validUntilEventId == null);
     const playerAdjacentIds = new Set<string>(["actor_player"]);
-    for (const edge of graph?.edges ?? []) {
+    for (const edge of activeEdges) {
       if (edge.fromId === "actor_player") playerAdjacentIds.add(edge.toId);
       if (edge.toId === "actor_player") playerAdjacentIds.add(edge.fromId);
     }
@@ -378,6 +459,15 @@ export class PlayRunner {
       { id: "play-world", source: "World contract", content: worldContext, protection: "protected", priority: 100 },
       ...(sceneBrief ? [{ id: "play-scene", source: "Current scene", content: sceneBrief, protection: "protected" as const, priority: 95 }] : []),
       ...(stateBrief ? [{ id: "play-state", source: "Current state", content: stateBrief, protection: "protected" as const, priority: 95 }] : []),
+      { id: "play-current-graph", source: "Current relationships and tracked state", content: JSON.stringify({ activeRelationships: activeEdges, stateSlots: graph?.stateSlots ?? [] }), protection: "protected", priority: 100, pointer: "play.db" },
+      ...(transcript.length ? [{
+        id: "play-history",
+        source: "Earlier player actions and scenes. Retain established facts; later events and current state govern changes in time, location, holdings and obligations.",
+        content: JSON.stringify(transcript.map(({role, content}) => ({role, content}))),
+        protection: "compressible" as const,
+        priority: 60,
+        pointer: "transcript.jsonl",
+      }] : []),
       ...(graph?.entities ?? []).map((entity) => ({
         id: `play-entity-${entity.id}`,
         source: `Entity ${entity.id}`,
@@ -468,7 +558,7 @@ function renderPlayWorldContext(world: PlayWorld | null | undefined, language: "
   const isEn = language === "en";
   const blocks = [
     premise
-      ? `${isEn ? "World setting" : "世界设定"}:\n${premise}`
+      ? `${isEn ? "Opening premise (current state supersedes completed objectives and changed facts)" : "开场前提（已完成目标和已变化事实以当前状态为准）"}:\n${premise}`
       : "",
     worldContract
       ? `${isEn ? "World contract (high priority; obey before genre defaults)" : "世界契约（高优先级，先于题材惯例）"}:\n${worldContract}`
@@ -506,7 +596,7 @@ function renderEntity(entity: PlayEntity, language: "zh" | "en"): string {
   const detail = [entity.summary, entity.status ? `${isEn ? "status" : "状态"}: ${entity.status}` : ""]
     .filter(Boolean)
     .join(isEn ? "; " : "；");
-  return `${entity.id} [${entity.type}]: ${entity.label}${detail ? ` — ${detail}` : ""}`;
+  return `${entity.id} [${entity.type}; ${isEn ? "description last updated" : "描述最后更新"}: ${entity.updatedEventId}]: ${entity.label}${detail ? ` — ${detail}` : ""}`;
 }
 
 function renderStateBrief(input: {

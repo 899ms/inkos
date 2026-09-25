@@ -1,6 +1,6 @@
 import type { LLMClient } from "../llm/provider.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
-import { appendActivatedSkillGuidance } from "./base.js";
+import { prepareWorkerMessages } from "./base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { loadAvailableAgentSkills, mergeActivatedSkillGuidance } from "../skills/index.js";
 import { estimateTextTokens } from "../llm/provider.js";
@@ -46,7 +46,7 @@ export async function compileImportSource(input: {
   const compiled: string[] = [];
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index]!;
-    const response = await runWorkerAgent(input.client, input.model, appendActivatedSkillGuidance([
+    const response = await runWorkerAgent(input.client, input.model, await prepareWorkerMessages({ ...input, activatedSkills: mergeActivatedSkillGuidance(input.activeSkills ?? [], skills) }, [
       {
         role: "system",
         content: input.language === "en"
@@ -54,7 +54,7 @@ export async function compileImportSource(input: {
           : "按已激活的导入与续写 Skill 处理这份完整源片段，只返回可追溯 Markdown。",
       },
       { role: "user", content: `Source chunk ${index + 1}/${chunks.length}\n\n${chunk}` },
-    ], mergeActivatedSkillGuidance(input.activeSkills ?? [], skills)), {
+    ], undefined, "import-context"), {
       temperature: 0.2,
       signal: input.signal,
     });

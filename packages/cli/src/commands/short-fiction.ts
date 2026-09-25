@@ -8,6 +8,7 @@ import {
   activatedSkillIds,
   createBuiltInWorkProfileRegistry,
   createShortFictionRunTool,
+  createShortFictionReviseTool,
   executeExplicitCapabilityTool,
   loadAvailableAgentSkills,
   PipelineRunner,
@@ -15,12 +16,35 @@ import {
   type ShortFictionReference,
   type ShortFictionLanguage,
 } from "@actalk/inkos-core";
-import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError } from "../utils.js";
+import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError, resolveCliProfileSkills } from "../utils.js";
 
 export { extractResponsesImageBase64, resolveCoverApiKey } from "@actalk/inkos-core";
 
 export const shortCommand = new Command("short")
   .description("Short fiction production workflow");
+
+shortCommand.command("revise")
+  .description("Revise a complete short-fiction Work using its review and update its sales package")
+  .argument("<story-id>")
+  .requiredOption("--instruction <text>","Revision direction")
+  .option("--chars <n>","Target native length per chapter","1000")
+  .option("--model <model>","Whole-story revision model","deepseek-v4-pro")
+  .option("--chapters <numbers>","Limit revision to comma-separated chapter numbers")
+  .option("--json","Output JSON")
+  .action(async(storyId:string,opts)=>{
+    try {
+      const root=findProjectRoot();const config=await loadConfig({projectRoot:root});
+      config.modelOverrides={...config.modelOverrides,"short-reviser":opts.model};
+      const pipeline=new PipelineRunner(buildPipelineConfig(config,root,{quiet:opts.json}));
+      const skills=await resolveCliProfileSkills(root,"short-fiction");
+      const result=await executeExplicitCapabilityTool({projectRoot:root,
+        binding:{capabilityId:"short-fiction",actionId:"revise_short_fiction",profileId:"short-fiction",risk:"recoverable-write"},
+        tool:createShortFictionReviseTool(pipeline,root,storyId,{activeSkills:()=>skills}),workId:storyId,
+        parameters:{instruction:opts.instruction,charsPerChapter:parsePositiveInteger(opts.chars,1000,"chars"),...(opts.chapters?{chapterNumbers:opts.chapters.split(",").map((number:string)=>parsePositiveInteger(number.trim(),1,"chapter"))}:{})},
+      });
+      log(opts.json?JSON.stringify(result,null,2):result.content??result.summary);
+    } catch(error) {logCommandError("Short revision failed",error,opts.json);process.exitCode=1;}
+  });
 
 shortCommand
   .command("run")
@@ -31,15 +55,16 @@ shortCommand
   .option("--lang <language>", "Writing language: zh or en", "zh")
   .option("--chapters <n>", "Complete short chapter count", String(SHORT_FICTION_DEFAULT_CHAPTERS))
   .option("--chars <n>", "Per-chapter length: zh characters or en words")
+  .option("--min-chapter-length-ratio <ratio>", "Minimum complete chapter length relative to target (0 < ratio <= 1)", "0.5")
   .option("--llm-base-url <url>", "Override LLM base URL")
   .option("--model <model>", "Fallback model for all short stages")
   .option("--planner-model <model>", "Model for outline creation")
   .option("--writer-model <model>", "Model for first full draft")
   .option("--draft-review-model <model>", "Model for draft review")
   .option("--package-model <model>", "Model for synopsis and cover prompt packaging")
-  .option("--cover-base-url <url>", "OpenAI-compatible Responses API base URL for cover generation, e.g. https://api.openai.com/v1")
-  .option("--cover-endpoint <url>", "Exact Responses endpoint for cover generation; overrides --cover-base-url")
-  .option("--cover-model <model>", "Image-capable Responses model for cover generation", "gpt-5.5")
+  .option("--cover-base-url <url>", "Image API base URL; defaults to the project cover service")
+  .option("--cover-endpoint <url>", "Exact image endpoint; overrides --cover-base-url")
+  .option("--cover-model <model>", "Image model; defaults to the project cover model")
   .option("--cover-size <size>", "Cover image size", "1024x1360")
   .option("--cover-api-key-env <name>", "Env var containing cover API key", "INKOS_COVER_API_KEY")
   .option("--no-cover", "Skip cover image generation")
@@ -93,6 +118,7 @@ shortCommand
           storyId: opts.storyId,
           chapters: chapterCount,
           charsPerChapter,
+          minChapterLengthRatio: Number(opts.minChapterLengthRatio),
           language,
           cover: opts.cover,
           coverBaseUrl: opts.coverBaseUrl,
@@ -144,6 +170,7 @@ interface ShortRunOptions {
   readonly lang: string;
   readonly chapters?: string;
   readonly chars?: string;
+  readonly minChapterLengthRatio?: string;
   readonly llmBaseUrl?: string;
   readonly model?: string;
   readonly plannerModel?: string;
@@ -208,7 +235,8 @@ function formatCoverStatus(coverImagePath?: string, coverError?: string): string
 
 function logCommandError(prefix: string, error: unknown, json?: boolean): void {
   if (json) {
-    log(JSON.stringify({ error: `${prefix}: ${String(error)}` }, null, 2));
+    const details=error&&typeof error==="object"?error as Record<string,unknown>:{};
+    log(JSON.stringify({ error: `${prefix}: ${String(error)}`,code:details.code,stopReason:details.stopReason,resultTool:details.resultTool,lastToolError:details.lastToolError,lastAssistantText:details.lastAssistantText }, null, 2));
     return;
   }
   logError(`${prefix}: ${String(error)}`);

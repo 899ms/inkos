@@ -1,5 +1,7 @@
 import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { PlayPresentationSchema, legacyPresentation, type PlayPresentation } from "./play-presentation.js";
+import { legacyReceiptChoices } from "./play-presentation-legacy.js";
 import { join, normalize, sep } from "node:path";
 import { z } from "zod";
 import {
@@ -13,13 +15,15 @@ import type { PlayGraphSnapshot } from "./play-db.js";
 import type { PlayGraphDB } from "./play-db-factory.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
-import { createWorkManifest } from "../harness/work-store.js";
+import { createWorkManifest,loadWorkManifest } from "../harness/work-store.js";
+import {createBuiltInWorkProfileRegistry} from '../harness/builtin-profiles.js';
 import { listWorkManifests, workDirectory } from "../harness/work-store.js";
 
 const PlayTranscriptTurnSchema = z.object({
   role: z.enum(["user", "assistant", "system", "tool"]),
   content: z.string(),
   timestamp: z.number().int().nonnegative(),
+  suggestedActions: z.array(z.string()).optional(),
 }).strict();
 
 export type PlayTranscriptTurn = z.infer<typeof PlayTranscriptTurnSchema>;
@@ -31,6 +35,7 @@ const PlayWorldSchema = z.object({
   worldContract: z.string(),
   visualContract: z.string(),
   mode: z.enum(["open", "guided"]),
+  choiceCount:z.number().int().positive().optional(),
   language: z.enum(["zh", "en"]),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
@@ -59,6 +64,7 @@ export interface PlayRunSnapshot {
   readonly sceneProjection: string;
   readonly stateProjection: string;
   readonly graph: PlayGraphSnapshot;
+  readonly presentation?: PlayPresentation | null;
 }
 
 export class PlayStore {
@@ -84,8 +90,12 @@ export class PlayStore {
 
   async createWorld(input: PlayWorldInput): Promise<PlayWorld> {
     const now = new Date().toISOString();
+    let existingWork;
+    try{existingWork=await loadWorkManifest(this.projectRoot,input.id);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+    if(existingWork&&!createBuiltInWorkProfileRegistry(this.projectRoot).require(existingWork.profileId).capabilityIds.includes('interactive-world'))throw Object.assign(new Error('The existing Work does not declare interactive-world capability'),{code:'WORK_CAPABILITY_REQUIRED'});
     const world = PlayWorldSchema.parse({
       ...input,
+      ...(existingWork?{title:existingWork.title,language:existingWork.language}:{}),
       id: assertSafeSegment(input.id),
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? now,
@@ -94,7 +104,7 @@ export class PlayStore {
       relativePath: join("works", world.id, "source", "world.json"),
       content: `${JSON.stringify(world, null, 2)}\n`,
     };
-    const work = createWorkManifest({
+    const work = existingWork ?? createWorkManifest({
       id: world.id,
       title: world.title,
       profileId: "interactive-world",
@@ -119,7 +129,7 @@ export class PlayStore {
 
   async updateWorld(
     worldId: string,
-    patch: Partial<Pick<PlayWorld, "premise" | "worldContract" | "visualContract" | "mode">>,
+    patch: Partial<Pick<PlayWorld, "premise" | "worldContract" | "visualContract" | "mode" | "choiceCount">>,
     options: { readonly accept?: boolean } = {},
   ): Promise<PlayWorld> {
     const current = await this.loadWorld(worldId);
@@ -147,6 +157,7 @@ export class PlayStore {
       workId: world.id,
       updatedAt: world.updatedAt,
       accept: options.accept !== false,
+      acceptPaths: ["source/world.json"],
     });
     return world;
   }
@@ -245,6 +256,36 @@ export class PlayStore {
     return this.readJsonLines(this.transcriptPath(worldId, runId), PlayTranscriptTurnSchema);
   }
 
+  async readPresentation(worldId: string, runId: string): Promise<PlayPresentation | null> {
+    try {
+      return PlayPresentationSchema.nullable().parse(JSON.parse(await readFile(join(this.runDir(worldId, runId), "presentation.json"), "utf8")));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const scene = await this.readOptionalRunFile(worldId, runId, "projections/scene.md");
+    if (!scene.trim()) return null;
+    const turn = (await this.loadCurrentState(worldId, runId))?.turn ?? 0;
+    const legacy = legacyPresentation(turn, scene.trim(), await this.readOptionalRunFile(worldId, runId, "transcript.jsonl"));
+    if (legacy.suggestedActions !== null) return legacy;
+    const world = await this.loadWorld(worldId);
+    return { ...legacy, suggestedActions: world?.mode === "open" ? []
+      : await legacyReceiptChoices(this.projectRoot, worldId, runId, turn, scene) };
+  }
+
+  async savePresentation(worldId: string, runId: string, presentation: PlayPresentation): Promise<void> {
+    const parsed = PlayPresentationSchema.parse(presentation);
+    await commitAtomicFileSet({ rootDir: this.runDir(worldId, runId), writes: [
+      { relativePath: "presentation.json", content: JSON.stringify(parsed, null, 2) + "\n" },
+      { relativePath: "projections/scene.md", content: parsed.sceneText + "\n" },
+    ] });
+  }
+
+  async readCurrentSuggestedActions(worldId: string, runId: string, turn: number, sceneText: string): Promise<string[] | undefined> {
+    const presentation = await this.readPresentation(worldId, runId);
+    return presentation?.turn === turn && presentation.sceneText.trim() === sceneText.trim()
+      ? presentation.suggestedActions ?? undefined : undefined;
+  }
+
   async saveCurrentState(
     worldId: string,
     runId: string,
@@ -282,6 +323,10 @@ export class PlayStore {
   }
 
   async readProjection(worldId: string, runId: string, relativePath: string): Promise<string> {
+    if (relativePath === "projections/scene.md") {
+      const presentation = await this.readPresentation(worldId, runId);
+      if (presentation) return `${presentation.sceneText}\n`;
+    }
     return readFile(this.safeRunChildPath(worldId, runId, relativePath), "utf-8");
   }
 
@@ -305,6 +350,7 @@ export class PlayStore {
       sceneProjection: await this.readOptionalRunFile(worldId, runId, join("projections", "scene.md")),
       stateProjection: await this.readOptionalRunFile(worldId, runId, join("projections", "state.md")),
       graph: structuredClone(input.graph),
+      presentation: await this.readPresentation(worldId, runId),
     };
   }
 
@@ -361,18 +407,26 @@ export class PlayStore {
     runId: string,
     snapshot: PlayRunSnapshot,
     db: PlayGraphDB,
-  ): Promise<void> {
+  ): Promise<readonly string[]> {
     await this.ensureRun(worldId, runId);
+    const stateTurn = snapshot.currentStateRaw.trim() ? PlayCurrentStateSchema.parse(JSON.parse(snapshot.currentStateRaw)).turn : 0;
+    const presentation = snapshot.presentation ?? (snapshot.sceneProjection.trim()
+      ? legacyPresentation(stateTurn, snapshot.sceneProjection.trim(), snapshot.transcriptRaw) : null);
+    if (presentation && presentation.turn !== stateTurn) throw Object.assign(new Error("Presentation does not belong to the snapshot turn."), { code: "PLAY_PRESENTATION_CONFLICT" });
+    const beforeGraph = db.snapshot();
     db.replaceWithSnapshot(snapshot.graph);
-    await writeFile(this.eventsPath(worldId, runId), snapshot.eventsRaw, "utf-8");
-    await writeFile(this.transcriptPath(worldId, runId), snapshot.transcriptRaw, "utf-8");
-    await writeFile(
-      this.safeRunChildPath(worldId, runId, join("state", "current.json")),
-      snapshot.currentStateRaw,
-      "utf-8",
-    );
-    await this.writeProjection(worldId, runId, "projections/scene.md", snapshot.sceneProjection);
-    await this.writeProjection(worldId, runId, "projections/state.md", snapshot.stateProjection);
+    try {
+      await commitAtomicFileSet({ rootDir: this.runDir(worldId, runId), writes: [
+        { relativePath: "events.jsonl", content: snapshot.eventsRaw },
+        { relativePath: "transcript.jsonl", content: snapshot.transcriptRaw },
+        { relativePath: "state/current.json", content: snapshot.currentStateRaw },
+        { relativePath: "presentation.json", content: JSON.stringify(presentation) + "\n" },
+        { relativePath: "projections/scene.md", content: presentation ? presentation.sceneText + "\n" : snapshot.sceneProjection },
+        { relativePath: "projections/state.md", content: snapshot.stateProjection },
+      ] });
+    } catch (error) { db.replaceWithSnapshot(beforeGraph); throw error; }
+    return ["play.db", "events.jsonl", "transcript.jsonl", "state/current.json", "presentation.json", "projections/scene.md", "projections/state.md"]
+      .map(path => `source/runs/${runId}/${path}`);
   }
 
   private eventsPath(worldId: string, runId: string): string {
@@ -449,6 +503,7 @@ const PlayRunSnapshotSchema: z.ZodType<PlayRunSnapshot> = z.object({
   eventsRaw: z.string(),
   transcriptRaw: z.string(),
   currentStateRaw: z.string(),
+  presentation: PlayPresentationSchema.nullable().optional(),
   sceneProjection: z.string(),
   stateProjection: z.string(),
   graph: z.object({

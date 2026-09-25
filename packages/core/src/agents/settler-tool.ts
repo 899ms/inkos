@@ -9,6 +9,7 @@ const HookRecordToolSchema = Type.Object({
     Type.Literal("progressing"),
     Type.Literal("deferred"),
     Type.Literal("resolved"),
+    Type.Literal("superseded"),
   ]),
   lastAdvancedChapter: Type.Integer({ minimum: 0 }),
   expectedPayoff: Type.String(),
@@ -47,7 +48,7 @@ export const SettlementToolSchema = Type.Object({
   }),
   hookOps: Type.Object({
     upsert: Type.Array(HookRecordToolSchema, {
-      description: "Full updates for hook ids that already exist in the supplied hook ledger. Never invent an id here.",
+      description: "Full updates for existing hook ids. Use superseded only when current author-approved foundation or revision explicitly withdraws the premise; cite that authority in notes and preserve the original hook content. Absence from a chapter is not withdrawal. Never invent an id here or withdraw a resolved hook.",
     }),
     mention: Type.Array(Type.String(), { description: "Exact existing hook ids mentioned without changing status." }),
     resolve: Type.Array(Type.String(), { description: "Exact existing hook ids resolved by this chapter." }),
@@ -60,3 +61,13 @@ export const SettlementToolSchema = Type.Object({
   }), { description: "Brand-new unresolved promises. Do not assign a hook id; the host assigns the canonical id." }),
   chapterSummary: ChapterSummaryToolSchema,
 });
+
+export function createSettlementToolSchema(allowNewHooks = true) {
+  return Type.Object({
+    ...SettlementToolSchema.properties,
+    newHookCandidates: Type.Array(SettlementToolSchema.properties.newHookCandidates.items, {
+      description: allowNewHooks ? "New unresolved promises without assigned ids." : "This recovery preserves existing hook ids. Submit an empty array; new hooks are not permitted.",
+      ...(allowNewHooks ? {} : { maxItems: 0 }),
+    }),
+  });
+}

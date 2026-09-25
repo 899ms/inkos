@@ -8,6 +8,20 @@ import type { SessionKind, TranscriptRole } from "./session-transcript-schema.js
 const SESSIONS_DIR = ".inkos/sessions";
 const appendQueues = new Map<string, Promise<void>>();
 
+/** Recover the request that produced this confirmation, even after other chat turns. */
+export function confirmedRequestInstruction(
+  events: ReadonlyArray<TranscriptEvent>, action: string, instruction: string,
+): string {
+  for (const event of [...events].reverse()) {
+    if (event.type !== "message" || event.role !== "toolResult") continue;
+    const details = (event.message as { details?: Record<string, unknown> }).details;
+    if (details?.kind !== "proposed_action" || details.action !== action || details.instruction !== instruction) continue;
+    const request = events.find(candidate => candidate.type === "request_started" && candidate.requestId === event.requestId);
+    if (request?.type === "request_started" && request.input.trim()) return request.input;
+  }
+  return instruction;
+}
+
 export function sessionsDir(projectRoot: string): string {
   return join(projectRoot, SESSIONS_DIR);
 }

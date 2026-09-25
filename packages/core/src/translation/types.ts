@@ -1,10 +1,31 @@
 import { ObservationSchema, type Observation } from "../models/observation.js";
+import { posix } from "node:path";
+
+export function normalizeTranslationArtifactPath(projectId: string, path: string): string {
+  const normalized=posix.normalize(path.replaceAll('\\','/'));
+  if(!normalized.startsWith(`works/${projectId}/source/`))throw Object.assign(new Error('Translation artifact must remain inside its Work'),{code:'TRANSLATION_MANIFEST_INVALID'});
+  return normalized;
+}
+
+export function validateTranslationManifestOwnership(manifest: TranslationProjectManifest, projectId: string): TranslationProjectManifest {
+  if(manifest.id!==projectId)throw Object.assign(new Error('Translation manifest belongs to another Work'),{code:'TRANSLATION_MANIFEST_INVALID'});
+  const numbers=new Set<number>(),paths=new Set<string>();
+  const chapters=manifest.chapters.map(chapter=>{
+    const sourcePath=normalizeTranslationArtifactPath(projectId,chapter.sourcePath),translatedPath=normalizeTranslationArtifactPath(projectId,chapter.translatedPath);
+    if(numbers.has(chapter.number)||paths.has(sourcePath)||paths.has(translatedPath)||sourcePath===translatedPath)throw Object.assign(new Error('Translation chapters require distinct identities and paths'),{code:'TRANSLATION_MANIFEST_INVALID'});
+    numbers.add(chapter.number);paths.add(sourcePath);paths.add(translatedPath);
+    return {...chapter,sourcePath,translatedPath};
+  });
+  return {...manifest,chapters};
+}
 
 export type TranslationSourceKind = "text" | "markdown" | "pdf" | "epub";
 export type TranslationExportFormat = "txt" | "md" | "epub";
 
 export interface CreateTranslationProjectInput {
-  readonly filePath: string;
+  readonly filePath?: string;
+  readonly sourceText?: string;
+  readonly glossary?: ReadonlyArray<TranslationGlossaryTerm>;
   readonly sourceLanguage: string;
   readonly targetLanguage: string;
   readonly title?: string;
@@ -124,6 +145,11 @@ export const TranslationGlossarySchema = z.object({
 }).strict();
 
 export interface TranslationModelPort {
+  readonly reviseSegment?: (input:{
+    readonly sourceLanguage:string;readonly targetLanguage:string;readonly chapterTitle:string;
+    readonly segment:TranslationSegment;readonly neighbors:ReadonlyArray<TranslationSegment>;
+    readonly glossary:ReadonlyArray<TranslationGlossaryTerm>;readonly instruction:string;
+  })=>Promise<{readonly target:string}>;
   readonly translateSegments: (input: {
     readonly sourceLanguage: string;
     readonly targetLanguage: string;
@@ -152,10 +178,14 @@ export interface TranslationModelPort {
 }
 
 export interface RunTranslationProjectResult {
+  readonly observations: ReadonlyArray<Observation>;
   readonly projectId: string;
   readonly translatedSegments: number;
   readonly reviewedChapters: number;
   readonly reportPath: string;
+  readonly totalSegments:number;
+  readonly completedSegments:number;
+  readonly pendingSegments:number;
 }
 
 export interface TranslationExportResult {

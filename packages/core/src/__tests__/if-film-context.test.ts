@@ -23,8 +23,10 @@ describe("film-context", () => {
     expect(s).toContain("trust");
   });
   it("authoring context includes character voice line", () => {
-    const ctx = buildFilmAuthoringContext(graph);
-    expect(ctx).toContain("阿梅");
-    expect(ctx).toContain("短促");
+    const ctx = JSON.parse(buildFilmAuthoringContext(graph));
+    expect(ctx.characters).toEqual(graph.characters);
+    expect(ctx.variables).toEqual(graph.variables);
+    expect(ctx.nodes).toEqual(graph.nodes);
+    expect(ctx.endings).toEqual(graph.endings);
   });
 });

@@ -1,21 +1,28 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join, dirname, relative } from "node:path";
 import { StoryGraphSchema, type StoryGraph } from "./graph-schema.js";
+import { assertVariableTypes } from "./validation.js";
 import { z } from "zod";
 import { applyStoryGraphDelta, type StoryGraphDelta } from "./delta.js";
-import { loadStoryGraph, saveStoryGraph, storyGraphPath } from "./graph-store.js";
+import { loadStoryGraph, storyGraphPath } from "./graph-store.js";
+import { loadWorkManifest } from "../harness/work-store.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
+import { withWorkMutationScope } from "../utils/work-mutation-scope.js";
+import { StateManager } from "../state/manager.js";
 
 // Per-project async mutex: concurrent applyGraphDelta calls to the same project
 // run strictly one-at-a-time so no rev or update is silently lost.
 const projectLocks = new Map<string, Promise<unknown>>();
-async function withProjectLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+async function withProjectLock<T>(root: string, projectId: string, fn: () => Promise<T>): Promise<T> {
+  const key = `${root}::${projectId}`;
   const prev = projectLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   projectLocks.set(key, prev.then(() => gate));
   await prev.catch(() => {}); // wait for predecessor; ignore its error for ordering
   try {
-    return await fn();
+    return await withWorkMutationScope(root,projectId,()=>new StateManager(root).acquireBookLock(projectId),fn);
   } finally {
     release();
   }
@@ -56,9 +63,9 @@ export async function loadAuthoringState(
   }
 }
 
-function emptyGraph(projectId: string): StoryGraph {
+function emptyGraph(projectId: string, title = projectId): StoryGraph {
   return StoryGraphSchema.parse({
-    schemaVersion: 1, projectId, title: "", variables: [], nodes: [], endings: [], characters: [],
+    schemaVersion: 1, projectId, title, variables: [], nodes: [], endings: [], characters: [],
   });
 }
 
@@ -66,10 +73,13 @@ function snapshotDir(projectRoot: string, projectId: string): string {
   return join(projectDir(projectRoot, projectId), "snapshots");
 }
 
-async function writeSnapshot(projectRoot: string, projectId: string, rev: number, graph: StoryGraph): Promise<void> {
-  const dir = snapshotDir(projectRoot, projectId);
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, `${rev}.json`), JSON.stringify(graph, null, 2), "utf-8");
+async function commitAuthoringFiles(root: string, projectId: string, writes: AtomicFileWrite[]): Promise<void> {
+  try { await loadWorkManifest(root,projectId); }
+  catch(error) {
+    if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+    await commitAtomicFileSet({rootDir:root,writes});return;
+  }
+  await syncWorkSourceArtifacts({projectRoot:root,workId:projectId,writes,accept:true});
 }
 
 /**
@@ -88,26 +98,25 @@ export async function applyGraphDelta(params: {
   delta: StoryGraphDelta;
   phase?: AuthoringState["phase"];
 }): Promise<{ graph: StoryGraph; rev: number }> {
-  const lockKey = `${params.projectRoot}::${params.projectId}`;
-  return withProjectLock(lockKey, async () => {
-    const current = (await loadStoryGraph(params.projectRoot, params.projectId)) ?? emptyGraph(params.projectId);
+  return withProjectLock(params.projectRoot, params.projectId, async () => {
+    let title=params.projectId;
+    try {title=(await loadWorkManifest(params.projectRoot,params.projectId)).title;}
+    catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+    const current = (await loadStoryGraph(params.projectRoot, params.projectId)) ?? emptyGraph(params.projectId,title);
     const state = await loadAuthoringState(params.projectRoot, params.projectId);
 
     // Snapshot the pre-apply graph under the current rev so revert(rev) restores it.
     // Note: no snapshot is written for the latest rev — the live graph file IS the latest rev.
-    await writeSnapshot(params.projectRoot, params.projectId, state.rev, current);
-
     const graph = applyStoryGraphDelta({ graph: current, delta: params.delta });
-    await saveStoryGraph(params.projectRoot, params.projectId, graph);
+    assertVariableTypes(graph);
 
     const nextRev = state.rev + 1;
     const nextState: AuthoringState = { phase: params.phase ?? state.phase, rev: nextRev, phaseRevs: state.phaseRevs };
-    await mkdir(projectDir(params.projectRoot, params.projectId), { recursive: true });
-    await writeFile(
-      authoringStatePath(params.projectRoot, params.projectId),
-      JSON.stringify(nextState, null, 2),
-      "utf-8",
-    );
+    await commitAuthoringFiles(params.projectRoot,params.projectId,[
+      {relativePath:relative(params.projectRoot,join(snapshotDir(params.projectRoot,params.projectId),`${state.rev}.json`)),content:JSON.stringify(current,null,2)},
+      {relativePath:relative(params.projectRoot,storyGraphPath(params.projectRoot,params.projectId)),content:JSON.stringify(graph,null,2)},
+      {relativePath:relative(params.projectRoot,authoringStatePath(params.projectRoot,params.projectId)),content:JSON.stringify(nextState,null,2)},
+    ]);
     return { graph, rev: nextRev };
   });
 }
@@ -117,11 +126,18 @@ export async function revertToSnapshot(params: {
   projectId: string;
   rev: number;
 }): Promise<StoryGraph> {
-  const file = join(snapshotDir(params.projectRoot, params.projectId), `${params.rev}.json`);
-  const raw = await readFile(file, "utf-8");
-  const graph = StoryGraphSchema.parse(JSON.parse(raw));
-  await saveStoryGraph(params.projectRoot, params.projectId, graph);
-  return graph;
+  return withProjectLock(params.projectRoot,params.projectId,async()=>{
+    const file = join(snapshotDir(params.projectRoot, params.projectId), `${params.rev}.json`);
+    const graph = StoryGraphSchema.parse(JSON.parse(await readFile(file, "utf-8")));
+    const current = await loadStoryGraph(params.projectRoot,params.projectId);
+    const state = await loadAuthoringState(params.projectRoot,params.projectId);
+    await commitAuthoringFiles(params.projectRoot,params.projectId,[
+      ...(current?[{relativePath:relative(params.projectRoot,join(snapshotDir(params.projectRoot,params.projectId),`${state.rev}.json`)),content:JSON.stringify(current,null,2)}]:[]),
+      {relativePath:relative(params.projectRoot,storyGraphPath(params.projectRoot,params.projectId)),content:JSON.stringify(graph,null,2)},
+      {relativePath:relative(params.projectRoot,authoringStatePath(params.projectRoot,params.projectId)),content:JSON.stringify({...state,rev:state.rev+1},null,2)},
+    ]);
+    return graph;
+  });
 }
 
 export async function recordPhaseVisit(
@@ -129,14 +145,12 @@ export async function recordPhaseVisit(
   projectId: string,
   phase: string,
 ): Promise<void> {
-  const lockKey = `${projectRoot}::${projectId}`;
-  return withProjectLock(lockKey, async () => {
+  return withProjectLock(projectRoot, projectId, async () => {
     const state = await loadAuthoringState(projectRoot, projectId);
     const next: AuthoringState = {
       ...state,
       phaseRevs: { ...(state.phaseRevs ?? {}), [phase]: state.rev },
     };
-    await mkdir(projectDir(projectRoot, projectId), { recursive: true });
-    await writeFile(authoringStatePath(projectRoot, projectId), JSON.stringify(next, null, 2), "utf-8");
+    await commitAuthoringFiles(projectRoot,projectId,[{relativePath:relative(projectRoot,authoringStatePath(projectRoot,projectId)),content:JSON.stringify(next,null,2)}]);
   });
 }

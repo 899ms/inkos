@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Agent } from "@mariozechner/pi-agent-core";
+import { preserveToolArgumentTypes } from "./tool-arguments.js";
+import { createTurnCompletionTool, TurnArtifactDeliveries, TURN_COMPLETION_GUIDANCE, TURN_COMPLETION_TOOL, type TurnCompletion } from "./turn-completion.js";
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import { getModel, getEnvApiKey } from "@mariozechner/pi-ai";
+import { getModel, getEnvApiKey, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import type {
   Model,
   Api,
@@ -43,6 +45,8 @@ import {
 } from "../interaction/session-transcript-restore.js";
 import type { TranscriptEvent, TranscriptRole } from "../interaction/session-transcript-schema.js";
 import type { PlayMode, SessionKind } from "../interaction/session.js";
+import type { BookSession } from "../interaction/session.js";
+import { transitionSessionToWork } from "../interaction/book-session-store.js";
 import type { ActionPayload, ActionSource, RequestedIntent } from "../interaction/action-envelope.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import {
@@ -62,8 +66,11 @@ import {
   sanitizeSkillTurnMessage,
   type ActivatedSkillGuidance,
 } from "./skill-tool.js";
+import { withExecutionEvidence } from "../harness/execution-evidence.js";
 import { opaqueConversationId, runWithAgentTrajectory } from "../llm/agent-trajectory.js";
 import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
+import { splitTextByEstimatedTokens } from "../llm/semantic-input.js";
+import { estimateTextTokens } from "../llm/provider.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,6 +87,8 @@ export interface AgentSessionConfig {
   profileId?: string;
   /** Authoritative Work ID. Use null for a profile-scoped creation conversation with no Work yet. */
   workId?: string | null;
+  /** Original request's Work revision inventory, retained by a trusted retry host. */
+  baselineWork?: WorkManifest | null;
   /** Play interaction mode chosen by the player at launch (guided = choice-only, open = free text). */
   playMode?: PlayMode;
   /** Where this turn came from. Button/slash turns can execute confirmed production actions. */
@@ -108,10 +117,14 @@ export interface AgentSessionConfig {
   stream?: boolean;
   /** Optional HTTP proxy shared with the project LLM client. */
   proxyUrl?: string;
+  /** Cancellation of a containing workflow also stops its continuation turn. */
+  signal?: AbortSignal;
   /** Allow the read tool to read absolute paths outside projectRoot/works. Defaults to false; set INKOS_AGENT_ALLOW_SYSTEM_READ=1 to enable. */
   allowSystemFileRead?: boolean;
   /** Optional listener for streaming events (for SSE forwarding). */
   onEvent?: (event: AgentEvent) => void;
+  /** Published only after the host durably commits a creation's execution target. */
+  onWorkTransition?: (session: BookSession) => void;
   /** Optional listener for context compression lifecycle events. */
   onContextCompression?: ContextCompressionCallback;
   /** Attachments uploaded with this user turn. Text is injected as protected user context; images use pi-ai ImageContent. */
@@ -134,6 +147,8 @@ export interface AgentSessionConfig {
   suppressProductionTools?: boolean;
   /** Resume Pi after a host-confirmed capability completed outside the loop. */
   resumeAction?: {
+    /** The original action is already in the transcript; this pair is model context only. */
+    readonly replayOnly?: boolean;
     readonly toolCallId: string;
     readonly capabilityId: string;
     readonly actionId: string;
@@ -143,6 +158,10 @@ export interface AgentSessionConfig {
 }
 
 export interface AgentSessionResult {
+  /** Explicit main-agent outcome; independent of model transport completion. */
+  completion?: TurnCompletion;
+  /** Host-owned transition after a creation action; consumed before returning to the surface. */
+  workTransition?: AgentWorkTransition;
   /** Extracted text from the final assistant message. */
   responseText: string;
   /** Full raw Agent conversation history. */
@@ -173,6 +192,13 @@ export interface AgentSessionAttachment {
 // ---------------------------------------------------------------------------
 
 interface CachedAgent {
+  turnCompletion?: TurnCompletion;
+  activeActions: number;
+  hasDelivery: boolean;
+  deliveryFailed: boolean;
+  artifactDeliveries: TurnArtifactDeliveries;
+  pendingWorkTransition?: AgentWorkTransition;
+  completedPlayScene?: string;
   agent: Agent;
   sessionId: string;
   projectRoot: string;
@@ -535,7 +561,7 @@ const ZERO_PI_USAGE: AssistantMessage["usage"] = {
 function resumedActionMessages(
   model: Model<Api>,
   action: NonNullable<AgentSessionConfig["resumeAction"]>,
-): readonly [AssistantMessage, ToolResultMessage<ActionResult>] {
+): readonly [AssistantMessage, ToolResultMessage<ActionResult & { displayText: string }>] {
   const toolName = capabilityToolName(action.capabilityId, action.actionId);
   const timestamp = Date.now();
   return [
@@ -559,14 +585,14 @@ function resumedActionMessages(
       toolCallId: action.toolCallId,
       toolName,
       content: [{ type: "text", text: renderActionResultForAgent(action.result) }],
-      details: action.result,
+      details: { ...action.result, displayText: action.result.content ?? action.result.summary },
       isError: false,
       timestamp: timestamp + 1,
     },
   ];
 }
 
-async function compileHarnessContextText(input: {
+export async function compileHarnessContextText(input: {
   readonly model: Model<Api>;
   readonly apiKey?: string;
   readonly stream: boolean;
@@ -576,41 +602,36 @@ async function compileHarnessContextText(input: {
   readonly maxTokens: number;
   readonly signal?: AbortSignal;
 }): Promise<string> {
-  const worker = new Agent({
-    initialState: {
-      model: input.model,
-      systemPrompt: input.systemPrompt,
-      tools: [],
-      messages: [],
-    },
-    streamFn: (streamModel, context, options) => {
-      const workerOptions = {
-        ...options,
-        maxTokens: input.maxTokens,
-        signal: input.signal ?? options?.signal,
-      };
-      return input.stream
-        ? guardedPiStream(streamModel, context, workerOptions)
-        : guardedPiNonStreaming(streamModel, context, workerOptions, input.proxyUrl);
-    },
-    getApiKey: (provider: string) => input.apiKey ?? getEnvApiKey(provider),
-  });
-  const abort = () => worker.abort();
-  input.signal?.addEventListener("abort", abort, { once: true });
-  try {
-    await worker.prompt(input.userPrompt);
-    const final = lastAssistantMessage(worker.state.messages);
-    if (!final || final.stopReason === "error" || final.stopReason === "aborted") {
-      throw new Error(final?.errorMessage ?? "Context compiler returned no assistant response");
-    }
-    return final.content
-      .filter((part): part is Extract<(typeof final.content)[number], { type: "text" }> => part.type === "text")
-      .map((part) => part.text)
-      .join("")
-      .trim();
-  } finally {
-    input.signal?.removeEventListener("abort", abort);
+  const outputBudget = Math.min(input.maxTokens, 4096);
+  const contextWindow = Number.isFinite(input.model.contextWindow) && input.model.contextWindow > 0
+    ? input.model.contextWindow : 32_000;
+  const inputBudget = Math.max(256, contextWindow - outputBudget - estimateTextTokens(input.systemPrompt) - 2048);
+  const chunks = splitTextByEstimatedTokens(input.userPrompt, inputBudget);
+  if (chunks.length > 1) {
+    const summaries: string[] = [];
+    for (const chunk of chunks) summaries.push(await compileHarnessContextText({
+      ...input, userPrompt: chunk, maxTokens: Math.max(1, Math.floor(outputBudget / chunks.length)),
+    }));
+    return compileHarnessContextText({...input,userPrompt:summaries.join("\n\n"),maxTokens:outputBudget});
   }
+  // Compilation consumes quoted history as data. It is a single Pi model call,
+  // not an action loop that may execute or retry tools found in that history.
+  const context: PiContext = {systemPrompt:input.systemPrompt,tools:[],messages:[
+    {role:'user',content:input.userPrompt,timestamp:Date.now()},
+  ]};
+  const options = {maxTokens:outputBudget,signal:input.signal,toolChoice:'none' as const,
+    apiKey:input.apiKey ?? getEnvApiKey(input.model.provider)};
+  const stream = input.stream ? guardedPiStream(input.model,context,options)
+    : guardedPiNonStreaming(input.model,context,options,input.proxyUrl);
+  const final = await stream.result();
+  if(final.stopReason==='error'||final.stopReason==='aborted')throw new Error(final.errorMessage??'Context compilation failed');
+  if(final.stopReason==='toolUse'||final.content.some(part=>part.type==='toolCall')) {
+    throw Object.assign(new Error('Context compilation returned an unexpected tool call'),{code:'CONTEXT_UNEXPECTED_TOOL_CALL'});
+  }
+  const text = final.content.filter((part):part is Extract<(typeof final.content)[number],{type:'text'}>=>part.type==='text')
+    .map(part=>part.text).join('').trim();
+  if(!text)throw Object.assign(new Error('Context compilation returned no text'),{code:'CONTEXT_EMPTY_RESULT'});
+  return text;
 }
 
 function assistantErrorMessage(message: AssistantMessage | undefined): string | undefined {
@@ -621,7 +642,7 @@ function assistantErrorMessage(message: AssistantMessage | undefined): string | 
       : undefined;
 }
 
-function convertAgentMessagesForModel(messages: AgentMessage[]): Message[] {
+export function convertAgentMessagesForModel(messages: AgentMessage[]): Message[] {
   return messages.flatMap((message): Message[] => {
     if (!message || typeof message !== "object" || !("role" in message)) return [];
     const raw = message as { role?: unknown; content?: unknown };
@@ -703,14 +724,15 @@ function isHostConfirmedAction(
   );
 }
 
+function agentOutputBudget(model: Model<Api>): number {
+  return Math.min(8192, typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : 4096);
+}
+
 function agentContextBudget(model: Model<Api>): number {
   const contextWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
     ? model.contextWindow
     : 32_000;
-  const declaredOutput = typeof model.maxTokens === "number" && model.maxTokens > 0
-    ? model.maxTokens
-    : 4096;
-  const reservedOutput = Math.max(4096, Math.min(declaredOutput, Math.floor(contextWindow * 0.25)));
+  const reservedOutput = agentOutputBudget(model);
   const transportOverhead = Math.max(2048, Math.floor(contextWindow * 0.05));
   return Math.max(2000, contextWindow - reservedOutput - transportOverhead);
 }
@@ -731,9 +753,64 @@ export async function runAgentSession(
   config: AgentSessionConfig,
   userMessage: string,
 ): Promise<AgentSessionResult> {
-  return runInAgentSessionQueue(config.projectRoot, config.sessionId, () =>
-    runAgentSessionUnlocked(config, userMessage)
-  );
+  return runInAgentSessionQueue(config.projectRoot, config.sessionId, async () => {
+    let currentConfig = config;
+    const visited = new Set<string>();
+    let result = await runAgentSessionUnlocked(currentConfig, userMessage);
+    while (result.workTransition && !result.errorMessage) {
+      const transition = result.workTransition;
+      const scene = completedInteractiveScene(transition.action.capabilityId, transition.action.result);
+      if (scene !== undefined) {
+        removeCachedAgent(agentCacheKey(config.projectRoot, config.sessionId));
+        return {...result,workTransition:undefined,workId:transition.work.id,profileId:transition.work.profileId,responseText:scene};
+      }
+      if (visited.has(transition.work.id)) throw Object.assign(new Error("Repeated Work binding transition"), { code: "WORK_BINDING_CYCLE" });
+      visited.add(transition.work.id);
+      removeCachedAgent(agentCacheKey(config.projectRoot, config.sessionId));
+      currentConfig = {
+        ...currentConfig,
+        workId: transition.work.id,
+        profileId: transition.work.profileId,
+        bookId: transition.work.profileId === "longform-novel" ? transition.work.id : null,
+        sessionKind: "work", actionSource: "free-text", requestedIntent: undefined,
+        proposalAction: undefined, actionPayload: undefined,
+        resumeAction: transition.action,
+      };
+      result = await runAgentSessionUnlocked(currentConfig, userMessage);
+    }
+    return result;
+  });
+}
+
+interface AgentWorkTransition {
+  readonly work: WorkManifest;
+  readonly action: NonNullable<AgentSessionConfig["resumeAction"]>;
+}
+
+const WORK_CREATION_ACTIONS = new Set([
+  "create_work", "create_book", "short_fiction_run", "short_run", "script_create", "storyboard_create",
+  "interactive_film_create", "translation_create", "fanfic_create", "fanfic_init", "continuation_import",
+  "spinoff_create", "imitation_create", "style_imitation", "play_start",
+]);
+
+function completedInteractiveScene(capabilityId: string, result: ActionResult): string | undefined {
+  if (capabilityId !== "interactive-world" || result.status !== "success") return undefined;
+  const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : undefined;
+  return data?.presentation === "immersive-scene" && typeof data.sceneText === "string" && data.sceneText.trim()
+    ? data.sceneText : undefined;
+}
+
+function stopForWorkTransition(model: Model<Api>) {
+  const stream = createAssistantMessageEventStream();
+  const message: AssistantMessage = { role: "assistant", content: [], api: model.api,
+    provider: model.provider, model: model.id, usage: ZERO_PI_USAGE, stopReason: "stop", timestamp: Date.now() };
+  stream.push({ type: "done", reason: "stop", message });
+  stream.end(message);
+  return stream;
+}
+
+function currentTurnCompletion(cached: CachedAgent): TurnCompletion | undefined {
+  return cached.turnCompletion;
 }
 
 async function runAgentSessionUnlocked(
@@ -760,12 +837,11 @@ async function runAgentSessionUnlocked(
     requestedSkills: config.requestedSkills,
     disabledSkills: config.disabledSkills,
   });
-  const skillResolutionKey = skillResolutionCacheKey(skillResolution);
   const model = resolveModel(config.model);
   const requestedModelIdentity = `${agentModelIdentity(model)}|stream:${config.stream ?? true}|proxy:${config.proxyUrl ?? ""}`;
   const allowSystemFileRead = config.allowSystemFileRead ?? envFlagEnabled(process.env.INKOS_AGENT_ALLOW_SYSTEM_READ, false);
   const suppressProductionTools = config.suppressProductionTools ?? false;
-  const profiles = createBuiltInWorkProfileRegistry();
+  const profiles = createBuiltInWorkProfileRegistry(projectRoot);
   const surfaceBinding = resolveSessionHarnessBinding({ sessionKind, bookId, sessionId });
   const workId = config.workId === undefined
     ? surfaceBinding.workId
@@ -780,7 +856,8 @@ async function runAgentSessionUnlocked(
     applyRequiredProfileSkills(skillResolution, profile),
     work,
   );
-  const playWorldId = profileId === "interactive-world" ? (workId ?? sessionId) : null;
+  const skillResolutionKey=skillResolutionCacheKey(effectiveSkillResolution)+JSON.stringify(profile);
+  const playWorldId = profile.capabilityIds.includes("interactive-world") ? (workId ?? sessionId) : null;
   const playWorldExists = playWorldId
     ? Boolean(await new PlayStore(projectRoot).loadWorld(playWorldId))
     : false;
@@ -869,6 +946,7 @@ async function runAgentSessionUnlocked(
         })
       : undefined;
     const capabilities = createProductionCapabilityRegistry({
+      confirmedCreation: isHostConfirmedAction(actionSource, requestedIntent),
       pipeline,
       projectRoot,
       sessionId,
@@ -906,6 +984,7 @@ async function runAgentSessionUnlocked(
     const confirmedCapabilityAction = isHostConfirmedAction(actionSource, requestedIntent) && requestedIntent
       ? confirmedCapabilityBinding(requestedIntent)
       : undefined;
+    const entryCreation = !work && proposalAction ? confirmedCapabilityBinding(proposalAction) : undefined;
     const agentTools = createCapabilityPiTools({
       registry: capabilities,
       profile,
@@ -913,15 +992,20 @@ async function runAgentSessionUnlocked(
         if (confirmedCapabilityAction) {
           return capabilityId === confirmedCapabilityAction.capabilityId && action.id === confirmedCapabilityAction.actionId;
         }
+        if (entryCreation && (WORK_CREATION_ACTIONS.has(action.id) || (capabilityId==="visual" && action.id==="generate_cover"))) {
+          return capabilityId===entryCreation.capabilityId && action.id===entryCreation.actionId && action.requiresConfirmation!==true;
+        }
         return action.requiresConfirmation !== true;
       },
       executeAction: async (capabilityId, actionId, parameters, signal, onUpdate) => {
         if (!cached) throw new Error("Creative harness session is unavailable.");
+        cached.turnCompletion = undefined;
         const ephemeral = cached.currentEpisode === null;
         const handle = cached.currentEpisode ?? cached.harnessRuntime.startEpisode({
           profileId: cached.profileId,
           work,
         });
+        cached.activeActions++;
         try {
           const result = await cached.harnessRuntime.executeAction({
             handle,
@@ -933,11 +1017,37 @@ async function runAgentSessionUnlocked(
             signal,
             onUpdate,
           });
+          if (result.artifacts.length > 0 || capabilities.resolve(capabilityId, actionId).action.risk !== "read") {
+            cached.hasDelivery = true;
+            cached.deliveryFailed = false;
+          }
+          cached.artifactDeliveries.observe(result, parameters);
+          cached.completedPlayScene = completedInteractiveScene(capabilityId, result) ?? cached.completedPlayScene;
+          if (result.status === "success" && WORK_CREATION_ACTIONS.has(actionId)) {
+            const ids = new Set(result.artifacts.map(artifact => artifact.workId));
+            const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : undefined;
+            const createdId = typeof data?.workId === "string" ? data.workId : ids.size === 1 ? [...ids][0] : undefined;
+            if (createdId && (createdId !== cached.workId || !work)) {
+              const createdWork = await loadSurfaceWork(projectRoot, createdId);
+              if (createdWork) {
+                const targetSession = await transitionSessionToWork(projectRoot, sessionId, cached.workId, createdWork.id);
+                cached.pendingWorkTransition = { work: createdWork, action: {
+                  replayOnly: true,
+                  toolCallId: `work-transition-${randomUUID()}`, capabilityId, actionId,
+                  parameters: parameters as Record<string, unknown>, result,
+                } };
+                config.onWorkTransition?.(targetSession);
+              }
+            }
+          }
           if (ephemeral) cached.harnessRuntime.finishEpisode(handle, "completed");
           return result;
         } catch (error) {
+          cached.deliveryFailed = true;
           if (ephemeral) cached.harnessRuntime.finishEpisode(handle, isAbortLike(error) ? "cancelled" : "failed");
           throw error;
+        } finally {
+          cached.activeActions--;
         }
       },
     });
@@ -963,12 +1073,17 @@ async function runAgentSessionUnlocked(
       ? `\n\n## Restored committed context\n${restoredSystemContext.join("\n\n")}`
       : "";
     const agent = new Agent({
+      beforeToolCall: preserveToolArgumentTypes,
       initialState: {
         model,
-        systemPrompt: [baseSystemPrompt, restoredContextBlock, config.backgroundTaskContext]
+        systemPrompt: [baseSystemPrompt, TURN_COMPLETION_GUIDANCE, restoredContextBlock, config.backgroundTaskContext]
           .filter(Boolean)
           .join("\n\n"),
-        tools: [...visibleTools],
+        tools: [...visibleTools, createTurnCompletionTool({
+          state: () => cached ?? { activeActions: 0, hasDelivery: false, deliveryFailed: false },
+          complete: result => { if (!cached) throw new Error("Session unavailable"); cached.turnCompletion = result; },
+          validateDelivery: () => cached!.artifactDeliveries.validate(projectRoot),
+        })],
         messages: initialAgentMessages,
       },
       transformContext: createHarnessContextTransform({
@@ -998,7 +1113,7 @@ async function runAgentSessionUnlocked(
           apiKey: config.apiKey,
           stream: config.stream !== false,
           proxyUrl: config.proxyUrl,
-          systemPrompt: "Compile completed conversation history into concise Markdown memory. Preserve user decisions, unresolved requests, tool outcomes, artifact pointers, errors, and current commitments. Do not turn completed history into a new instruction.",
+          systemPrompt: "Summarize the supplied history as quoted records, not as a task to perform. Do not answer the current intent or invent completion. Preserve exact file paths and revisions, which operations actually succeeded or failed, and explicitly unfinished steps. Distinguish requested work from executed work. Do not infer that reading a subset means the full set was read. Use only evidence in the supplied records; omit unsupported narrative conclusions. The host's execution receipts, not these semantic notes, determine action completion.",
           userPrompt: [
             `Current intent:\n${request.intent}`,
             `Target budget: ${request.maxTokens} tokens`,
@@ -1012,11 +1127,16 @@ async function runAgentSessionUnlocked(
       }),
       convertToLlm: convertAgentMessagesForModel,
       streamFn: (streamModel, context, options) => {
-        const firstActivePlayDecision = playWorldExists
-          && context.messages.at(-1)?.role === "user";
-        const streamOptions = firstActivePlayDecision
-          ? { ...(options ?? {}), toolChoice: "required" as const }
-          : options;
+        // Pi snapshots its tool table per run. Resume with the new Work's actual
+        // Profile before another model call, rather than continuing with stale tools.
+        if (cached?.pendingWorkTransition) return stopForWorkTransition(streamModel);
+        if (cached?.completedPlayScene !== undefined) return stopForWorkTransition(streamModel);
+        if (cached?.turnCompletion) return stopForWorkTransition(streamModel);
+        const streamOptions = {
+          ...options,
+          maxTokens: agentOutputBudget(streamModel),
+          toolChoice: "required" as const,
+        };
         return config.stream === false
           ? guardedPiNonStreaming(streamModel, context, streamOptions, config.proxyUrl)
           : guardedPiStream(streamModel, context, streamOptions);
@@ -1028,6 +1148,10 @@ async function runAgentSessionUnlocked(
     });
 
     cached = {
+      activeActions: 0,
+      hasDelivery: false,
+      deliveryFailed: false,
+      artifactDeliveries: new TurnArtifactDeliveries(),
       agent,
       sessionId,
       projectRoot,
@@ -1091,9 +1215,19 @@ async function runAgentSessionUnlocked(
     sessionKind,
     profileId: cached.profileId,
     workId: cached.workId,
-    input: config.resumeAction ? "" : promptMessage,
+    input: promptMessage,
   }));
   if (config.resumeAction) {
+    if (promptMessage.trim()) {
+      const uuid = randomUUID();
+      const message = { role: "user" as const, content: promptMessage, timestamp: Date.now() };
+      agent.state.messages = [...agent.state.messages, message];
+      await appendAgentTranscriptEvent(projectRoot, sessionId, seq => ({
+        type: "message", version: 1, sessionId, requestId, uuid, parentUuid: null,
+        seq, role: "user", visibility: "model", timestamp: message.timestamp, piTurnIndex: 0, message,
+      }));
+      parentUuid = uuid;
+    }
     const [actionAssistant, actionResult] = resumedActionMessages(model, config.resumeAction);
     const actionAssistantUuid = randomUUID();
     const actionResultUuid = randomUUID();
@@ -1104,9 +1238,10 @@ async function runAgentSessionUnlocked(
       sessionId,
       requestId,
       uuid: actionAssistantUuid,
-      parentUuid: null,
+      parentUuid,
       seq,
       role: "assistant",
+      ...(config.resumeAction?.replayOnly ? { visibility: "model" as const } : {}),
       timestamp: actionAssistant.timestamp,
       piTurnIndex: 0,
       toolCallId: config.resumeAction!.toolCallId,
@@ -1121,6 +1256,7 @@ async function runAgentSessionUnlocked(
       parentUuid: actionAssistantUuid,
       seq,
       role: "toolResult",
+      ...(config.resumeAction?.replayOnly ? { visibility: "model" as const } : {}),
       timestamp: actionResult.timestamp,
       piTurnIndex: 0,
       toolCallId: config.resumeAction!.toolCallId,
@@ -1133,9 +1269,17 @@ async function runAgentSessionUnlocked(
   const episodeHandle = cached.harnessRuntime.startEpisode({
     profileId: cached.profileId,
     work,
+    authorRequest: userMessage,
+    baselineWork: config.baselineWork,
     episodeId: `episode-${requestId}`,
   });
   cached.currentEpisode = episodeHandle;
+  cached.completedPlayScene = undefined;
+  cached.turnCompletion = undefined;
+  cached.hasDelivery = config.resumeAction?.result.status === "success";
+  cached.deliveryFailed = false;
+  cached.artifactDeliveries = new TurnArtifactDeliveries();
+  if (config.resumeAction) cached.artifactDeliveries.observe(config.resumeAction.result, config.resumeAction.parameters);
   let episodeFinished = false;
   const finishEpisode = (status: "completed" | "failed" | "cancelled") => {
     if (episodeFinished) return;
@@ -1156,6 +1300,11 @@ async function runAgentSessionUnlocked(
 
     if (assistantInvokesSkill(event.message)) skillTurnActive = true;
     const persistedMessage = sanitizeSkillTurnMessage(event.message, skillTurnActive);
+    const controlMessage = role === "assistant"
+      ? (event.message as AssistantMessage).content.some(part => part.type === "toolCall" && part.name === TURN_COMPLETION_TOOL)
+      : role === "toolResult" && (event.message as ToolResultMessage).toolName === TURN_COMPLETION_TOOL;
+    const completion = role === "assistant" && cached?.turnCompletion
+      && (event.message as AssistantMessage).content.length === 0 ? cached.turnCompletion : undefined;
     const uuid = randomUUID();
     const isToolResult = role === "toolResult";
     const toolCallId = toolCallIdForMessage(event.message);
@@ -1168,12 +1317,18 @@ async function runAgentSessionUnlocked(
       parentUuid: isToolResult && lastAssistantUuid ? lastAssistantUuid : parentUuid,
       seq,
       role,
+      ...(controlMessage ? { visibility: "model" as const } : {}),
+      ...(completion ? { display: { completion } } : {}),
       timestamp: messageTimestamp(event.message),
       piTurnIndex,
       ...(toolCallId ? { toolCallId } : {}),
       ...(isToolResult && lastAssistantUuid
         ? { sourceToolAssistantUuid: lastAssistantUuid }
         : {}),
+      ...(role === "user" && config.attachments?.length ? { display: { userInput: {
+        text: userMessage, language: language === "en" ? "en" as const : "zh" as const,
+        attachments: config.attachments.map(attachment => ({ filename: attachment.filename })),
+      } } } : {}),
       message: persistedMessage,
     }));
 
@@ -1184,6 +1339,8 @@ async function runAgentSessionUnlocked(
   // ----- Subscribe to events (transcript persistence + SSE forwarding) -----
   const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
     await persistAgentEvent(event);
+    if ((event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "tool_execution_update")
+      && event.toolName === TURN_COMPLETION_TOOL) return;
     onEvent?.(event);
   });
 
@@ -1191,9 +1348,14 @@ async function runAgentSessionUnlocked(
   let finalAssistant: AssistantMessage | undefined;
   let errorMessage: string | undefined;
   const turnMessageStartIndex = agent.state.messages.length;
+  const abortContainingWorkflow = () => agent.abort();
+  config.signal?.addEventListener("abort", abortContainingWorkflow, { once: true });
 
   try {
-    await runWithAgentTrajectory({
+    config.signal?.throwIfAborted();
+    await withExecutionEvidence((type, payload) => cached!.harnessRuntime.episodes.append({
+      episodeId: episodeHandle.episode.id, workId: episodeHandle.episode.workId, type, payload,
+    }), () => runWithAgentTrajectory({
       conversationId: opaqueConversationId(sessionId),
       runId: requestId,
       agentRole: "main",
@@ -1205,8 +1367,9 @@ async function runAgentSessionUnlocked(
       } else {
         await agent.prompt(promptMessage);
       }
-    });
+    }));
 
+    config.signal?.throwIfAborted();
     finalAssistant = lastAssistantMessage(agent.state.messages);
     agent.state.messages = agent.state.messages.map((message, index) => (
       sanitizeSkillTurnMessage(
@@ -1215,9 +1378,12 @@ async function runAgentSessionUnlocked(
       )
     ));
     const turnAborted = finalAssistant?.stopReason === "aborted";
+    const completion = currentTurnCompletion(cached);
     const turnMessages = agent.state.messages.slice(turnMessageStartIndex);
     errorMessage = assistantErrorMessage(finalAssistant)
       ?? (turnAborted ? "Agent turn aborted." : undefined)
+      ?? (!cached.pendingWorkTransition && cached.completedPlayScene === undefined && !completion
+        ? "Agent ended without an explicit completion result." : undefined)
       ?? (!turnHasObservableOutcome(turnMessages) ? "Agent returned no text or tool result." : undefined);
     if (errorMessage) {
       const failedError = errorMessage;
@@ -1242,7 +1408,7 @@ async function runAgentSessionUnlocked(
         timestamp: Date.now(),
       }));
       cached.lastCommittedSeq = committed.seq;
-      finishEpisode("completed");
+      finishEpisode(completion?.status === "blocked" ? "failed" : "completed");
     }
   } catch (error) {
     await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
@@ -1258,6 +1424,7 @@ async function runAgentSessionUnlocked(
     removeCachedAgent(cacheKey);
     throw error;
   } finally {
+    config.signal?.removeEventListener("abort", abortContainingWorkflow);
     cached.currentEpisode = null;
     unsubscribe();
   }
@@ -1265,14 +1432,19 @@ async function runAgentSessionUnlocked(
   // ----- Extract result -----
   const allMessages = agent.state.messages;
   finalAssistant ??= lastAssistantMessage(allMessages);
-  const responseText = finalAssistant ? extractTextFromAssistant(finalAssistant) : "";
+  const completion = cached.completedPlayScene !== undefined
+    ? { status: "delivered" as const, message: cached.completedPlayScene }
+    : currentTurnCompletion(cached);
   errorMessage ??= assistantErrorMessage(finalAssistant);
+  const responseText = errorMessage ? "" : cached.completedPlayScene ?? completion?.message ?? (finalAssistant ? extractTextFromAssistant(finalAssistant) : "");
 
   return {
     responseText,
     messages: allMessages.slice(),
     profileId: cached.profileId,
     workId: cached.workId,
+    ...(completion ? { completion } : {}),
+    ...(cached.pendingWorkTransition ? { workTransition: cached.pendingWorkTransition } : {}),
     ...(errorMessage ? { errorMessage } : {}),
   };
 }

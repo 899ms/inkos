@@ -6,6 +6,7 @@ import { InteractiveFilmPackageToolSchema, StoryboardPackageToolSchema } from ".
 export type ScriptTargetFormat = string;
 
 export interface ScriptCreationInput {
+  readonly authorRequest?: string;
   readonly title: string;
   readonly sourceKind?: string;
   readonly targetFormat?: ScriptTargetFormat;
@@ -17,6 +18,7 @@ export interface ScriptCreationInput {
 }
 
 export interface StoryboardCreationInput {
+  readonly authorRequest?: string;
   readonly title: string;
   readonly sourceKind?: string;
   readonly sourceText?: string;
@@ -29,6 +31,7 @@ export interface StoryboardCreationInput {
 }
 
 export interface InteractiveFilmCreationInput {
+  readonly authorRequest?: string;
   readonly title: string;
   readonly sourceKind?: string;
   readonly sourceText?: string;
@@ -165,6 +168,17 @@ export class InteractiveFilmCreationAgent extends BaseAgent {
   }
 }
 
+function productionBrief(input: {authorRequest?: string; requirements?: string}, language: "zh" | "en") {
+  const en = language === "en";
+  return [
+    ...(input.authorRequest?.trim() ? [en ? "## Author request" : "## 作者原始请求", input.authorRequest, ""] : []),
+    en ? "## Production brief" : "## 创作任务与方案",
+    en ? "This brief elaborates the task. Added production choices remain adjustable within the author's constraints."
+      : "以下说明展开创作任务；其中补充的制作选择可在作者约束内调整。",
+    input.requirements?.trim() || (en ? "Follow the author's request." : "遵循作者请求。"),
+  ];
+}
+
 export function renderScriptSpec(input: ScriptCreationInput): string {
   if ((input.language ?? "zh") === "en") {
     return [
@@ -182,8 +196,7 @@ export function renderScriptSpec(input: ScriptCreationInput): string {
         ? `- Source material: ${input.sourceKind}`
         : "- Source material: user input / conversation brief",
       "",
-      "## User Requirements",
-      input.requirements?.trim() || "Not separately specified; follow the instruction the user confirmed.",
+      ...productionBrief(input, "en"),
       "",
       "## Source Material Summary",
       summarizeSourceForSpec(input.sourceText, "en"),
@@ -198,8 +211,7 @@ export function renderScriptSpec(input: ScriptCreationInput): string {
     input.episodeDuration ? `- 单集/单段时长：${input.episodeDuration}` : "- 单集/单段时长：未指定",
     input.sourceKind ? `- 原素材：${input.sourceKind}` : "- 原素材：用户输入/对话需求",
     "",
-    "## 用户要求",
-    input.requirements?.trim() || "未单独指定；以用户确认时的 instruction 为准。",
+    ...productionBrief(input, "zh"),
     "",
     "## 源素材摘要",
     summarizeSourceForSpec(input.sourceText),
@@ -220,8 +232,7 @@ export function renderStoryboardSpec(input: StoryboardCreationInput): string {
         ? `- Source material: ${input.sourceKind}`
         : "- Source material: user input / conversation brief",
       "",
-      "## User Requirements",
-      input.requirements?.trim() || "Not separately specified; follow the instruction the user confirmed.",
+      ...productionBrief(input, "en"),
       "",
       "## Source Material Summary",
       summarizeSourceForSpec(input.sourceText, "en"),
@@ -237,8 +248,7 @@ export function renderStoryboardSpec(input: StoryboardCreationInput): string {
     input.maxShots ? `- 镜头上限：${input.maxShots}` : "- 镜头上限：未指定",
     input.sourceKind ? `- 原素材：${input.sourceKind}` : "- 原素材：用户输入/对话需求",
     "",
-    "## 用户要求",
-    input.requirements?.trim() || "未单独指定；以用户确认时的 instruction 为准。",
+    ...productionBrief(input, "zh"),
     "",
     "## 源素材摘要",
     summarizeSourceForSpec(input.sourceText),
@@ -268,8 +278,7 @@ export function renderInteractiveFilmSpec(input: InteractiveFilmCreationInput): 
         ? `- Source material: ${input.sourceKind}`
         : "- Source material: user input / conversation brief",
       "",
-      "## User Requirements",
-      input.requirements?.trim() || "Not separately specified; follow the instruction the user confirmed.",
+      ...productionBrief(input, "en"),
       "",
       "## Source Material Summary",
       summarizeSourceForSpec(input.sourceText, "en"),
@@ -288,8 +297,7 @@ export function renderInteractiveFilmSpec(input: InteractiveFilmCreationInput): 
     input.referenceMode ? `- 参考模式：${input.referenceMode}` : "- 参考模式：用户未指定，不擅自套固定游戏模板",
     input.sourceKind ? `- 原素材：${input.sourceKind}` : "- 原素材：用户输入/对话需求",
     "",
-    "## 用户要求",
-    input.requirements?.trim() || "未单独指定；以用户确认时的 instruction 为准。",
+    ...productionBrief(input, "zh"),
     "",
     "## 源素材摘要",
     summarizeSourceForSpec(input.sourceText),
@@ -383,9 +391,7 @@ function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, langu
       "",
       maxShotsRule,
       "",
-      "## Image Prompts",
-      "",
-      "Write one image prompt per shot as a standalone `Prompt: ...` line.",
+      "Return the complete shot document in storyboard. Put one image prompt per shot only in imagePrompts, in shot order; do not append another prompt list to storyboard.",
     ].join("\n");
   }
   return [
@@ -402,9 +408,7 @@ function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, langu
     "",
     maxShotsRule,
     "",
-    "## 图像提示词",
-    "",
-    "每个镜头对应一条独立的 `Prompt: ...` 图像提示词。",
+    "storyboard 字段只提交完整分镜文档。每镜头的一条图像提示词只放入 imagePrompts 数组，保持镜头顺序，不在分镜文档中再附提示词清单。",
   ].join("\n");
 }
 
@@ -413,13 +417,13 @@ function buildInteractiveFilmCreationSystemPrompt(language: "zh" | "en" = "zh"):
     return [
       "Execute the confirmed spec with the activated interactive-film Skill; unconfirmed choices remain adjustable.",
       "Submit the complete package through the result tool. storyTree, flags, script, and storyboard are complete human-readable Markdown artifacts; imagePrompts preserve shot order; storyGraph is the playable graph for the same material.",
-      "Every storyboard image prompt must be its own standalone `Prompt: ...` line so downstream asset management can pick it up; include only the visual constraints the user has confirmed.",
+      "Put image prompts only in imagePrompts, one per shot in shot order. The storyboard field contains the shot document without a duplicate prompt list; include only the user's established visual constraints.",
     ].join("\n");
   }
   return [
     "按已激活的互动影游 Skill 执行确认规格；未确认选择保持可调整。",
     "通过结果工具提交完整交付包。storyTree、flags、script、storyboard 是完整且人可读的 Markdown 资产；imagePrompts 保持镜头顺序；storyGraph 是同一内容的可玩图谱。",
-    "分镜图提示词必须写成单独的 `Prompt: ...` 行，便于后续资产管理；只写用户确认过的视觉限制。",
+    "图像提示词只放入 imagePrompts 数组，每镜头一条并保持镜头顺序；storyboard 字段只写分镜，不重复附提示词清单。只写用户已明确的视觉限制。",
   ].join("\n");
 }
 
@@ -449,7 +453,7 @@ function buildInteractiveFilmCreationUserPrompt(input: InteractiveFilmCreationIn
       "Provide the complete playable node scripts.",
       "",
       "## Storyboard and Image Prompts",
-      "Provide the storyboard; each shot has one standalone `Prompt: ...` line.",
+      "Return the shot document in storyboard and the corresponding prompt list only in imagePrompts, in shot order.",
       "",
       "## Playable Story Graph",
       "Submit the complete graph for the same story in storyGraph: exactly one start, at least one meaningful choice with distinct destinations or state consequences, and every path can reach an ending. The opening node may carry the first branching choice directly.",
@@ -478,7 +482,7 @@ function buildInteractiveFilmCreationUserPrompt(input: InteractiveFilmCreationIn
     "提交完整可玩的节点剧本。",
     "",
     "## 分镜与图像提示词",
-    "提交分镜；每个镜头对应一条独立的 `Prompt: ...`。",
+    "storyboard 字段提交完整分镜；对应图像提示词只放入 imagePrompts 数组，保持镜头顺序。",
     "",
     "## 可玩故事图谱",
     "在 storyGraph 字段提交同一剧情的完整可玩图谱：恰好一个 start，至少一个具有不同去向或状态后果的真实分支选择，且每条路径可达 ending。开场节点可以直接承载分支选择。",

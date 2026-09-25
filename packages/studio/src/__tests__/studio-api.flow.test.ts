@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createAndPersistBookSession,
   createInitialWorkManifestWrite,
+  PlayStore,
+  createPlayDB,
 } from "@actalk/inkos-core";
 import { createStudioServer } from "../api/server.js";
 import { loadStudioTaskSnapshot, saveStudioTaskSnapshot } from "../api/task-store.js";
@@ -25,6 +27,76 @@ describe("Studio API mini-flows", () => {
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("protects local API reads and mutations from untrusted browser origins while preserving native and proxy requests", async () => {
+    const app = createStudioServer({} as never, root);
+    const origin = "https://untrusted.example";
+    for (const method of ["GET", "OPTIONS", "POST"] as const) {
+      const response = await app.request("/api/v1/sessions", {
+        method, headers: {Origin:origin,"Content-Type":"application/json",...(method==="OPTIONS"?{"Access-Control-Request-Method":"POST"}:{})},
+        ...(method==="POST"?{body:JSON.stringify({bookId:null})}:{}),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({error:{code:"STUDIO_ORIGIN_FORBIDDEN"}});
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    }
+    expect(await (await app.request("/api/v1/sessions")).json()).toEqual({sessions:[]});
+    const rebound=await app.request("http://untrusted.example/api/v1/sessions",{headers:{Origin:"http://untrusted.example"}});
+    expect(rebound.status).toBe(403);
+    expect(await rebound.json()).toMatchObject({error:{code:"STUDIO_HOST_FORBIDDEN"}});
+    expect((await app.request("/api/v1/sessions",{headers:{Origin:"null"}})).status).toBe(403);
+    const localOrigin="http://localhost:4567";
+    const created=await app.request(localOrigin+"/api/v1/sessions",{method:"POST",headers:{Origin:localOrigin,"Content-Type":"application/json"},body:JSON.stringify({bookId:null})});
+    expect(created.status).toBe(200);
+    expect(created.headers.get("Access-Control-Allow-Origin")).toBe(localOrigin);
+    expect((await (await app.request("/api/v1/sessions")).json()).sessions).toHaveLength(1);
+    const embedded=createStudioServer({} as never,root,{allowedOrigins:["https://trusted.example"]});
+    const trusted=await embedded.request("/api/v1/sessions",{headers:{Origin:"https://trusted.example"}});
+    expect(trusted.status).toBe(200);
+    expect(trusted.headers.get("Access-Control-Allow-Origin")).toBe("https://trusted.example");
+    expect((await embedded.request("/api/v1/sessions",{headers:{Origin:"https://trusted.example.evil"}})).status).toBe(403);
+  });
+
+  it("serves the same saved scene and choices to a new Work session without creating worlds on read", async () => {
+    const store = new PlayStore(root);
+    await store.createWorld({ id: "world", title: "Fixture", premise: "Fixture", worldContract: "", visualContract: "", mode: "guided", language: "en" });
+    await store.ensureRun("world", "main");
+    const db = createPlayDB(store.runDir("world", "main")); db.close?.();
+    await store.saveCurrentState("world", "main", { turn: 0 });
+    const presentation = { version: 1 as const, renderId: "render-1", turn: 0, sceneText: "Saved scene", suggestedActions: ["Wait", "Leave"] };
+    await store.savePresentation("world", "main", presentation);
+    const session = await createAndPersistBookSession(root, null, undefined, "work", { workId: "world", profileId: "interactive-world" });
+    expect(session.sessionId).not.toBe(session.workId);
+    const app = createStudioServer({} as never, root);
+    const response = await app.request(`/api/v1/play/runs/${session.workId}/main`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ worldId: "world", mode: "guided", currentPresentation: presentation });
+    expect((await app.request(`/api/v1/play/runs/${session.sessionId}/main`)).status).toBe(404);
+    await expect(access(join(root, "works", session.sessionId))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("lists initialized books while preserving an unfinished Work in the canonical library", async () => {
+    for (const id of ["ready-book", "unfinished-book"]) {
+      const initial = createInitialWorkManifestWrite({
+        workId: id, title: id, profileId: "longform-novel", language: "en", writes: [],
+      });
+      await mkdir(join(root, "works", id, "source"), { recursive: true });
+      await writeFile(join(root, initial.write.relativePath), initial.write.content);
+    }
+    await writeFile(join(root, "works/ready-book/source/book.json"), JSON.stringify({
+      id: "ready-book", title: "Ready", platform: "local", genre: "mystery",
+      status: "outlining", targetChapters: 3, chapterWordCount: 500, language: "en",
+      createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:00.000Z",
+    }));
+    const app = createStudioServer({} as never, root);
+    const response = await app.request("/api/v1/books");
+    const body = await response.json() as { books: Array<{ id: string }>; incompleteWorkIds: string[] };
+    const works = await (await app.request("/api/v1/works")).json() as { works: Array<{ id: string }> };
+    expect(response.status).toBe(200);
+    expect(body.books.map(book => book.id)).toEqual(["ready-book"]);
+    expect(body.incompleteWorkIds).toEqual(["unfinished-book"]);
+    expect(works.works.map(work => work.id).sort()).toEqual(["ready-book", "unfinished-book"]);
   });
 
   it("exposes canonical Works and their accepted artifacts", async () => {

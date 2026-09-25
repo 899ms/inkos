@@ -1,22 +1,30 @@
+import type {ShortFictionMeasurements} from "../agents/short-fiction.js";
+
 export type ShortFictionLanguage = "zh" | "en";
 
 export interface ShortFictionReferencePromptInput { readonly text?: string; }
 export interface ShortFictionOutlinePromptInput {
+  readonly title?: string;
   readonly direction: string;
   readonly chapterCount: number;
   readonly charsPerChapter: number;
   readonly reference?: ShortFictionReferencePromptInput;
 }
 export interface ShortFictionDraftPromptInput {
+  readonly title?: string;
+  readonly openingHookChars?: number;
   readonly direction: string;
   readonly outlineMarkdown: string;
   readonly chapterCount: number;
   readonly charsPerChapter: number;
+  readonly maxChapterLength?: number;
+  readonly minChapterLength?: number;
   readonly chapterNumbers?: readonly number[];
   readonly previousDraftMarkdown?: string;
 }
-export interface ShortFictionDraftReviewPromptInput extends ShortFictionDraftPromptInput { readonly draftMarkdown: string; }
+export interface ShortFictionDraftReviewPromptInput extends ShortFictionDraftPromptInput { readonly draftMarkdown: string; readonly revisionRequest?: string; readonly reviewScope?: string; readonly measurements?: ShortFictionMeasurements; }
 export interface ShortFictionPackagePromptInput {
+  readonly reviewContext?: string;
   readonly direction: string;
   readonly outlineMarkdown: string;
   readonly draftMarkdown: string;
@@ -34,6 +42,7 @@ export function buildShortFictionOutlineUserPrompt(input: ShortFictionOutlinePro
   return [
     language === "en" ? "## Creative Direction" : "## 创作方向",
     input.direction,
+    ...(input.title?[language==="en"?`Confirmed title: ${input.title}. Preserve it exactly.`:`已确定书名：${input.title}。书名保持原样。`]:[]),
     "",
     language === "en" ? "## Target" : "## 目标",
     language === "en"
@@ -56,6 +65,10 @@ export function buildShortFictionWriterUserPrompt(input: ShortFictionDraftPrompt
     language === "en"
       ? `Write only chapters ${chapters.join(", ")} of ${input.chapterCount}; about ${input.charsPerChapter} words each.`
       : `只写第 ${chapters.join("、")} 章；全篇 ${input.chapterCount} 章，每章约 ${input.charsPerChapter} 字。`,
+    ...(input.title?[language==="en"?`Confirmed title: ${input.title}. Preserve it exactly.`:`已确定书名：${input.title}。书名保持原样。`]:[]),
+    ...(input.openingHookChars&&chapters.includes(1)?[language==="en"?`Also submit an independent opening scene of about ${input.openingHookChars} words before chapter one. Keep the complete first chapter separate.`:`另交约 ${input.openingHookChars} 字的正文前独立开篇场面，放在 openingHook 字段；第一章仍须完整，不能用开篇钩子代替。`]:[]),
+    ...(input.maxChapterLength !== undefined ? [language === "en" ? `Maximum per chapter: ${input.maxChapterLength} words.` : `每章正文最多 ${input.maxChapterLength} 个非空白字符（含标点）。`] : []),
+    ...(input.minChapterLength !== undefined ? [language === "en" ? `Minimum per chapter: ${input.minChapterLength} words.` : `每章正文至少 ${input.minChapterLength} 个非空白字符（含标点）。`] : []),
     "",
     language === "en" ? "## Direction" : "## 创作方向",
     input.direction,
@@ -67,14 +80,19 @@ export function buildShortFictionWriterUserPrompt(input: ShortFictionDraftPrompt
 }
 export function buildShortFictionDraftReviewSystemPrompt(language: ShortFictionLanguage = "zh"): string {
   return language === "en"
-    ? "Review the persisted draft with the activated short-writing Skill. Submit evidence-backed observations and a concise summary through the review tool. An empty observations array is valid."
-    : "按已激活的短篇写作 Skill 审查已落盘成稿，通过审稿工具提交有证据的观察和简短总结；observations 为空是合法结果。";
+    ? "Review the persisted draft with the activated short-writing Skill. Attribute every finding to its sourceId and select a short inclusive startLine/endLine range from the numbered source; the host copies the exact excerpt. Distinguish outline differences from manuscript contradictions. Submit evidence-backed observations and a concise summary through the review tool. An empty observations array is valid."
+    : "按已激活的短篇写作 Skill 审查已落盘成稿。每项观察指定 sourceId 和该编号来源内一小段连续的 startLine/endLine（含首尾行），系统按行号截取原文。区分大纲差异与正文内部矛盾。通过审稿工具提交有证据的观察和简短总结；observations 为空是合法结果。";
 }
 
 export function buildShortFictionDraftReviewUserPrompt(input: ShortFictionDraftReviewPromptInput, language: ShortFictionLanguage = "zh"): string {
   return [
     language === "en" ? "## Direction" : "## 创作方向", input.direction,
-    "", language === "en" ? "## Current plan" : "## 当前方案", input.outlineMarkdown,
+    "", language === "en" ? "## Source: outline (plan, not manuscript)" : "## Source: outline（大纲）", input.outlineMarkdown,
+    "", language === "en" ? "## Review scope" : "## 审查范围", input.reviewScope ?? "whole-story",
+    ...(input.revisionRequest ? ["", language === "en" ? "## Latest revision request" : "## 最近修改请求", input.revisionRequest] : []),
+    ...(input.measurements ? ["", language==="en"?"## Host-verified manuscript measurements":"## 宿主核验的成稿计量",
+      JSON.stringify({contentScope:"complete_manuscript",chapterLengthScope:"prose_excluding_chapter_headings",...input.measurements}),
+      language==="en"?"Use these measured lengths. Numbered source lines below contain the complete supplied manuscript; line numbering does not mean an excerpt.":"篇幅判断采用以上实测值。以下编号来源包含所提供的完整正文；编号用于引用，不表示节选。"] : []),
     "", language === "en" ? "## Draft under review" : "## 待审正文", input.draftMarkdown,
   ].join("\n");
 }
@@ -91,6 +109,7 @@ export function buildShortFictionPackageUserPrompt(input: ShortFictionPackagePro
     "", language === "en" ? "## Plan" : "## 故事方案", input.outlineMarkdown.trim(),
     "", language === "en" ? "## Persisted draft" : "## 已落盘正文", input.draftMarkdown.trim(),
     "", language === "en" ? "## Existing title" : "## 当前标题", input.draftTitle,
+    ...(input.reviewContext?["",language==='en'?"## Review evidence":"## 审稿依据",input.reviewContext]:[]),
   ].join("\n");
 }
 function requestedShortFictionChapters(input: ShortFictionDraftPromptInput): number[] {

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createStore } from "zustand/vanilla";
-import type { ChatStore } from "../../types";
+import type { ChatStore, SessionMessage } from "../../types";
 import { initialChatState } from "../../initialState";
 import { createCreateSlice } from "../create/action";
 import { createMessageSlice } from "./action";
+import { closeStudioEventConnections, subscribeStudioEvents } from "../../../../lib/studio-events";
 
 const { fetchJson } = vi.hoisted(() => ({
   fetchJson: vi.fn(),
@@ -55,11 +56,32 @@ describe("chat message actions", () => {
   });
 
   afterEach(() => {
+    closeStudioEventConnections();
     (globalThis as any).EventSource = originalEventSource;
   });
 
-  it("creates a session bound to a non-book Work profile", async () => {
+  it("shares dashboard and session events without closing another consumer's connection", () => {
+    const dashboard = subscribeStudioEvents();
+    const conversation = subscribeStudioEvents("/api/v1/events?sessionId=probe");
+    const globalListener = vi.fn(), sessionListener = vi.fn();
+    dashboard.addEventListener("log", globalListener);
+    conversation.addEventListener("log", sessionListener);
+    expect(fakeEventSources).toHaveLength(1);
+    fakeEventSources[0]!.emit("log", { sessionId: "probe" });
+    expect(globalListener).toHaveBeenCalledTimes(1);
+    expect(sessionListener).toHaveBeenCalledTimes(1);
+    conversation.close();
+    expect(fakeEventSources[0]!.closed).toBe(false);
+    fakeEventSources[0]!.emit("log", { sessionId: "probe" });
+    expect(globalListener).toHaveBeenCalledTimes(2);
+    expect(sessionListener).toHaveBeenCalledTimes(1);
+    dashboard.close();
+    expect(fakeEventSources[0]!.closed).toBe(true);
+  });
+
+  it("creates a Work session while retaining the selected service and model identity", async () => {
     const store = createTestStore();
+    store.setState({selectedModel:"shared-model",selectedService:"custom:responses"});
     fetchJson.mockResolvedValueOnce({
       session: {
         sessionId: "work-session",
@@ -77,21 +99,17 @@ describe("chat message actions", () => {
     });
 
     expect(sessionId).toBe("work-session");
-    expect(fetchJson).toHaveBeenCalledWith("/sessions", expect.objectContaining({
-      body: JSON.stringify({
-        bookId: null,
-        sessionKind: "work",
-        profileId: "script",
-        workId: "script-work",
-      }),
-    }));
+    expect(fetchJson.mock.calls[0][0]).toBe("/sessions");
+    expect(JSON.parse(fetchJson.mock.calls[0][1].body)).toMatchObject({bookId:null,sessionKind:"work",profileId:"script",workId:"script-work",modelOverride:"shared-model",serviceOverride:"custom:responses"});
     expect(store.getState().sessions[sessionId]).toMatchObject({
       profileId: "script",
       workId: "script-work",
+      modelOverride:"shared-model",
+      serviceOverride:"custom:responses",
     });
   });
 
-  it("aborts only the previous chat round when activating another session", async () => {
+  it("keeps the previous request alive across navigation until an explicit stop", async () => {
     const store = createTestStore();
     const previousId = store.getState().createDraftSession(null, "chat");
     const nextId = store.getState().createDraftSession(null, "chat");
@@ -113,18 +131,22 @@ describe("chat message actions", () => {
     store.getState().activateSession(nextId);
 
     expect(store.getState().activeSessionId).toBe(nextId);
-    expect(store.getState().sessions[previousId]).toMatchObject({
+    expect(store.getState().sessions[previousId]).toMatchObject({isStreaming:true,isChatStreaming:true,stream});
+    expect(stream.closed).toBe(false);
+    expect(fetchJson).not.toHaveBeenCalled();
+    await store.getState().abortSession(previousId,"chat");
+    await vi.waitFor(() => expect(store.getState().sessions[previousId]).toMatchObject({
       isStreaming: false,
       isChatStreaming: false,
       stream: null,
-    });
+    }));
     expect(stream.closed).toBe(true);
     await vi.waitFor(() => {
       expect(fetchJson).toHaveBeenCalledWith(`/sessions/${previousId}/abort?scope=chat`, { method: "POST" });
     });
   });
 
-  it("keeps a background production task alive when navigation aborts its parallel chat round", async () => {
+  it("keeps production alive and a new draft selected when an earlier session creation arrives late", async () => {
     const store = createTestStore();
     const previousId = store.getState().createDraftSession(null, "short");
     const nextId = store.getState().createDraftSession(null, "chat");
@@ -156,21 +178,26 @@ describe("chat message actions", () => {
     }));
     fetchJson.mockClear();
 
-    store.getState().activateSession(nextId);
+    let finishCreation!:(value:unknown)=>void;
+    fetchJson.mockImplementationOnce(()=>new Promise(resolve=>{finishCreation=resolve;}));
+    const creating=store.getState().createSession(null,"chat");
+    const draftId=store.getState().createDraftSession(null,"chat");
+    finishCreation({session:{sessionId:'late-session',bookId:null,sessionKind:'chat'}});
+    await creating;
+    expect(store.getState().activeSessionId).toBe(draftId);
+    expect(draftId).not.toBe(nextId);
 
-    expect(store.getState().sessions[previousId]).toMatchObject({
+    await vi.waitFor(() => expect(store.getState().sessions[previousId]).toMatchObject({
       isStreaming: true,
-      isChatStreaming: false,
+      isChatStreaming: true,
       stream,
-    });
+    }));
     expect(store.getState().sessions[previousId]?.messages[0]?.toolExecutions?.[0]).toMatchObject({
       status: "running",
       background: true,
     });
     expect(stream.closed).toBe(false);
-    await vi.waitFor(() => {
-      expect(fetchJson).toHaveBeenCalledWith(`/sessions/${previousId}/abort?scope=chat`, { method: "POST" });
-    });
+    expect(fetchJson.mock.calls.map(call=>call[0])).toEqual(['/sessions']);
   });
 
   it("keeps play mode local for draft sessions until the first message persists them", () => {
@@ -226,6 +253,18 @@ describe("chat message actions", () => {
     expect(body.sessionKind).toBe("book");
     expect(body.service).toBe("kkaiapi");
     expect(body.model).toBe("deepseek-v4-flash");
+  });
+
+  it("does not send a selected Work's instruction through a stale bound session", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession("old-book", "book");
+    store.getState().setSelectedModel("gpt-5.6-sol", "kkaiapi");
+    await store.getState().sendMessage(sessionId, "Revise the selected book", {
+      activeBookId: "new-book", workId: "old-book",
+    });
+    expect(fetchJson).not.toHaveBeenCalled();
+    expect(store.getState().sessions[sessionId].bookId).toBe("old-book");
+    expect(store.getState().sessions[sessionId].isDraft).toBe(true);
   });
 
   it("parses @skill directives into requestedSkills and strips them from the agent instruction", async () => {
@@ -415,7 +454,7 @@ describe("chat message actions", () => {
       logs: ["正在生成大纲"],
     });
     expect(fakeEventSources).toHaveLength(1);
-    expect(fakeEventSources[0]?.url).toBe(`/api/v1/events?sessionId=${encodeURIComponent(sessionId)}`);
+    expect(fakeEventSources[0]?.url).toBe("/api/v1/events");
 
     fakeEventSources[0]?.emit("task:snapshot", {
       version: 1,
@@ -1284,9 +1323,103 @@ describe("chat message actions", () => {
     });
 
     expect(store.getState().sessions[sessionId]?.lastError).toBe("Request timed out");
-    expect(store.getState().sessions[sessionId]?.lastFailedSend).toEqual({
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toMatchObject({
       text: "写下一章",
       options: { sessionKind: "book", requestedSkills: ["style-guard"] },
+    });
+  });
+
+  it("restores a failed submission after a fresh page load and retries against its current saved Work", async () => {
+    const store = createTestStore();
+    const sessionId = "restored-failure";
+    const options = { sessionKind: "chat" as const, requestedSkills: ["style-guard"],
+      disabledSkills: ["inkos-story-review"], attachments: [{ id: "note", filename: "note.txt",
+        mediaType: "text/plain", size: 5, dataUrl: "data:text/plain;base64,aGVsbG8=" }] };
+    const snapshot = { session: { sessionId, bookId: null, workId: "saved-work", profileId: "script", sessionKind: "work" as const,
+      messages: [{ role: "user" as const, content: "Revise the attached passage", timestamp: 10 }] },
+      chatRequest: { sessionId, requestId: "failed-round", startedAt: 10, completedAt: 20, status: "failed" as const,
+        error: { code: "CHAT_REQUEST_FAILED", message: "Provider disconnected" }, retry: { text: "Revise the attached passage", options } } };
+    await store.getState().loadSessionDetail(sessionId, true, snapshot);
+    await store.getState().loadSessionDetail(sessionId, true, snapshot);
+    expect(store.getState().sessions[sessionId]).toMatchObject({ isChatStreaming: false, isStreaming: false,
+      lastFailedSend: snapshot.chatRequest.retry });
+    expect(store.getState().sessions[sessionId]!.messages.filter(x => x.kind === "error")).toHaveLength(1);
+    store.getState().setSelectedModel("fixture-model", "custom:fixture");
+    fetchJson.mockResolvedValueOnce({ response: "Saved", session: snapshot.session });
+    await store.getState().retryLastSend(sessionId);
+    const request = fetchJson.mock.calls.find(([path]) => path === "/agent")!;
+    expect(JSON.parse(request[1].body)).toMatchObject({ instruction: snapshot.chatRequest.retry.text,
+      workId: "saved-work", profileId: "script", sessionKind: "work", attachments: options.attachments,
+      requestedSkills: options.requestedSkills, disabledSkills: options.disabledSkills });
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toBeUndefined();
+    await store.getState().loadSessionDetail(sessionId, true, { ...snapshot, chatRequest: { ...snapshot.chatRequest, status: "cancelled", retry: undefined } });
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toBeUndefined();
+    expect(store.getState().sessions[sessionId]?.lastError).toBeNull();
+    let restore!: (value: unknown) => void, complete!: (value: unknown) => void;
+    fetchJson.mockImplementation(path => new Promise(resolve => {
+      if (path === "/agent") complete = resolve; else restore = resolve;
+    }));
+    const staleLoad = store.getState().loadSessionDetail(sessionId, true);
+    const newSend = store.getState().sendMessage(sessionId, "Read the saved result");
+    restore(snapshot);
+    expect(await staleLoad).toBe(false);
+    expect(store.getState().sessions[sessionId]).toMatchObject({ isChatStreaming: true, lastFailedSend: undefined });
+    complete({ response: "Saved", session: snapshot.session });
+    await newSend;
+  });
+
+  it("recovers a detached chat from server state, prevents duplicate sends, and restores stop after refresh", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+    store.getState().setSelectedModel("fixture-model", "custom:fixture");
+    let online = false, sends = 0;
+    const session = { sessionId, bookId: null, sessionKind: "chat" as const,
+      messages: [{ role: "user", content: "Continue", timestamp: 10 }] as SessionMessage[] };
+    let chatRequest = { sessionId, requestId: "pending", startedAt: 10, status: "running" as "running" | "completed" };
+    fetchJson.mockImplementation(async (path, init) => {
+      if (path === "/sessions") return { session };
+      if (path === "/agent") {
+        sends++;
+        chatRequest.requestId = JSON.parse(init.body).clientRequestId;
+        throw new TypeError("Failed to fetch");
+      }
+      if (path.endsWith("/abort")) return { ok: true, aborted: true };
+      if (!online) throw new TypeError("Failed to fetch");
+      return { session, chatRequest };
+    });
+    await store.getState().sendMessage(sessionId, "Continue");
+    expect(store.getState().sessions[sessionId]).toMatchObject({
+      isChatStreaming: true, isStreaming: true, detachedChatRequestId: chatRequest.requestId, lastError: null,
+    });
+    await store.getState().sendMessage(sessionId, "Continue");
+    await store.getState().retryLastSend(sessionId);
+    expect(sends).toBe(1);
+
+    online = true;
+    (fakeEventSources.at(-1) as unknown as { onopen: () => void }).onopen();
+    await vi.waitFor(() => expect(store.getState().sessions[sessionId]?.messages).toHaveLength(1));
+    chatRequest = { ...chatRequest, status: "completed" };
+    session.messages.push({ role: "assistant", content: "Saved result", timestamp: 20 });
+    fakeEventSources.at(-1)!.emit("request:snapshot", chatRequest);
+    await vi.waitFor(() => expect(store.getState().sessions[sessionId]).toMatchObject({
+      isChatStreaming: false, isStreaming: false, detachedChatRequestId: undefined,
+      lastFailedSend: undefined, stream: null,
+    }));
+    expect(store.getState().sessions[sessionId]?.messages.map(message => message.timestamp)).toEqual([10, 20]);
+
+    chatRequest = { ...chatRequest, requestId: "next-request", status: "running" };
+    const refreshed = createTestStore();
+    await refreshed.getState().loadSessionDetail(sessionId);
+    expect(refreshed.getState().sessions[sessionId]).toMatchObject({
+      isChatStreaming: true, isStreaming: true, detachedChatRequestId: "next-request",
+    });
+    fetchJson.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await refreshed.getState().abortSession(sessionId, "chat");
+    expect(refreshed.getState().sessions[sessionId]).toMatchObject({ isChatStreaming: true, isStreaming: true });
+    await refreshed.getState().abortSession(sessionId, "chat");
+    expect(fetchJson).toHaveBeenLastCalledWith(`/sessions/${sessionId}/abort?scope=chat`, { method: "POST" });
+    expect(refreshed.getState().sessions[sessionId]).toMatchObject({
+      isChatStreaming: false, isStreaming: false, detachedChatRequestId: undefined,
     });
   });
 
@@ -1303,7 +1436,55 @@ describe("chat message actions", () => {
 
     await store.getState().sendMessage(sessionId, "你好");
 
-    expect(store.getState().sessions[sessionId]?.lastFailedSend).toEqual({ text: "你好" });
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toMatchObject({ text: "你好" });
+  });
+
+  it.each([false, true])("settles a failed request after an earlier tool error, with background work=%s", async (background) => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+    store.getState().setSelectedModel("fixture-model", "custom:fixture");
+    let rejectAgent!: (error: Error) => void;
+    fetchJson.mockResolvedValueOnce({ session: { sessionId, sessionKind: "chat" } })
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectAgent = reject; }));
+    const sent = store.getState().sendMessage(sessionId, "Continue the work");
+    await vi.waitFor(() => expect(rejectAgent).toBeTypeOf("function"));
+    const events = fakeEventSources.at(-1)!;
+    if (background) events.emit("tool:start", {
+      sessionId, id: "background-task", tool: "short_fiction_run", background: true, sourceRequestId: "other-request",
+    });
+    events.emit("tool:start", { sessionId, id: "earlier-worker", tool: "review_work_artifact" });
+    events.emit("tool:end", { sessionId, id: "earlier-worker", tool: "review_work_artifact", isError: true, result: { code: "WORKER_RESULT_INVALID" } });
+    events.emit("context:compression", { sessionId, category: "session_context", phase: "start" });
+    rejectAgent(Object.assign(new Error("Request timed out"), { payload: { error: { code: "upstream_error" }, session: { sessionId, sessionKind: "chat" } } }));
+    await sent;
+    const runtime = store.getState().sessions[sessionId]!;
+    expect(runtime.lastFailedSend).toMatchObject({ text: "Continue the work" });
+    expect(runtime.isChatStreaming).toBe(false);
+    expect(runtime.isStreaming).toBe(background);
+    const executions = runtime.messages.flatMap(message => message.toolExecutions ?? []);
+    expect(executions.find(item => item.id === "earlier-worker")?.status).toBe("error");
+    expect(executions.find(item => item.id === "context-session_context")?.status).toBe("error");
+    expect(executions.filter(item => item.status === "running").map(item => item.id)).toEqual(background ? ["background-task"] : []);
+    expect(fakeEventSources.at(-1)!.closed).toBe(!background);
+  });
+
+  it("retains the host target after an HTTP failure and retries against the created Work", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession("parent", "book");
+    store.getState().setSelectedModel("fixture-model", "custom:fixture");
+    fetchJson.mockResolvedValueOnce({ session: { sessionId, bookId: "parent", sessionKind: "book" } })
+      .mockRejectedValueOnce(Object.assign(new Error("Continuation failed"), { payload: {
+        session: { sessionId, bookId: null, workId: "child", profileId: "script", sessionKind: "work" },
+      } }));
+    await store.getState().sendMessage(sessionId, "Create a derived script and export", { activeBookId: "parent", sessionKind: "book" });
+    expect(store.getState().sessions[sessionId]).toMatchObject({ bookId: null, workId: "child", profileId: "script", sessionKind: "work" });
+    expect(store.getState().sessions[sessionId]?.pendingWorkTarget).toEqual({ workId: "child", profileId: "script", fromWorkId: "parent" });
+    fetchJson.mockResolvedValueOnce({ response: "Exported", session: { sessionId, bookId: null, workId: "child", profileId: "script", sessionKind: "work" } });
+    await store.getState().retryLastSend(sessionId);
+    const sent = fetchJson.mock.calls.filter(([path]) => path === "/agent").map(([, init]) => JSON.parse(init.body));
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({ workId: "child", profileId: "script", sessionKind: "work" });
+    expect(sent[1].activeBookId).toBeUndefined();
   });
 
   it("retries the last failed send with identical business parameters and a fresh request id", async () => {
@@ -1329,7 +1510,8 @@ describe("chat message actions", () => {
     expect(retryBody.clientRequestId).toEqual(expect.any(String));
     expect(retryBody.clientRequestId).not.toBe(firstBody.clientRequestId);
     const { clientRequestId: firstRequestId, ...firstBusinessParams } = firstBody;
-    const { clientRequestId: retryRequestId, ...retryBusinessParams } = retryBody;
+    const { clientRequestId: retryRequestId, retryOfRequestId, ...retryBusinessParams } = retryBody;
+    expect(retryOfRequestId).toBe(firstBody.clientRequestId);
     expect(firstRequestId).toEqual(expect.any(String));
     expect(retryRequestId).toEqual(expect.any(String));
     expect(retryBusinessParams).toEqual(firstBusinessParams);

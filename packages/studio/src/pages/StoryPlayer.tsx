@@ -3,7 +3,7 @@ import { useApi, buildApiUrl } from "../hooks/use-api";
 import { useColors } from "../hooks/use-colors";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
-import { visibleChoices, applyEffects, initVarState, type VarState } from "@actalk/inkos-core/interactive-film/evaluator";
+import { visibleChoices, visibleDialogue, applyEffects, initVarState, type VarState } from "@actalk/inkos-core/interactive-film/evaluator";
 import type { StoryGraph, Choice } from "@actalk/inkos-core/interactive-film/graph-schema";
 
 interface Nav { toDashboard: () => void }
@@ -64,6 +64,7 @@ export function StoryPlayer({
 
   const isEnding = node.type === "ending";
   const choices = visibleChoices(node, vars);
+  const dialogue = visibleDialogue(node, vars);
 
   const onChoose = (targetNodeId: string, effects: Choice["effects"]) => {
     setVars((s) => applyEffects(s, effects));
@@ -91,9 +92,9 @@ export function StoryPlayer({
 
       {node.sceneDesc && <p className={`italic ${c.muted}`}>{node.sceneDesc}</p>}
 
-      {node.dialogue.length > 0 && (
+      {dialogue.length > 0 && (
         <div className="space-y-3">
-          {node.dialogue.map((line, i) => (
+          {dialogue.map((line, i) => (
             <div key={i}>
               <div className="text-primary text-xs uppercase tracking-wider">{line.speaker}</div>
               <div className="text-sm">{line.text}</div>

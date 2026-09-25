@@ -11,6 +11,11 @@ export class WorkProfileRegistry {
     this.profiles.set(profile.id, profile);
   }
 
+  replace(input: WorkProfile): void {
+    const profile = WorkProfileSchema.parse(input);
+    this.profiles.set(profile.id, profile);
+  }
+
   get(id: string): WorkProfile | undefined {
     return this.profiles.get(id);
   }

@@ -1,3 +1,4 @@
+import { ownsWorkMutation } from "../utils/work-mutation-scope.js";
 import { readFile, writeFile, mkdir, readdir, rm, stat, unlink, open } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -126,6 +127,7 @@ export class StateManager {
   }
 
   async acquireBookLock(bookId: string): Promise<() => Promise<void>> {
+    if (ownsWorkMutation(this.projectRoot, bookId)) return async () => {};
     await mkdir(this.bookDir(bookId), { recursive: true });
     const lockPath = join(this.bookDir(bookId), ".write.lock");
     const lockKey = this.normalizeLockKey(lockPath);
@@ -402,7 +404,7 @@ export class StateManager {
         },
       }));
     }
-    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: bookId, updatedAt: config.updatedAt, accept: true });
+    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: bookId, updatedAt: config.updatedAt, accept: true, acceptPaths: ["source/book.json"] });
   }
 
   async saveBookConfigAt(bookDir: string, config: BookConfig): Promise<void> {

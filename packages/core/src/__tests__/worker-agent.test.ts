@@ -7,7 +7,8 @@ const chatCompletionMock = vi.hoisted(() => vi.fn());
 const guardedPiStreamMock = vi.hoisted(() => vi.fn());
 const guardedPiNonStreamingMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../llm/provider.js", () => ({
+vi.mock("../llm/provider.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../llm/provider.js")>(),
   chatCompletion: chatCompletionMock,
 }));
 
@@ -191,7 +192,7 @@ describe("Pi worker harness", () => {
     expect(result).toEqual({ label: "母亲", status: "等待退烧药" });
     expect(guardedPiStreamMock).toHaveBeenCalledTimes(1);
     expect(guardedPiStreamMock.mock.calls[0]?.[2]).toMatchObject({
-      toolChoice: { type: "function", function: { name: "submit_state" } },
+      toolChoice: "required",
     });
   });
 
@@ -205,7 +206,7 @@ describe("Pi worker harness", () => {
           type: "toolCall" as const,
           id: "state-2",
           name: "submit_state",
-          arguments: { label: "灯塔", status: "亮灯" },
+          arguments: { label: "灯塔", status: "亮灯", value: "0" },
         }],
         api: model?.api ?? "openai-completions",
         provider: model?.provider ?? "openai",
@@ -235,14 +236,14 @@ describe("Pi worker harness", () => {
         name: "submit_state",
         label: "提交状态",
         description: "提交状态。",
-        parameters: Type.Object({ label: Type.String(), status: Type.String() }),
+        parameters: Type.Object({ label: Type.String(), status: Type.String(), value: Type.Union([Type.Number(), Type.String(), Type.Boolean()]) }),
       },
     );
 
-    expect(result).toEqual({ label: "灯塔", status: "亮灯" });
+    expect(result).toEqual({ label: "灯塔", status: "亮灯", value: "0" });
     expect(guardedPiNonStreamingMock).toHaveBeenCalledTimes(1);
     expect(guardedPiNonStreamingMock.mock.calls[0]?.[2]).toMatchObject({
-      toolChoice: { type: "function", function: { name: "submit_state" } },
+      toolChoice: "required",
     });
   });
 });

@@ -57,7 +57,7 @@ export const ChapterTraceSchema = z.object({
   retrieval: z.object({
     engine: z.literal("sqlite-fts5-bm25"),
     query: z.string(),
-    selectionMode: z.literal("semantic"),
+    selectionMode: z.enum(["semantic", "complete"]),
     candidates: z.array(z.object({
       id: z.string(),
       kind: z.string(),

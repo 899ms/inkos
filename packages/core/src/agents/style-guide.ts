@@ -1,6 +1,6 @@
 import type { LLMClient } from "../llm/provider.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
-import { appendActivatedSkillGuidance } from "./base.js";
+import { prepareWorkerMessages } from "./base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { loadAvailableAgentSkills, mergeActivatedSkillGuidance } from "../skills/index.js";
 
@@ -23,7 +23,7 @@ export async function compileStyleGuide(input: {
     if (!skill) throw new Error(`Style extraction requires unavailable skill: ${id}`);
     return { skill, resources: [] };
   });
-  const response = await runWorkerAgent(input.client, input.model, appendActivatedSkillGuidance([
+  const response = await runWorkerAgent(input.client, input.model, await prepareWorkerMessages({ ...input, activatedSkills: mergeActivatedSkillGuidance(input.activeSkills ?? [], skills) }, [
     {
       role: "system",
       content: language === "en"
@@ -36,7 +36,7 @@ export async function compileStyleGuide(input: {
         ? `Source: ${input.sourceName?.trim() || "reference"}\n\n${sample}`
         : `来源：${input.sourceName?.trim() || "参考文本"}\n\n${sample}`,
     },
-  ], mergeActivatedSkillGuidance(input.activeSkills ?? [], skills)), {
+  ], undefined, "style-guide"), {
     temperature: 0.3,
     signal: input.signal,
   });

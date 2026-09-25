@@ -24,7 +24,7 @@ export interface MemorySelection {
 export interface MemoryRetrievalTrace {
   readonly engine: "sqlite-fts5-bm25";
   readonly query: string;
-  readonly selectionMode: "semantic";
+  readonly selectionMode: "semantic" | "complete";
   readonly candidates: ReadonlyArray<{
     readonly id: string;
     readonly kind: string;
@@ -80,7 +80,7 @@ export async function retrieveMemorySelection(params: {
   const hooks = structuredHooks.hooks;
   // Every unresolved hook remains searchable canon. The semantic selector
   // decides relevance for the current task; status does not imply urgency.
-  const searchableHooks = hooks.filter((hook) => hook.status !== "resolved");
+  const searchableHooks = hooks.filter((hook) => hook.status !== "resolved" && hook.status !== "superseded");
 
   const summaries = structuredSummaries.rows;
   const dbPath = join(storyDir, "memory.db");

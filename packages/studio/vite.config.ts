@@ -15,7 +15,8 @@ export default defineConfig({
     proxy: {
       "/api/v1/events": {
         target: `http://localhost:${process.env.INKOS_STUDIO_PORT ?? "4569"}`,
-        changeOrigin: true,
+        // Preserve the browser's Host/Origin pair for the local API boundary.
+        changeOrigin: false,
         // SSE needs unbuffered streaming — bypass http-proxy response handling
         selfHandleResponse: true,
         configure: (proxy) => {
@@ -27,7 +28,7 @@ export default defineConfig({
       },
       "/api": {
         target: `http://localhost:${process.env.INKOS_STUDIO_PORT ?? "4569"}`,
-        changeOrigin: true,
+        changeOrigin: false,
       },
     },
   },

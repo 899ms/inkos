@@ -9,6 +9,7 @@ import type {
 } from "../../types";
 import { localizeKnownRuntimeMessage } from "../../../../lib/error-copy";
 import { tr } from "../../../../lib/app-language";
+import { summarizeToolResult, toolResultDisplayText } from "../../../../shared/tool-result";
 
 const NULL_BOOK_KEY = "__null__";
 
@@ -31,6 +32,11 @@ const TOOL_LABELS: Record<string, readonly [string, string]> = {
   play_revise: ["重做互动回合", "Redo play turn"],
   play_step: ["推进互动世界", "Advance interactive world"],
   create_book: ["创建长篇", "Create long-form Work"],
+  create_work: ["创建作品", "Create Work"],
+  export_work: ["导出作品", "Export Work"],
+  review_and_export_work_artifact: ["审稿并导出", "Review and export"],
+  review_work_artifact: ["审稿", "Review artifact"],
+  revise_work_artifact: ["修订作品", "Revise artifact"],
   revise_foundation: ["重建设定", "Revise foundation"],
   write_chapters: ["写作章节", "Write chapters"],
   review_chapter: ["审查章节", "Review chapter"],
@@ -59,28 +65,15 @@ function actionToolName(tool: string): string {
 
 function normalizeToolExecution(execution: ToolExecution): ToolExecution {
   const tool = actionToolName(execution.tool);
-  return tool === execution.tool
-    ? execution
-    : { ...execution, tool, label: resolveToolLabel(tool, execution.agent) };
+  const displayText = (execution.details as { displayText?: unknown } | undefined)?.displayText;
+  return { ...execution, tool,
+    label: tool !== execution.tool || execution.label === tool ? resolveToolLabel(tool, execution.agent) : execution.label,
+    ...(typeof displayText === "string" ? { result: displayText }
+      : typeof execution.result === "string" ? { result: toolResultDisplayText(execution.result) } : {}) };
 }
 
 export function summarizeResult(result: unknown): string {
-  if (typeof result === "string") return result;
-  if (result && typeof result === "object") {
-    const record = result as Record<string, unknown>;
-    if (typeof record.content === "string") return record.content;
-    if (Array.isArray(record.content)) {
-      const text = record.content
-        .map((part) => {
-          const item = part as { type?: unknown; text?: unknown };
-          return item.type === "text" && typeof item.text === "string" ? item.text : "";
-        })
-        .filter(Boolean)
-        .join("\n");
-      if (text.trim()) return text;
-    }
-  }
-  return String(result);
+  return summarizeToolResult(result);
 }
 
 export function extractToolDetails(result: unknown): unknown {
@@ -198,6 +191,7 @@ export function createSessionRuntime(input: {
   proposalAction?: SessionRuntime["proposalAction"];
   playMode?: SessionRuntime["playMode"];
   modelOverride?: string;
+  serviceOverride?: string;
   title: string | null;
   messages?: ReadonlyArray<Message>;
   isDraft?: boolean;
@@ -211,6 +205,7 @@ export function createSessionRuntime(input: {
     proposalAction: input.proposalAction,
     playMode: input.playMode,
     modelOverride: input.modelOverride,
+    serviceOverride: input.serviceOverride,
     title: input.title,
     messages: input.messages ?? [],
     stream: null,
@@ -468,7 +463,7 @@ export function updateSession(
 
 export function upsertSessionSummary(
   sessions: Record<string, SessionRuntime>,
-  summary: Pick<SessionSummary, "sessionId" | "bookId" | "sessionKind" | "profileId" | "workId" | "proposalAction" | "playMode" | "modelOverride" | "title">,
+  summary: Pick<SessionSummary, "sessionId" | "bookId" | "sessionKind" | "profileId" | "workId" | "proposalAction" | "playMode" | "modelOverride" | "serviceOverride" | "title">,
 ): Record<string, SessionRuntime> {
   const existing = sessions[summary.sessionId];
   return {
@@ -483,6 +478,7 @@ export function upsertSessionSummary(
           proposalAction: summary.proposalAction ?? existing.proposalAction,
           playMode: summary.playMode ?? existing.playMode,
           modelOverride: summary.modelOverride ?? existing.modelOverride,
+          serviceOverride: summary.serviceOverride ?? existing.serviceOverride,
           title: summary.title,
         }
       : createSessionRuntime(summary),

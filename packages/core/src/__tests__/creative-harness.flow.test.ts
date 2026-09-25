@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -26,6 +27,8 @@ import { createSkillRegistry } from "../skills/index.js";
 import { createUseSkillTool, hydrateActivatedSkillGuidance, type ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { PipelineRunner } from "../pipeline/runner.js";
 import { createReadTool } from "../agent/agent-tools.js";
+import { createBookFoundationTool } from "../harness/tools/longform-production.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 describe("creative harness mini-flows", () => {
   const roots: string[] = [];
@@ -51,21 +54,28 @@ describe("creative harness mini-flows", () => {
       episodeId: "episode-create",
     });
     const workId = (created.data as { manifest: { id: string } }).manifest.id;
+    const candidates = await syncWorkSourceArtifacts({projectRoot:root,workId,accept:false,writes:[
+      {relativePath:`works/${workId}/source/notes.md`,content:"An unrelated candidate awaiting its own decision."},
+    ]});
+    const unrelated=candidates.artifacts.find(a=>a.revisions.some(r=>r.path==='source/notes.md'))!;
     const pipeline = {
       runWithAgentContext: async (_context: unknown, task: () => Promise<unknown>) => task(),
-      createAgentContext: () => ({ client: {}, model: "scripted" }),
+      createAgentContext: (role: string) => ({ client: {}, model: role }),
     };
 
     const run = await executeExplicitCapabilityTool({
       projectRoot: root,
       binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation", risk: "recoverable-write" },
       tool: createTranslationRunTool(pipeline as never, root, workId, {
-        createModel: () => ({
-          translateSegments: async (request) => ({
-            segments: request.segments.map((segment) => ({ index: segment.index, target: `译：${segment.source}` })),
-            glossary: [],
-          }),
-          reviewChapter: async () => ({ summary: "OK", observations: [] }),
+        createModel: ({model}) => ({
+          translateSegments: async (request) => {
+            expect(model).toBe("translation");
+            return { segments: request.segments.map((segment) => ({ index: segment.index, target: `译：${segment.source}` })), glossary: [] };
+          },
+          reviewChapter: async () => {
+            expect(model).toBe("auditor");
+            return { summary: "Reviewed", observations: [{code:"MEANING_MISMATCH",category:"quality",assessment:"issue",summary:"A source fact changed in translation.",evidence:["segment:1"]}] };
+          },
         }),
       }),
       workId,
@@ -82,6 +92,9 @@ describe("creative harness mini-flows", () => {
     });
 
     const manifest = await loadWorkManifest(root, workId);
+    expect(manifest.artifacts.find(a=>a.id===unrelated.id)?.currentRevisionId).toBeNull();
+    const reviewedArtifact = manifest.artifacts.find(artifact => artifact.revisions.some(revision => revision.id === artifact.currentRevisionId && revision.path === "source/translated/chapter-0001.json"))!;
+    expect(run.observations).toEqual(expect.arrayContaining([expect.objectContaining({code:"MEANING_MISMATCH",assessment:"issue",scope:"chapter:1",target:{workId,artifactId:reviewedArtifact.id,revisionId:reviewedArtifact.currentRevisionId}})]));
     const outputPath = (exported.data as { outputPath: string }).outputPath;
     const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
     expect({
@@ -188,6 +201,10 @@ describe("creative harness mini-flows", () => {
       startedAt: "2026-08-26T00:00:00.000Z",
       completedAt: null,
     });
+    expect(episodes.recoverInterruptedEpisodes("2026-08-26T00:01:00.000Z")).toBe(0);
+    const legacyDb = new DatabaseSync(join(root, ".inkos", "harness.sqlite"));
+    legacyDb.exec("UPDATE creative_episodes SET owner_pid = NULL WHERE status = 'running'");
+    legacyDb.close();
     expect(episodes.recoverInterruptedEpisodes("2026-08-26T00:01:00.000Z")).toBe(1);
 
     const after = await loadWorkManifest(root, "script-work");
@@ -279,8 +296,10 @@ describe("creative harness mini-flows", () => {
       projectRoot: root,
     });
     const now = new Date().toISOString();
-    await expect(pipeline.initBook({
-      id: "recoverable-book",
+    await expect(executeExplicitCapabilityTool({projectRoot:root,tool:createBookFoundationTool(pipeline),
+      binding:{capabilityId:'longform',actionId:'create_book',profileId:'longform-novel',risk:'recoverable-write'},parameters:{
+      bookId: "recoverable-book",
+      instruction: "Create fixture foundation",
       title: "Recoverable Book",
       genre: "mystery",
       platform: "other",
@@ -290,9 +309,19 @@ describe("creative harness mini-flows", () => {
       language: "en",
       createdAt: now,
       updatedAt: now,
-    })).rejects.toThrow();
+    }})).rejects.toThrow();
 
     const manifest = await loadWorkManifest(root, "recoverable-book");
+    const episodes = new CreativeEpisodeStore(join(root,'.inkos/harness.sqlite'));
+    try {
+      expect(episodes.listEpisodes({workId:'recoverable-book'})[0]?.status).toBe('failed');
+      episodes.create({version:2,id:'legacy-attempt',workId:null,profileId:'longform-novel',status:'running',startedAt:now,completedAt:null});
+      episodes.append({episodeId:'legacy-attempt',workId:null,type:'action-started',payload:{parameters:{projectId:'recoverable-book'}}});
+      episodes.finish('legacy-attempt','failed');
+      expect(episodes.listEpisodes({workId:'recoverable-book'}).map(episode=>episode.id)).toContain('legacy-attempt');
+      expect(episodes.listEpisodes({workId:'unrelated-work'})).toEqual([]);
+    }
+    finally { episodes.close(); }
     expect({
       status: manifest.status,
       sourceConfig: JSON.parse(await readFile(join(root, "works", "recoverable-book", "source", "book.json"), "utf-8")).id,

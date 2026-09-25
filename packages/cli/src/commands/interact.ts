@@ -104,7 +104,9 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
         proxyUrl: client.proxyUrl,
       }, input);
 
-      const responseText = result.responseText;
+      const failure = result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined);
+      const responseText = failure ?? result.responseText;
+      if (failure) process.exitCode = 1;
       const session = {
         sessionId,
         sessionKind,
@@ -116,6 +118,7 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
       if (opts.json) {
         process.stdout.write(`${JSON.stringify({
           responseText,
+          ...(failure ? { error: failure } : {}),
           session,
         }, null, 2)}\n`);
         return;

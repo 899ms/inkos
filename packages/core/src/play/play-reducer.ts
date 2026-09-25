@@ -1,6 +1,7 @@
 import {
   PlayEventSchema,
   PlayMutationSchema,
+  isPlayEvidenceEntityType,
   type PlayEdgeInput,
   type PlayEntity,
   type PlayEntityInput,
@@ -61,7 +62,7 @@ export function applyPlayMutation(input: ApplyPlayMutationInput): ApplyPlayMutat
     createdAt: input.createdAt ?? new Date().toISOString(),
   });
 
-  validateMutation(input.db, mutation);
+  validatePlayMutation(input.db, mutation);
 
   const apply = () => {
     input.db.recordEvent(event);
@@ -83,7 +84,7 @@ export interface SeedPlayGraphInput {
 
 export function seedPlayGraph(input: SeedPlayGraphInput): void {
   const mutation = PlayMutationSchema.parse(input.mutation);
-  validateMutation(input.db, mutation);
+  validatePlayMutation(input.db, mutation);
   const apply = () => {
     if (!mutation.blocked) applyGraphChanges(input.db, mutation);
   };
@@ -91,7 +92,8 @@ export function seedPlayGraph(input: SeedPlayGraphInput): void {
   else apply();
 }
 
-function validateMutation(db: PlayReducerDB, mutation: ReturnType<typeof PlayMutationSchema.parse>): void {
+export function validatePlayMutation(db: PlayReducerDB, input: PlayMutationInput): void {
+  const mutation=PlayMutationSchema.parse(input);
   const upsertedEntityIds = new Set(mutation.entities.upsert.map((entity) => entity.id));
   const entityExists = (entityId: string): boolean => upsertedEntityIds.has(entityId) || db.getEntity(entityId) !== null;
   const findEntity = (entityId: string): PlayEntity | PlayEntityInput | null =>
@@ -99,8 +101,10 @@ function validateMutation(db: PlayReducerDB, mutation: ReturnType<typeof PlayMut
 
   for (const edge of mutation.edges.upsert) {
     if (!entityExists(edge.fromId) || !entityExists(edge.toId)) {
-      throw new Error(`Play mutation edge ${edge.id} references a missing endpoint: ${edge.fromId} -> ${edge.toId}`);
+      throw Object.assign(new Error(`Play mutation edge ${edge.id} references a missing endpoint: ${edge.fromId} -> ${edge.toId}`),{code:"PLAY_REFERENCE_MISSING",edgeId:edge.id,fromId:edge.fromId,toId:edge.toId});
     }
+    const holding=(isRecord(edge.value)&&edge.value.role==="holding")||edge.type==="holding"||edge.type==="holds";
+    if(holding&&edge.fromId===edge.toId)throw Object.assign(new Error(`Holding edge ${edge.id} cannot make an object hold itself; fromId must identify its holder, toId the held object.`),{code:"PLAY_HOLDING_SELF",edgeId:edge.id,fromId:edge.fromId,toId:edge.toId});
     if (isRecord(edge.value) && edge.value.role === "holding" && !isPhysicalHoldingTarget(findEntity(edge.toId), edge.value)) {
       throw new Error(`Play mutation edge ${edge.id} marks a non-physical target as held: ${edge.toId}`);
     }
@@ -114,8 +118,8 @@ function validateMutation(db: PlayReducerDB, mutation: ReturnType<typeof PlayMut
 
   for (const transition of mutation.evidence.transitions) {
     const entity = findEntity(transition.entityId);
-    if (!entity || (entity.type !== "evidence" && entity.type !== "clue")) {
-      throw new Error(`Play evidence transition references a non-evidence entity: ${transition.entityId}`);
+    if (!entity || !isPlayEvidenceEntityType(entity.type)) {
+      throw Object.assign(new Error(`Play evidence transition references a non-evidence entity: ${transition.entityId}`),{code:'PLAY_EVIDENCE_ENTITY_TYPE',entityId:transition.entityId});
     }
     const current = currentEvidenceStatus(db, transition.entityId);
     if (transition.from && transition.from !== current) {
@@ -129,7 +133,8 @@ function validateMutation(db: PlayReducerDB, mutation: ReturnType<typeof PlayMut
 
 function applyGraphChanges(db: PlayReducerDB, mutation: ReturnType<typeof PlayMutationSchema.parse>): void {
   for (const entity of mutation.entities.upsert) {
-    db.upsertEntity(entity);
+    const existing=db.getEntity(entity.id);
+    db.upsertEntity(existing?{...entity,createdEventId:existing.createdEventId}:entity);
   }
   for (const edge of mutation.edges.expire) {
     db.expireEdge(edge.edgeId, edge.validUntilEventId);
@@ -160,7 +165,7 @@ function isPhysicalHoldingTarget(target: PlayEntity | PlayEntityInput | null, va
   if (!target) return false;
   if (target.type === "item") return true;
   if (value.physical === true || value.portable === true) {
-    return target.type === "evidence" || target.type === "clue" || target.type === "claim" || target.type === "proof_chain";
+    return isPlayEvidenceEntityType(target.type);
   }
   return false;
 }

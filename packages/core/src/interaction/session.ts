@@ -75,6 +75,7 @@ export const InteractionSessionSchema = z.object({
   workId: z.string().min(1).nullable().optional(),
   playMode: PlayModeSchema.optional(),
   modelOverride: z.string().min(1).optional(),
+  serviceOverride: z.string().min(1).optional(),
   activeBookId: z.string().min(1).optional(),
   activeChapterNumber: z.number().int().min(1).optional(),
   messages: z.array(InteractionMessageSchema).default([]),
@@ -95,6 +96,7 @@ export const BookSessionSchema = z.object({
   proposalAction: z.string().min(1).optional(),
   playMode: PlayModeSchema.optional(),
   modelOverride: z.string().min(1).optional(),
+  serviceOverride: z.string().min(1).optional(),
   title: z.string().nullable().default(null),
   messages: z.array(InteractionMessageSchema).default([]),
   currentExecution: ExecutionStateSchema.optional(),
@@ -114,6 +116,7 @@ export function createBookSession(
     readonly workId?: string | null;
     readonly proposalAction?: string;
     readonly modelOverride?: string;
+    readonly serviceOverride?: string;
   },
 ): BookSession {
   const now = Date.now();
@@ -127,6 +130,7 @@ export function createBookSession(
     ...(options?.proposalAction ? { proposalAction: options.proposalAction } : {}),
     ...(options?.playMode ? { playMode: options.playMode } : {}),
     ...(options?.modelOverride ? { modelOverride: options.modelOverride } : {}),
+    ...(options?.serviceOverride ? { serviceOverride: options.serviceOverride } : {}),
     title: null,
     messages: [],
     createdAt: now,

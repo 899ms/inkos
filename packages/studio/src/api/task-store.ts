@@ -1,6 +1,7 @@
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { RequestedIntent } from "@actalk/inkos-core";
+import { commitAtomicFileSet } from "@actalk/inkos-core";
 
 export type StudioTaskExecutionStatus = "running" | "processing" | "completed" | "error";
 
@@ -86,7 +87,9 @@ export async function saveStudioTaskSnapshot(
   const previous = writeQueues.get(path) ?? Promise.resolve();
   const next = previous.catch(() => undefined).then(async () => {
     await mkdir(join(projectRoot, TASKS_DIR), { recursive: true });
-    await writeFile(path, serialized, "utf-8");
+    await commitAtomicFileSet({rootDir:projectRoot,writes:[{
+      relativePath:join(TASKS_DIR,taskFileName(snapshot.sessionId)),content:serialized,
+    }]});
   });
   writeQueues.set(path, next);
   try {

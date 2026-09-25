@@ -96,9 +96,12 @@ export {
   type PlayStepResult,
 } from "./play/play-runner.js";
 export { PlayStore, type PlayTranscriptTurn, type PlayWorld, type PlayWorldInput, type PlayRunSummary } from "./play/play-store.js";
+export { createPlayImageTool } from './harness/tools/play-image.js';
 export {
   buildPlayEntityImagePrompt,
   buildPlaySceneImagePrompt,
+  playImageContext,
+  playSceneImageKey,
   readPlayImageManifest,
   setPlayImageEntry,
   playImageFileName,
@@ -252,6 +255,7 @@ export {
   renameBookSession,
   deleteBookSession,
   bindBookSessionToBook,
+  transitionSessionToWork,
   createAndPersistBookSession,
   SessionAlreadyBoundError,
 } from "./interaction/book-session-store.js";
@@ -260,6 +264,7 @@ export {
   appendTranscriptEvent,
   sessionsDir,
   readTranscriptEvents,
+  confirmedRequestInstruction,
   nextTranscriptSeq,
   transcriptPath,
 } from "./interaction/session-transcript.js";
@@ -287,7 +292,7 @@ export type {
   SessionCreatedEvent,
   SessionMetadataUpdatedEvent,
 } from "./interaction/session-transcript-schema.js";
-export { buildExportArtifact, writeExportArtifact } from "./interaction/export-artifact.js";
+export { buildExportArtifact, writeExportArtifact, ChapterExportSourceError } from "./interaction/export-artifact.js";
 export {
   normalizeTruthFileName,
   classifyTruthAuthority,
@@ -321,6 +326,7 @@ export {
 export {
   generateShortFictionCover,
   runShortFictionProduction,
+  reviseShortFictionProduction,
   extractResponsesImageBase64,
   resolveCoverApiKey,
   type ShortFictionCoverOptions,
@@ -436,6 +442,7 @@ export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./uti
 
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type ReviseResult, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
+export { commitAtomicFileSet, recoverAtomicFileSets } from "./utils/atomic-file-set.js";
 export { Scheduler, type SchedulerConfig } from "./pipeline/scheduler.js";
 export { detectChapter, loadDetectionHistory, type DetectChapterResult } from "./pipeline/detection-runner.js";
 export { runScriptCreation, runStoryboardCreation, runInteractiveFilmCreation, createStoryboardAssetsManifest, type ScriptCreationRunOptions, type ScriptCreationRunResult, type StoryboardAssetsManifest, type StoryboardCreationRunOptions, type StoryboardCreationRunResult, type InteractiveFilmCreationRunOptions, type InteractiveFilmCreationRunResult, type StoryboardImageAsset, type StoryboardImageAssetVariant } from "./pipeline/script-storyboard-runner.js";

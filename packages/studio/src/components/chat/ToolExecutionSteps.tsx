@@ -602,6 +602,7 @@ export function getPlayToolDetails(exec: ToolExecution): PlayToolDetails | null 
 type PlayRunImageIndex = {
   readonly sceneImageUrls?: Record<string, string>;
   readonly sceneImageUrl?: string;
+  readonly currentSceneImage?: { readonly turn: number; readonly sceneText: string; readonly url: string | null };
 };
 
 function sceneImageKey(details: PlayToolDetails): string | null {
@@ -611,6 +612,11 @@ function sceneImageKey(details: PlayToolDetails): string | null {
 export function buildPlaySceneImageUrl(details: PlayToolDetails, run?: PlayRunImageIndex | null): string | null {
   if (details.sceneImageUrl) {
     return buildApiUrl(details.sceneImageUrl);
+  }
+  const current = run?.currentSceneImage;
+  if (current && current.turn === details.turn) {
+    return current.url && current.sceneText.trim() === details.sceneText?.trim()
+      ? buildApiUrl(current.url) : null;
   }
   const key = sceneImageKey(details);
   const fromIndex = key ? run?.sceneImageUrls?.[key] : undefined;
@@ -783,7 +789,7 @@ function ProposedActionPreview({
       {resolution === "confirmed" ? (
         <div className="mt-3 flex items-center gap-1.5 text-[15px] leading-6 font-medium text-primary">
           <Check size={15} className="shrink-0" />
-          {tr("已执行", "Executed")}
+          {tr("已确认", "Confirmed")}
         </div>
       ) : resolution === "rejected" ? (
         <div className="mt-3 text-[15px] leading-6 font-medium text-muted-foreground">{tr("已取消", "Cancelled")}</div>
@@ -796,7 +802,7 @@ function ProposedActionPreview({
             disabled={!onProposedAction || streaming || locked}
             className="rounded-lg bg-primary px-3.5 py-2 text-[15px] leading-6 font-medium text-primary-foreground disabled:opacity-50"
           >
-            {streaming ? tr("执行中…", "Running…") : tr("继续执行", "Continue")}
+            {streaming ? tr("等待当前操作", "Waiting for current action") : tr("继续执行", "Continue")}
           </button>
           <button
             type="button"

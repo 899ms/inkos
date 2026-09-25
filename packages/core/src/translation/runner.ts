@@ -16,7 +16,7 @@ import type {
   TranslationProjectManifest,
   TranslationSegment,
 } from "./types.js";
-import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { syncWorkSourceArtifacts, captureWorkSourceState, changedWorkSourcePaths } from "../harness/source-sync.js";
 
 export async function runTranslationProject(
   projectRoot: string,
@@ -26,6 +26,7 @@ export async function runTranslationProject(
     readonly batchSize?: number;
   },
 ): Promise<RunTranslationProjectResult> {
+  const sourceBefore = await captureWorkSourceState(projectRoot, projectId);
   try {
     let manifest = await loadTranslationManifest(projectRoot, projectId);
     let glossary = [...await loadTranslationGlossary(projectRoot, projectId)];
@@ -66,6 +67,7 @@ export async function runTranslationProject(
         if (returned.has(item.index)) {
           throw new Error(`Translation returned duplicate segment ${item.index}.`);
         }
+        if(!item.target.trim())throw Object.assign(new Error(`Translation returned an empty target for segment ${item.index}.`),{code:"TRANSLATION_TARGET_EMPTY",segmentIndex:item.index});
         returned.add(item.index);
         const original = source.segments.find((segment) => segment.index === item.index);
         if (!original) throw new Error(`Translation source segment ${item.index} is missing.`);
@@ -130,12 +132,29 @@ export async function runTranslationProject(
         content: `${reportLines.join("\n").trimEnd()}\n`,
       }],
     });
-    await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: true });
+    const reviewedWork = await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: true,
+      acceptPaths: await changedWorkSourcePaths(projectRoot, projectId, sourceBefore),
+    });
+    const observations = manifest.chapters.flatMap(chapter => {
+      const path = chapter.translatedPath.slice(`works/${projectId}/`.length);
+      const artifact = reviewedWork.artifacts.find(artifact => artifact.revisions.some(revision => revision.id === artifact.currentRevisionId && revision.path === path));
+      const revision = artifact?.revisions.find(revision => revision.id === artifact.currentRevisionId);
+      return (chapter.observations ?? []).map(observation => ({
+        ...observation, category: observation.category ?? "quality" as const,
+        assessment: observation.assessment ?? "observation" as const,
+        scope: observation.scope ?? `chapter:${chapter.number}`,
+        ...(artifact && revision ? { targetHash: revision.checksum, target: {workId: projectId, artifactId: artifact.id, revisionId: revision.id} } : {}),
+      }));
+    });
+    const totalSegments=manifest.chapters.reduce((sum,chapter)=>sum+chapter.segmentCount,0);
+    const completedSegments=manifest.chapters.reduce((sum,chapter)=>sum+chapter.translatedSegments,0);
     return {
       projectId,
       translatedSegments,
       reviewedChapters,
+      observations,
       reportPath,
+      totalSegments,completedSegments,pendingSegments:totalSegments-completedSegments,
     };
   } catch (error) {
     try {

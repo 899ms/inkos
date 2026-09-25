@@ -8,8 +8,12 @@ import { defaultChapterLength } from "../../utils/length-metrics.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../../utils/book-id.js";
 import { mergeActivatedSkillGuidance } from "../../skills/activations.js";
 import { runAsWorkflowTrajectory } from "../../llm/agent-trajectory.js";
+import {StateManager} from "../../state/manager.js";
+import type {WorkManifest} from "../contracts.js";
+import type {BookConfig} from "../../models/book.js";
 
 interface LongformToolOptions {
+  readonly activeWork?: {readonly work:WorkManifest;readonly projectRoot:string};
   readonly actionPayload?: ActionPayload;
   readonly language?: "zh" | "en";
   readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
@@ -25,6 +29,8 @@ const BookCreateParams = Type.Object({
   language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
+  minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Lower end of an explicitly requested per-chapter range. Preserve it as a Work constraint."})),
+  maxChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Upper end of an explicitly requested per-chapter range. Preserve it as a Work constraint."})),
 });
 
 const FoundationRevisionParams = Type.Object({
@@ -35,6 +41,7 @@ const FoundationRevisionParams = Type.Object({
 const WriteChaptersParams = Type.Object({
   instruction: Type.String(),
   bookId: Type.Optional(Type.String()),
+  startChapterNumber: Type.Integer({ minimum: 1, description: "First chapter in the requested writing range. Use the author's target, or inspect current progress for a request to continue. Existing chapters require revision, not another append." }),
   chapterCount: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
 });
@@ -45,6 +52,7 @@ const ReviewChapterParams = Type.Object({
 });
 
 const ReviseChapterParams = Type.Object({
+  targetText:Type.Optional(Type.String({minLength:1,description:'For a localized paragraph or scene edit, first read the chapter and supply its exact unique source excerpt here, without display line-number prefixes. The host preserves all surrounding prose; the writer only replaces this selection.'})),
   instruction: Type.String(),
   bookId: Type.Optional(Type.String()),
   chapterNumber: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -102,31 +110,42 @@ export function createBookFoundationTool(
   return {
     name: "create_book",
     label: "Create long-form Work",
-    description: "Create one long-form Work foundation from the confirmed instruction.",
+    description: options.activeWork
+      ? "Initialize the current long-form Work's native book configuration and foundation. Preserve its Work ID; provide targetChapters and chapterWordCount from the user's request. An initialized book cannot be overwritten."
+      : "Create one long-form Work foundation from the confirmed instruction.",
     parameters: BookCreateParams,
     async execute(_toolCallId, params: Static<typeof BookCreateParams>, signal, onUpdate) {
         const payload = options.actionPayload?.createBook;
-        const title = payload?.title?.trim() || params.title?.trim();
+        const title = options.activeWork?.work.title || payload?.title?.trim() || params.title?.trim();
         if (!title) throw new Error("create_book requires title.");
-        const id = payload?.title
+        const id = options.activeWork ? resolveBookId("create_book",params.bookId,options.activeWork.work.id) : payload?.title
           ? deriveBookIdFromTitle(payload.title) || `book-${Date.now().toString(36)}`
           : params.bookId
             ? assertSafeBookId(params.bookId, "create_book.bookId")
             : deriveBookIdFromTitle(title) || `book-${Date.now().toString(36)}`;
-        const language = payload?.language ?? params.language ?? options.language ?? "zh";
+        let existing:BookConfig|undefined;
+        if(options.activeWork){
+          const state=new StateManager(options.activeWork.projectRoot);
+          if(await state.isCompleteBookDirectory(state.bookDir(id)))throw Object.assign(new Error("The current book is already initialized; use its foundation or chapter revision action."),{code:"BOOK_ALREADY_INITIALIZED"});
+          try{existing=await state.loadBookConfig(id);}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+        }
+        const language = existing?.language ?? (options.activeWork ? options.activeWork.work.language==="en"?"en":"zh" : payload?.language ?? params.language ?? options.language ?? "zh");
         const skills = activatedSkills(options, "architect");
         const now = new Date().toISOString();
         progress(onUpdate, `Creating foundation for "${id}"...`);
         const book = {
+          ...existing,
           id,
           title,
-          genre: payload?.genre ?? params.genre ?? "other",
-          platform: payload?.platform ?? params.platform ?? "other",
+          genre: payload?.genre ?? params.genre ?? existing?.genre ?? "other",
+          platform: payload?.platform ?? params.platform ?? existing?.platform ?? "other",
           language,
           status: "outlining",
-          targetChapters: payload?.targetChapters ?? params.targetChapters ?? 200,
-          chapterWordCount: payload?.chapterWordCount ?? params.chapterWordCount ?? defaultChapterLength(language),
-          createdAt: now,
+          targetChapters: payload?.targetChapters ?? params.targetChapters ?? existing?.targetChapters ?? 200,
+          chapterWordCount: payload?.chapterWordCount ?? params.chapterWordCount ?? existing?.chapterWordCount ?? defaultChapterLength(language),
+          minChapterLength:payload?.minChapterLength??params.minChapterLength??existing?.minChapterLength,
+          maxChapterLength:payload?.maxChapterLength??params.maxChapterLength??existing?.maxChapterLength,
+          createdAt: existing?.createdAt ?? options.activeWork?.work.createdAt ?? now,
           updatedAt: now,
         } as const;
         await runPipeline(pipeline, signal, options, () => (
@@ -169,19 +188,20 @@ export function createFoundationRevisionTool(
 
 export function createWriteChaptersTool(
   pipeline: PipelineRunner,
-  activeBookId: string,
+  activeBookId: string | null,
   options: LongformToolOptions = {},
 ): AgentTool<typeof WriteChaptersParams> {
   return {
     name: "write_chapters",
     label: "Write chapters",
-    description: "Write one or more consecutive chapters for the active Work.",
+    description: "Write a specific consecutive range of new chapters. startChapterNumber must match the next unwritten chapter; an existing or skipped range is rejected before generation. Inspect existing chapters for review, revision or export instead of resending an already completed writing range. This persists chapter artifacts and story state.",
     parameters: WriteChaptersParams,
     async execute(_toolCallId, params: Static<typeof WriteChaptersParams>, signal, onUpdate) {
         const bookId = resolveBookId("write_chapters", params.bookId, activeBookId);
         const count = params.chapterCount ?? 1;
         const skills = activatedSkills(options, "writer");
         const results = await runPipeline(pipeline, signal, options, () => pipeline.writeChapters(bookId, count, {
+          startChapterNumber: params.startChapterNumber,
           wordCount: params.chapterWordCount,
           externalContext: params.instruction,
           onChapterComplete(result, completed, total) {
@@ -190,11 +210,19 @@ export function createWriteChaptersTool(
         }));
         const first = results[0];
         const observations = results.flatMap((result) => result.review.observations);
+        const checked=results.filter(result=>result.delivery);
+        const delivery=checked.length?{
+          status:checked.some(result=>result.delivery!.status==="needs_revision")?"needs_revision":"checks_passed",
+          chapters:checked.map(result=>({chapterNumber:result.chapterNumber,...result.delivery})),
+        }:undefined;
         return textResult(`Completed ${results.length} chapter(s) for "${bookId}".`, {
           kind: results.length === 1 ? "chapter_written" : "chapters_written",
           bookId,
           requestedCount: count,
+          startChapterNumber: params.startChapterNumber,
+          endChapterNumber: params.startChapterNumber + count - 1,
           completedCount: results.length,
+          ...(delivery?{delivery}:{}),
           observations,
           skillIds: skills.map((skill) => skill.skill.id),
           ...(results.length === 1 && first
@@ -238,6 +266,8 @@ export function createReviewChapterTool(
           chapterNumber: review.chapterNumber,
           summary: review.summary,
           observations: review.observations,
+          ...(review.reviewedArtifact?{reviewedArtifact:review.reviewedArtifact}:{}),
+          ...(review.delivery?{delivery:review.delivery}:{}),
           skillIds: skills.map((skill) => skill.skill.id),
         });
     },
@@ -252,7 +282,7 @@ export function createReviseChapterTool(
   return {
     name: "revise_chapter",
     label: "Revise chapter",
-    description: "Revise one persisted chapter from the user's explicit instruction and current observations.",
+    description: "Revise one persisted chapter. For localized edits, read and bind targetText to keep every surrounding paragraph unchanged. Check the returned changedRegion before claiming the requested change is complete.",
     parameters: ReviseChapterParams,
     async execute(_toolCallId, params: Static<typeof ReviseChapterParams>, signal) {
         const bookId = resolveBookId("revise_chapter", params.bookId, activeBookId);
@@ -262,7 +292,7 @@ export function createReviseChapterTool(
           pipeline,
           signal,
           options,
-          () => pipeline.reviseDraft(bookId, params.chapterNumber, mode, params.instruction),
+          () => pipeline.reviseDraft(bookId, params.chapterNumber, mode, params.instruction,{targetText:params.targetText}),
         );
         return textResult(
           result.changed ? `Revised chapter ${result.chapterNumber}.` : `Chapter ${result.chapterNumber} was unchanged.`,
@@ -274,7 +304,9 @@ export function createReviseChapterTool(
             mode,
             wordCount: result.wordCount,
             changed: result.changed,
+            changedRegion:result.changedRegion,
             observations: result.observations,
+            ...(result.delivery?{delivery:result.delivery}:{}),
             skillIds: skills.map((skill) => skill.skill.id),
           },
         );

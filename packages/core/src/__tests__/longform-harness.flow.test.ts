@@ -1,7 +1,14 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {readFileSync} from 'node:fs';
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {createServer} from 'node:http';
+import {once} from 'node:events';
+import {ComposerAgent} from '../agents/composer.js';
+import {PipelineRunner} from '../pipeline/runner.js';
+import {createLLMClient} from '../llm/provider.js';
+import {loadRuntimeStateSnapshot} from '../state/runtime-state-store.js';
 import { WriterAgent, type WriteChapterOutput } from "../agents/writer.js";
 import { persistChapterArtifacts } from "../pipeline/chapter-persistence.js";
 import { reviewChapterDraft } from "../pipeline/chapter-review.js";
@@ -11,20 +18,138 @@ import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harne
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
 import { createInitialRuntimeState } from "../state/runtime-state-store.js";
+import {loadChaptersFromPath} from '../agent/chapter-import-source.js';
+import {createWriteChaptersTool} from '../harness/tools/longform-production.js';
+import {actionFailureFacts} from '../harness/action-observation.js';
+import {buildExportArtifact} from '../interaction/export-artifact.js';
+import {ContinuityAuditor} from '../agents/continuity.js';
+import {StateValidatorAgent} from '../agents/state-validator.js';
+import {savePersistedPlan} from '../pipeline/persisted-governed-plan.js';
 
 describe("long-form harness mini-flow", () => {
   const roots: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  it("persists an authorized chapter with review observations instead of a quality status", async () => {
+  it('publishes each completed chapter before a later chapter in the same batch fails',async()=>{
+    const root=await tempRoot(),id='batch',state=new StateManager(root);
+    await saveWorkManifest(root,createWorkManifest({id,title:'Batch',profileId:'longform-novel',language:'en'}));
+    const bookDir=state.bookDir(id),now=new Date().toISOString();
+    await state.saveBookConfig(id,{id,title:'Batch',genre:'general',platform:'other',status:'active',targetChapters:2,chapterWordCount:10,language:'en',createdAt:now,updatedAt:now});
+    await mkdir(join(bookDir,'story/outline'),{recursive:true});
+    for(const [name,content] of Object.entries({'outline/story_frame.md':'The witness leaves.','outline/volume_map.md':'Two scenes.','book_rules.md':'# Rules\nPreserve facts.','book_rules.json':JSON.stringify({version:'2',prohibitions:[],enableFullCastTracking:false,allowedDeviations:[]})}))await writeFile(join(bookDir,'story',name),content);
+    await createInitialRuntimeState({bookDir,language:'en'});
+    await state.saveChapterIndex(id,[]);
+    await mkdir(join(bookDir,'story/runtime'),{recursive:true});
+    for(const chapter of [1,2])await savePersistedPlan(bookDir,{intent:{chapter,goal:'Continue the departure.'},memo:{chapter,goal:'Continue the departure.',body:'Continue the departure.',threadRefs:[]},intentMarkdown:'Continue the departure.',runtimePath:`runtime/chapter-${chapter}.intent.md`,plannerInputs:[]});
+    const staged=await syncWorkSourceArtifacts({projectRoot:root,workId:id,accept:false,writes:[{relativePath:`works/${id}/source/notes.md`,content:'An unrelated candidate.'}]});
+    const note=staged.artifacts.find(a=>a.revisions.some(r=>r.path==='source/notes.md'))!;
+    // Only model decisions are fixtures; chapter persistence, state, batch
+    // execution, the Work registry and its reader remain real modules.
+    vi.spyOn(WriterAgent.prototype,'writeChapter').mockResolvedValueOnce(chapterOutput(1))
+      .mockRejectedValueOnce(Object.assign(new Error('Second chapter provider unavailable'),{code:'MODEL_UNAVAILABLE'}));
+    vi.spyOn(ContinuityAuditor.prototype,'auditChapter').mockResolvedValue({summary:'',observations:[]});
+    vi.spyOn(StateValidatorAgent.prototype,'validate').mockResolvedValue({consistent:true,reconciliationRequired:false,observations:[]});
+    const client=createLLMClient({service:'custom',provider:'openai',configSource:'studio',model:'fixture',apiKey:'fixture',baseUrl:'http://127.0.0.1:1/v1',apiFormat:'chat',stream:false,thinkingBudget:0,temperature:0});
+    const pipeline=new PipelineRunner({projectRoot:root,client,model:'fixture'});
+    const visibleAtCompletion:number[]=[];
+    await expect(pipeline.writeChapters(id,2,{startChapterNumber:1,onChapterComplete:()=>{
+      const work: Awaited<ReturnType<typeof loadWorkManifest>>=JSON.parse(readFileSync(join(root,'works',id,'work.json'),'utf8'));
+      visibleAtCompletion.push(work.artifacts.filter(a=>a.kind==='chapter'&&a.currentRevisionId).length);
+    }})).rejects.toMatchObject({code:'MODEL_UNAVAILABLE'});
+    const work=await loadWorkManifest(root,id);
+    expect(visibleAtCompletion).toEqual([1]);
+    expect(work.artifacts.filter(a=>a.kind==='chapter'&&a.currentRevisionId)).toHaveLength(1);
+    expect(work.artifacts.find(a=>a.id===note.id)?.currentRevisionId).toBeNull();
+    expect((await state.loadChapterIndex(id)).map(c=>c.number)).toEqual([1]);
+    expect((await loadRuntimeStateSnapshot(bookDir)).manifest.lastAppliedChapter).toBe(1);
+    expect(await state.getNextChapterNumber(id)).toBe(2);
+  },20000);
+
+  it('reviews and replays an imported chapter without replanning its story or advancing its state twice',async()=>{
+    const root=await tempRoot();
+    const state=new StateManager(root),bookDir=state.bookDir('replay');
+    const now=new Date().toISOString();
+    await saveWorkManifest(root,createWorkManifest({id:'replay',title:'Replay',profileId:'longform-novel',language:'en'}));
+    await state.saveBookConfig('replay',{id:'replay',title:'Replay',genre:'general',platform:'other',status:'active',targetChapters:3,chapterWordCount:1000,language:'en',createdAt:now,updatedAt:now});
+    await mkdir(join(bookDir,'story/outline'),{recursive:true});
+    await writeFile(join(bookDir,'story/outline/story_frame.md'),'A witness leaves.');
+    await writeFile(join(bookDir,'story/outline/volume_map.md'),'One scene.');
+    await writeFile(join(bookDir,'story/book_rules.md'),'# Rules\n');
+    await writeFile(join(bookDir,'story/book_rules.json'),JSON.stringify({version:'2',prohibitions:[],enableFullCastTracking:false,allowedDeviations:[]}));
+    await createInitialRuntimeState({bookDir,language:'en'});
+    await state.saveChapterIndex('replay',[]);
+    await state.snapshotState('replay',0);
+    const planPath=join(bookDir,'story/runtime/chapter-0001.intent.md');
+    const plan=Buffer.from('Original scene plan.');
+    await mkdir(join(bookDir,'story/runtime'),{recursive:true});await writeFile(planPath,plan);
+    const composer=vi.spyOn(ComposerAgent.prototype,'selectTaskContext').mockResolvedValue({chapter:1,selectedContext:[]});
+    let calls=0;
+    const server=createServer(async(req,res)=>{
+      const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const name=body.tools[0].function.name;
+      const delta=chapterOutput(1).runtimeStateDelta!;
+      const {chapter:_chapter,...summary}=delta.chapterSummary!;
+      const result=name==='submit_chapter_review'?{summary:'Reviewed the chapter.',observations:[]}:{postSettlement:'The witness leaves.',factOps:delta.factOps,hookOps:delta.hookOps,newHookCandidates:[],chapterSummary:summary};
+      calls++;res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:'settle-'+calls,type:'function',function:{name,arguments:JSON.stringify(result)}}]}}]}));
+    });
+    server.listen(0,'127.0.0.1');await once(server,'listening');
+    try{
+      const client=createLLMClient({service:'custom',provider:'openai',configSource:'studio',model:'fixture',apiKey:'fixture',baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`,apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0});
+      const pipeline=new PipelineRunner({projectRoot:root,client,model:'fixture'});
+      const input={bookId:'replay',chapters:[{title:'Departure',content:chapterOutput(1).content}],resumeFrom:1};
+      await expect(pipeline.importChapters({...input,chapters:[{title:'Empty boundary',content:' \n'}]}))
+        .rejects.toMatchObject({code:'CHAPTER_IMPORT_EMPTY_CONTENT',emptyChapterNumbers:[1]});
+      expect(calls).toBe(0);
+      expect(await state.loadChapterIndex('replay')).toEqual([]);
+      const staged=await syncWorkSourceArtifacts({projectRoot:root,workId:'replay',accept:false,writes:[{relativePath:'works/replay/source/notes.md',content:'An unrelated candidate.'}]});
+      const notes=staged.artifacts.find(a=>a.revisions.some(r=>r.path==='source/notes.md'))!;
+      await pipeline.importChapters(input);
+      const imported=await loadWorkManifest(root,'replay');
+      expect(imported.artifacts.find(a=>a.revisions.some(r=>r.path==='source/chapters/0001_Departure.md'))?.currentRevisionId).toBeTruthy();
+      expect(imported.artifacts.find(a=>a.id===notes.id)?.currentRevisionId).toBeNull();
+      const first=await loadRuntimeStateSnapshot(bookDir);
+      const source=await readFile(join(bookDir,'chapters/0001_Departure.md'));
+      // Replaying the original requested range must not silently append later
+      // chapters. Exercise the actual tool, lock, and persisted progress boundary.
+      const rangeFailure=await createWriteChaptersTool(pipeline,'replay').execute('retry-range',{
+        startChapterNumber:1,chapterCount:2,instruction:'Complete the first two chapters.',
+      }).catch(error=>actionFailureFacts(error));
+      expect(rangeFailure).toMatchObject({
+        code:'CHAPTER_WRITE_RANGE_CONFLICT',
+        recovery:{action:'workspace__inspect_work',parameters:{workId:'replay'},nextChapterNumber:2,
+          requestedRange:{startChapterNumber:1,endChapterNumber:2}},
+      });
+      expect(calls).toBe(1);
+      expect(await readFile(join(bookDir,'chapters/0001_Departure.md'))).toEqual(source);
+      expect((await state.loadChapterIndex('replay')).map(c=>c.number)).toEqual([1]);
+      await pipeline.reviewChapter('replay',1);
+      expect(await readFile(planPath)).toEqual(plan);
+      await pipeline.importChapters(input);
+      expect((await loadWorkManifest(root,'replay')).artifacts.find(a=>a.id===notes.id)?.currentRevisionId).toBeNull();
+      expect(await loadRuntimeStateSnapshot(bookDir)).toEqual(first);
+      expect(await readFile(join(bookDir,'chapters/0001_Departure.md'))).toEqual(source);
+      expect((await state.loadChapterIndex('replay')).map(c=>c.number)).toEqual([1]);
+      expect(await readFile(planPath)).toEqual(plan);
+      expect(composer.mock.calls.map(([request])=>request.chapterNumber)).toEqual([1,1,1]);
+      expect(calls).toBe(3);
+    }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+  },20000);
+
+  it.each([
+    {language:'en' as const, wrappers:'# Chapter 1: Chapter 1\n\nCHAPTER I. Working title\n\n'},
+    {language:'zh' as const, wrappers:'# 第1章 Chapter 1\n\n## 第一章 初稿标题\n\n'},
+  ])("persists and round-trips a chapter with review observations and $language heading variants", async ({language,wrappers}) => {
     const root = await tempRoot();
     const bookDir = join(root, "works", "novel", "source");
     await mkdir(join(bookDir, "story"), { recursive: true });
     const state = new StateManager(root);
     const output = chapterOutput(1);
+    const prose=output.content;
+    const submitted={...output,content:wrappers+prose};
     const writer = new WriterAgent({ client: {} as never, model: "test", projectRoot: root });
 
     await persistChapterArtifacts({
@@ -40,7 +165,7 @@ describe("long-form harness mini-flow", () => {
       },
       finalWordCount: output.wordCount,
       loadChapterIndex: () => state.loadChapterIndex("novel"),
-      saveChapter: (index) => writer.saveChapter(bookDir, output, "en", index),
+      saveChapter: (index) => writer.saveChapter(bookDir, submitted, language, index),
       markBookActiveIfNeeded: async () => undefined,
     });
 
@@ -57,6 +182,17 @@ describe("long-form harness mini-flow", () => {
       hasLegacyStatus: false,
       chapterFiles: 1,
     });
+    const chapterFile=(await readdir(join(bookDir,'chapters'))).find(file=>file.endsWith('.md'))!;
+    expect(await loadChaptersFromPath(join(bookDir,'chapters',chapterFile))).toEqual([{title:output.title,content:prose}]);
+    // Export also handles already persisted documents from older writers. It
+    // normalizes the delivery copy while preserving the source bytes.
+    const legacy=wrappers+prose;
+    await writeFile(join(bookDir,'chapters',chapterFile),legacy);
+    expect(await loadChaptersFromPath(join(bookDir,'chapters',chapterFile))).toEqual([{title:output.title,content:prose}]);
+    const exported=await buildExportArtifact({bookDir:()=>bookDir,loadBookConfig:async()=>({title:'Novel',language}),loadChapterIndex:()=>state.loadChapterIndex('novel')},'novel',{format:'md'});
+    const exportPath=join(root,'roundtrip.md');await writeFile(exportPath,exported.payload);
+    expect(await loadChaptersFromPath(exportPath)).toEqual([{title:output.title,content:prose}]);
+    expect(await readFile(join(bookDir,'chapters',chapterFile),'utf8')).toBe(legacy);
   });
 
   it("keeps the chapter persistable when state review is unavailable", async () => {

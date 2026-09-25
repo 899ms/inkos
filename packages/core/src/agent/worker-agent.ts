@@ -14,6 +14,7 @@ import type { Static, TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
   chatCompletion,
+  createStreamMonitor,
   type LLMClient,
   type LLMMessage,
   type LLMResponse,
@@ -21,6 +22,9 @@ import {
 } from "../llm/provider.js";
 import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
 import { toPiApi } from "../llm/api-format.js";
+import { recordExecutionEvidence } from "../harness/execution-evidence.js";
+import {decodeStructuredFields} from './structured-arguments.js';
+import { preserveToolArgumentTypes, toolArgumentIssues } from "./tool-arguments.js";
 
 export interface WorkerAgentOptions {
   readonly temperature?: number;
@@ -37,7 +41,7 @@ export interface WorkerResultTool<TParameters extends TSchema> {
   readonly label: string;
   readonly description: string;
   readonly parameters: TParameters;
-  readonly validate?: (parameters: Static<TParameters>) => Static<TParameters>;
+  readonly validate?: (parameters: Static<TParameters>) => Static<TParameters> | Promise<Static<TParameters>>;
 }
 
 const EMPTY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -280,7 +284,9 @@ export async function runWorkerAgent(
     );
     if (!final) throw new Error("Worker Agent completed without an assistant response");
     if (final.stopReason === "error" || final.stopReason === "aborted") {
-      throw new Error(final.errorMessage ?? `Worker Agent stopped: ${final.stopReason}`);
+      throw Object.assign(new Error(final.errorMessage ?? `Worker Agent stopped: ${final.stopReason}`), {
+        code: (final as AssistantMessage & { errorCode?: string }).errorCode ?? "WORKER_MODEL_ERROR",
+      });
     }
     return {
       content: final.content
@@ -325,12 +331,39 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   }
 
   let submitted: Static<TParameters> | undefined;
+  let modelTurns = 0;
+  let resultAttemptsExhausted = false;
+  let lastValidationError: (Error & {code?:string}) | undefined;
+  const maxResultTurns = 3;
   const { validate, ...toolDefinition } = resultTool;
   const tool: AgentTool<TParameters, Static<TParameters>> = {
     ...toolDefinition,
+    prepareArguments: (params) => {
+      const decodedPaths:string[]=[];
+      params=decodeStructuredFields(resultTool.parameters,params,decodedPaths) as typeof params;
+      if(decodedPaths.length)recordExecutionEvidence('worker-arguments-decoded',{resultTool:resultTool.name,paths:decodedPaths});
+      const issues = toolArgumentIssues(resultTool.parameters, params);
+      if (issues.length) {
+        const failure={code:'WORKER_SCHEMA_INVALID',resultTool:resultTool.name,issues};
+        recordExecutionEvidence('worker-result-invalid',failure);
+        lastValidationError=undefined;
+        throw new Error(JSON.stringify(failure));
+      }
+      return params as Static<TParameters>;
+    },
     execute: async (_toolCallId, params): Promise<AgentToolResult<Static<TParameters>>> => {
       const parsed = Value.Parse(resultTool.parameters, params) as Static<TParameters>;
-      submitted = validate ? validate(parsed) : parsed;
+      try {
+        submitted = validate ? await validate(parsed) : parsed;
+      } catch(error) {
+        lastValidationError=error instanceof Error?error:new Error(String(error));
+        recordExecutionEvidence('worker-result-invalid',{
+          code:lastValidationError.code??'WORKER_DOMAIN_INVALID',
+          resultTool:resultTool.name,
+          message:lastValidationError.message,
+        });
+        throw error;
+      }
       return {
         content: [{ type: "text", text: "Structured result received by the host." }],
         details: submitted,
@@ -339,34 +372,79 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   };
   const agent = new Agent({
     initialState: { model, systemPrompt, tools: [tool], messages: [] },
+    beforeToolCall: preserveToolArgumentTypes,
     toolExecution: "sequential",
     streamFn: (streamModel, context, streamOptions) => {
       if (submitted) return localStopStream(streamModel);
+      if (modelTurns >= maxResultTurns) {
+        resultAttemptsExhausted = true;
+        return localStopStream(streamModel);
+      }
+      modelTurns++;
       const resultOptions = {
           ...streamOptions,
           ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
           ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
           signal: combineSignals(streamOptions?.signal, options.signal),
-          toolChoice: { type: "function", function: { name: resultTool.name } },
+          // There is exactly one result tool, so required selects it without a
+          // provider-specific named-function envelope.
+          toolChoice: "required" as const,
+          onPayload: (payload: unknown) => payload && typeof payload === "object" ? { ...client.defaults.extra, ...payload } : payload,
         };
       return client.stream === false
         ? guardedPiNonStreaming(streamModel, context, resultOptions, client.proxyUrl)
-        : guardedPiStream(streamModel, context, resultOptions);
+        : guardedPiStream(streamModel, context, resultOptions, 1, {firstEventTimeoutMs:300_000,idleTimeoutMs:300_000});
     },
     getApiKey: () => client._apiKey,
   });
   const abortAgent = () => agent.abort();
   options.signal?.addEventListener("abort", abortAgent, { once: true });
+  const monitor = createStreamMonitor(progress => {
+    options.onStreamProgress?.(progress);
+    recordExecutionEvidence("model-stream-progress", { resultTool: resultTool.name, ...progress });
+  });
+  const unsubscribeProgress = agent.subscribe(event => {
+    if (event.type !== "message_update") return;
+    const update = event.assistantMessageEvent;
+    if (update.type === "text_delta" || update.type === "toolcall_delta") monitor.onChunk(update.delta);
+  });
 
   try {
     await agent.prompt(promptMessages);
     options.signal?.throwIfAborted();
+    if (resultAttemptsExhausted) throw Object.assign(new Error(lastValidationError?.message??'Structured result remained invalid after bounded correction attempts'), {
+      code:lastValidationError?.code??'WORKER_RESULT_INVALID',resultTool:resultTool.name,attempts:modelTurns,
+      lastToolError:[...agent.state.messages].reverse().find(message=>message.role==='toolResult'&&message.isError),
+    });
+    const initialResult = agent.state.messages.at(-1);
+    if (!submitted && initialResult?.role === "assistant" && initialResult.stopReason === "length") {
+      throw Object.assign(new Error("Worker output reached the configured model output limit"), {
+        code: "MODEL_OUTPUT_LIMIT", resultTool: resultTool.name, stopReason: initialResult.stopReason,
+      });
+    }
+    if (!submitted && initialResult?.role === "assistant" && initialResult.stopReason === "error") {
+      throw Object.assign(new Error(initialResult.errorMessage ?? "Worker model request failed"), {
+        code: (initialResult as AssistantMessage & { errorCode?: string }).errorCode ?? "WORKER_MODEL_ERROR",
+        resultTool: resultTool.name, stopReason: initialResult.stopReason, attempts: modelTurns,
+      });
+    }
     if (!submitted) {
       await agent.prompt(`You did not call ${resultTool.name}. Call it now with the complete result.`);
       options.signal?.throwIfAborted();
     }
     if (!submitted) {
-      throw new Error(`Worker Agent completed without calling ${resultTool.name}`);
+      const last = [...agent.state.messages].reverse().find(
+        (message): message is AssistantMessage => message.role === "assistant",
+      );
+      throw Object.assign(new Error(last?.errorMessage || `Worker Agent completed without calling ${resultTool.name}`), {
+        code: (last as (AssistantMessage & { errorCode?: string }) | undefined)?.errorCode
+          ?? (resultAttemptsExhausted ? "WORKER_RESULT_INVALID" : last?.stopReason === "length" ? "MODEL_OUTPUT_LIMIT" : "WORKER_RESULT_MISSING"),
+        attempts: modelTurns,
+        resultTool: resultTool.name,
+        stopReason: last?.stopReason,
+        lastToolError: [...agent.state.messages].reverse().find((message)=>message.role==="toolResult"&&message.isError),
+        lastAssistantText: last?.content.filter((part)=>part.type==="text").map((part)=>part.text).join(""),
+      });
     }
     const usageMessage = [...agent.state.messages].reverse().find(
       (message): message is AssistantMessage => message.role === "assistant" && message.usage.totalTokens > 0,
@@ -380,6 +458,8 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
     }
     return submitted;
   } finally {
+    unsubscribeProgress();
+    monitor.stop();
     options.signal?.removeEventListener("abort", abortAgent);
   }
 }

@@ -19,6 +19,7 @@ const BUILTIN_SKILL_IDS = [
   "inkos-long-market-research",
   "inkos-long-story-analysis",
   "inkos-long-writing",
+  "inkos-play-illustration",
   "inkos-play-world",
   "inkos-script-writing",
   "inkos-short-market-research",

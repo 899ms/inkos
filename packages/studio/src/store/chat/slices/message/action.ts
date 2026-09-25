@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import { nanoid } from "nanoid";
+import { subscribeStudioEvents } from "../../../../lib/studio-events";
 import type {
   AgentResponse,
   ChatAttachmentPayload,
@@ -9,6 +10,7 @@ import type {
   SendMessageOptions,
   SessionResponse,
   SessionSummary,
+  ToolExecution,
 } from "../../types";
 import { fetchJson } from "../../../../hooks/use-api";
 import { tr } from "../../../../lib/app-language";
@@ -78,16 +80,32 @@ function formatUserMessageForDisplay(text: string, attachments: ReadonlyArray<Ch
 }
 
 export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions> = (set, get) => {
-  const abortPreviousChatRound = (nextSessionId: string | null): void => {
-    const previousSessionId = get().activeSessionId;
-    if (!previousSessionId || previousSessionId === nextSessionId) return;
-    if (!get().sessions[previousSessionId]?.isChatStreaming) return;
-    void get().abortSession(previousSessionId, "chat");
+  const applyResponseSession = (sessionId: string, metadata: AgentResponse["session"], requestWorkId: string | null | undefined) => {
+    if (!metadata) return;
+    const previous = get().sessions[sessionId];
+    if (!previous) return;
+    const bookId = metadata.activeBookId !== undefined ? metadata.activeBookId
+      : metadata.bookId !== undefined ? metadata.bookId : previous.bookId;
+    const workId = metadata.workId === undefined ? previous.workId : metadata.workId;
+    set(state => ({
+      sessions: updateSession(state.sessions, sessionId, () => ({
+        bookId, workId, sessionKind: metadata.sessionKind ?? previous.sessionKind,
+        profileId: metadata.profileId ?? previous.profileId,
+        playMode: metadata.playMode ?? previous.playMode, title: metadata.title ?? previous.title,
+        ...(workId && metadata.profileId && workId !== requestWorkId ? {
+          pendingWorkTarget: { workId, profileId: metadata.profileId, fromWorkId: requestWorkId ?? null },
+        } : {}),
+      })),
+      sessionIdsByBook: {
+        ...state.sessionIdsByBook,
+        [bookKey(previous.bookId)]: (state.sessionIdsByBook[bookKey(previous.bookId)] ?? []).filter(id => id !== sessionId),
+        [bookKey(bookId)]: mergeSessionIds(state.sessionIdsByBook[bookKey(bookId)], [sessionId]),
+      },
+    }));
   };
 
   return {
     activateSession: (sessionId) => {
-      abortPreviousChatRound(sessionId);
       set({ activeSessionId: sessionId });
     },
 
@@ -170,7 +188,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         const messages = hasActiveOrFailedTool
           ? session.messages.map((message) => (
               message.timestamp === streamTs && message.role === "assistant"
-                ? markRunningToolsFailed([message], errorMsg)[0]!
+                ? markRunningToolsFailed([message], errorMsg, Date.now(), execution => !execution.background)[0]!
                 : message
             ))
           : [
@@ -212,7 +230,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     selectedModel: model,
     selectedService: service,
     ...(state.activeSessionId
-      ? { sessions: updateSession(state.sessions, state.activeSessionId, () => ({ modelOverride: model })) }
+      ? { sessions: updateSession(state.sessions, state.activeSessionId, () => ({ modelOverride: model, serviceOverride: service })) }
       : {}),
   })),
 
@@ -240,7 +258,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
   },
 
   createSession: async (bookId, sessionKind, playMode, binding) => {
-    abortPreviousChatRound(null);
+    const activeAtStart=get().activeSessionId;
     const data = await fetchJson<SessionResponse>("/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -249,6 +267,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         sessionKind,
         playMode,
         ...(get().selectedModel ? { modelOverride: get().selectedModel } : {}),
+        ...(get().selectedService ? { serviceOverride: get().selectedService } : {}),
         ...binding,
       }),
     });
@@ -267,6 +286,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         proposalAction: data.session?.proposalAction ?? binding?.proposalAction,
         playMode: data.session?.playMode,
         modelOverride: data.session?.modelOverride ?? get().selectedModel ?? undefined,
+        serviceOverride: data.session?.serviceOverride ?? get().selectedService ?? undefined,
         title: data.session?.title ?? null,
       });
       return {
@@ -281,7 +301,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
             [sessionId],
           ),
         },
-        activeSessionId: sessionId,
+        activeSessionId: state.activeSessionId===activeAtStart?sessionId:state.activeSessionId,
       };
     });
 
@@ -289,7 +309,6 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
   },
 
   createDraftSession: (bookId, sessionKind, playMode, binding) => {
-    abortPreviousChatRound(null);
     // 前端生成 sessionId（与后端 createBookSession 同格式），暂不持久化到磁盘，
     // 也暂不写入 sessionIdsByBook——侧边栏看不到这条 draft。
     // 发送第一条消息时 sendMessage 会调 POST /sessions { sessionId, bookId } 落盘
@@ -373,10 +392,20 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
   },
 
   abortSession: async (sessionId, scope = "all") => {
+    const chatOnly = scope === "chat";
+    try {
+      await fetchJson(`/sessions/${sessionId}/abort${chatOnly ? "?scope=chat" : ""}`, {
+        method: "POST",
+      });
+    } catch (error) {
+      set(state => ({ sessions: updateSession(state.sessions, sessionId, () => ({
+        lastError: error instanceof Error ? error.message : String(error),
+      })) }));
+      return;
+    }
     const session = get().sessions[sessionId];
     const stoppedAt = Date.now();
     const stoppedMessage = tr("已由用户停止", "Stopped by user");
-    const chatOnly = scope === "chat";
     const messages = markRunningToolsFailed(
       session?.messages ?? [],
       stoppedMessage,
@@ -389,43 +418,55 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       sessions: updateSession(state.sessions, sessionId, (runtime) => ({
         isStreaming: keepProductionStream,
         isChatStreaming: false,
+        detachedChatRequestId: undefined,
+        lastFailedSend: undefined,
         stream: keepProductionStream ? runtime.stream : null,
         lastError: null,
         messages,
       })),
     }));
-    try {
-      await fetchJson(`/sessions/${sessionId}/abort${chatOnly ? "?scope=chat" : ""}`, {
-        method: "POST",
-      });
-    } catch (error) {
-      get().addErrorMessage(sessionId, error instanceof Error ? error.message : String(error));
-    }
   },
 
-  loadSessionDetail: async (sessionId) => {
+  loadSessionDetail: async (sessionId, reconcile = false, snapshot) => {
     // 草稿会话：磁盘上还没有文件，直接跳过远端拉取。
     const existing = get().sessions[sessionId];
-    if (existing?.isDraft) return;
-    if (existing?.isStreaming && existing.stream) return;
+    if (existing?.isDraft) return false;
+    if (!reconcile && existing?.isStreaming && existing.stream) return false;
 
     try {
-      const data = await fetchJson<SessionResponse>(`/sessions/${sessionId}`);
+      const data = snapshot ?? await fetchJson<SessionResponse>(`/sessions/${sessionId}`);
+      const current = get().sessions[sessionId];
+      if (current?.isChatStreaming && current.stream !== existing?.stream) return false;
       const detail = data.session;
-      if (!detail?.sessionId) return;
+      if (!detail?.sessionId) return false;
       const detailSessionId = detail.sessionId;
       const persistedMessages = detail.messages ? deserializeMessages(detail.messages) : [];
       const task = data.task;
       const taskRunning = task?.execution.status === "running" || task?.execution.status === "processing";
+      const chatRunning = data.chatRequest?.status === "running";
+      const isRunning = taskRunning || chatRunning;
       let restoredMessages: ReadonlyArray<ReturnType<typeof deserializeMessages>[number]> = persistedMessages;
       if (task) restoredMessages = mergeTaskExecution(restoredMessages, task.execution);
+      for (const execution of data.chatRequest?.toolExecutions ?? []) {
+        restoredMessages = mergeToolExecution(restoredMessages, execution);
+      }
+      if (!isRunning && data.chatRequest !== undefined) restoredMessages = markRunningToolsFailed(
+        restoredMessages, tr("运行已中断，请从已保存结果继续。", "Execution stopped. Continue from the saved results."), Date.now(),
+      );
+      const failedRequest = data.chatRequest?.status === "failed" ? data.chatRequest : undefined;
+      const failureMessage = failedRequest ? failedRequest.error?.message
+        ?? tr("上次请求未完成，请重试或从已保存结果继续。", "The previous request failed. Retry or continue from the saved results.") : undefined;
+      const failureTimestamp = failedRequest?.completedAt ?? failedRequest?.startedAt;
+      if (failureMessage && failureTimestamp !== undefined) restoredMessages = [...restoredMessages, {
+        role: "assistant", kind: "error", content: failureMessage, timestamp: failureTimestamp,
+      }];
       const messages = restoredMessages;
       const restoredResolutions = deriveResolvedProposals(messages);
 
       set((state) => {
         const runtime = state.sessions[detailSessionId];
-        const nextBookId = detail.bookId ?? runtime?.bookId ?? null;
-        const baseMessages = runtime?.messages.length ? runtime.messages : messages;
+        const nextBookId = detail.bookId === undefined ? runtime?.bookId ?? null : detail.bookId;
+        const baseMessages = !reconcile && runtime?.messages.length && !failedRequest ? runtime.messages : messages;
         const nextMessages = task ? mergeTaskExecution(baseMessages, task.execution) : baseMessages;
         return {
           sessions: {
@@ -449,9 +490,18 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
               proposalAction: detail.proposalAction ?? runtime?.proposalAction,
               playMode: detail.playMode ?? runtime?.playMode,
               modelOverride: detail.modelOverride ?? runtime?.modelOverride,
+              serviceOverride: detail.serviceOverride ?? runtime?.serviceOverride,
               title: detail.title ?? runtime?.title ?? null,
               messages: nextMessages,
-              isStreaming: taskRunning,
+              isStreaming: isRunning,
+              isChatStreaming: chatRunning,
+              detachedChatRequestId: chatRunning ? data.chatRequest!.requestId : undefined,
+              ...(failedRequest ? {
+                lastFailedSend: failedRequest.retry ?? runtime?.lastFailedSend,
+                lastError: failureMessage,
+              } : {}),
+              ...(data.chatRequest?.status === "completed" || data.chatRequest?.status === "cancelled"
+                ? { lastFailedSend: undefined, lastError: null } : {}),
             },
           },
           sessionIdsByBook: {
@@ -468,23 +518,29 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         };
       });
 
-      if (taskRunning && task) {
+      if (isRunning) {
         const current = get().sessions[detailSessionId];
-        current?.stream?.close();
-        const streamEs = new EventSource(`/api/v1/events?sessionId=${encodeURIComponent(detailSessionId)}`);
+        if (current?.stream) return true;
+        const streamEs = subscribeStudioEvents(`/api/v1/events?sessionId=${encodeURIComponent(detailSessionId)}`);
         set((state) => ({
           sessions: updateSession(state.sessions, detailSessionId, () => ({ stream: streamEs, isStreaming: true })),
         }));
         attachSessionStreamListeners({
           sessionId: detailSessionId,
-          streamTs: task.execution.startedAt,
+          streamTs: data.chatRequest?.startedAt ?? task!.execution.startedAt,
+          sourceRequestId: data.chatRequest?.requestId,
           streamEs,
           set,
           get,
         });
+      } else if (reconcile) {
+        get().sessions[detailSessionId]?.stream?.close();
+        set(state => ({ sessions: updateSession(state.sessions, detailSessionId, () => ({ stream: null })) }));
       }
+      return true;
     } catch {
-      // ignore
+      // Retain the server-owned round while connectivity is unavailable.
+      return false;
     }
   },
 
@@ -495,6 +551,12 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     // 只挡"聊天轮流式中"：后台生产任务运行期间（isStreaming=true 但
     // isChatStreaming=false）允许继续发消息，聊天与任务并行。
     if ((!trimmed && attachments.length === 0) || !session || session.isChatStreaming) return;
+    const boundWorkId = session.workId ?? session.bookId;
+    const requestedWorkIds = [options?.activeBookId, options?.workId].filter(Boolean);
+    if (boundWorkId && requestedWorkIds.some(id => id !== boundWorkId)) {
+      get().addErrorMessage(sessionId, tr("作品切换尚未完成，请等待当前作品会话加载后重试。", "The work session is still switching. Wait for the selected work to load and retry."));
+      return;
+    }
     const userInstruction = trimmed || tr("请阅读我上传的文件。", "Please read the files I uploaded.");
     const activeBookId = options?.activeBookId ?? session.bookId ?? undefined;
     const sessionKind: ChatSessionKind = options?.sessionKind
@@ -508,13 +570,14 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     // 确认式生产任务的发送轮不是"聊天轮"：请求会挂起到任务结束，
     // 期间用户仍可继续聊天，所以不置 isChatStreaming。
     const isProductionTaskSend = isConfirmedProductionSend(actionSource, options?.requestedIntent);
+    let sourceRequestId: string | undefined;
     // 聊天轮失败时记录原样发送参数（text + options），供"重试"按钮一键重发。
     // 生产任务轮不记录：任务失败由任务卡自己展示，重试按钮只管聊天轮。
     const rememberFailedSend = () => {
       if (isProductionTaskSend) return;
       set((state) => ({
         sessions: updateSession(state.sessions, sessionId, () => ({
-          lastFailedSend: options ? { text, options } : { text },
+          lastFailedSend: { text, options: { ...options, ...(sourceRequestId ? {retryOfRequestId:sourceRequestId} : {}) } },
         })),
       }));
     };
@@ -560,7 +623,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     const requestedSkills = mergeSkillIds(skillDirectives.requestedSkills, options?.requestedSkills);
     const disabledSkills = mergeSkillIds([], options?.disabledSkills);
     const streamTs = Date.now() + 1;
-    const sourceRequestId = nanoid();
+    sourceRequestId = nanoid();
 
     set((state) => ({
       input: "",
@@ -572,6 +635,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         // 新一轮发送开始即清除上一条失败记录：本轮失败会重新记录，
         // 本轮成功则说明对话已继续，旧的重试入口不再保留。
         lastFailedSend: undefined,
+        detachedChatRequestId: undefined,
       })),
     }));
 
@@ -580,12 +644,13 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     // 运行中的任务卡不受影响——新连接建立时服务端会重放 running 快照，
     // 任务日志（log）与收尾（tool:end）都按 execution id 匹配，与 streamTs 无关。
     session.stream?.close();
-    const streamEs = new EventSource(`/api/v1/events?sessionId=${encodeURIComponent(sessionId)}`);
+    const streamEs = subscribeStudioEvents(`/api/v1/events?sessionId=${encodeURIComponent(sessionId)}`);
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, () => ({ stream: streamEs })),
     }));
     attachSessionStreamListeners({ sessionId, streamTs, sourceRequestId, streamEs, set, get });
 
+    let failureExecutions: ReadonlyArray<ToolExecution> = [];
     try {
       const data = await fetchJson<AgentResponse>("/agent", {
         method: "POST",
@@ -605,6 +670,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           attachments,
           sessionId,
           clientRequestId: sourceRequestId,
+          retryOfRequestId: options?.retryOfRequestId,
           model: get().selectedModel ?? undefined,
           service: get().selectedService ?? undefined,
         }),
@@ -613,34 +679,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       const finalContent = data.details?.draftRaw || data.response || "";
       const toolCall = data.details?.toolCall ?? undefined;
       const responseToolExecutions = data.details?.toolExecutions ?? [];
-      const responseBookId = data.session?.activeBookId ?? data.session?.bookId;
-      const responseSessionKind = data.session?.sessionKind;
-      const responseProfileId = data.session?.profileId;
-      const responseWorkId = data.session?.workId;
-      if (responseBookId || responseSessionKind || responseProfileId || responseWorkId !== undefined || data.session?.title || data.session?.playMode) {
-        set((state) => {
-          const runtime = state.sessions[sessionId];
-          if (!runtime) return {};
-          const nextBookId = responseBookId ?? runtime.bookId;
-          return {
-            sessions: updateSession(state.sessions, sessionId, () => ({
-              bookId: nextBookId,
-              sessionKind: responseSessionKind ?? runtime.sessionKind,
-              profileId: responseProfileId ?? runtime.profileId,
-              workId: responseWorkId ?? runtime.workId,
-              playMode: data.session?.playMode ?? runtime.playMode,
-              title: data.session?.title ?? runtime.title,
-            })),
-            sessionIdsByBook: {
-              ...state.sessionIdsByBook,
-              [bookKey(nextBookId)]: mergeSessionIds(
-                state.sessionIdsByBook[bookKey(nextBookId)],
-                [sessionId],
-              ),
-            },
-          };
-        });
-      }
+      applyResponseSession(sessionId, data.session, workId ?? session.bookId);
       const hasStream = Boolean(
         get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
       );
@@ -712,23 +751,28 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         }
       }
     } catch (error) {
+      const payload = (error as { payload?: AgentResponse })?.payload;
+      // Explicit stop or a newer request already owns this session's UI.
+      if (get().sessions[sessionId]?.stream !== streamEs) return;
+      if ((error instanceof TypeError || error instanceof SyntaxError
+        || (error instanceof Error && error.name === "AbortError"))
+        && get().sessions[sessionId]?.isChatStreaming) {
+        rememberFailedSend();
+        set(state => ({ sessions: updateSession(state.sessions, sessionId, () => ({
+          detachedChatRequestId: sourceRequestId,
+        })) }));
+        await get().loadSessionDetail(sessionId, true);
+        return;
+      }
+      failureExecutions = payload?.details?.toolExecutions ?? [];
+      applyResponseSession(sessionId, payload?.session, workId ?? session.bookId);
       const errorMessage = error instanceof Error ? error.message : String(error);
       // 用户主动停止会先把 isChatStreaming 置回 false，被中止的请求随后 reject 到
       // 这里：那不算失败，不记录重试；真正的请求失败此刻 isChatStreaming 仍为 true。
       if (get().sessions[sessionId]?.isChatStreaming) rememberFailedSend();
-      const failureAlreadyShown = get().sessions[sessionId]?.messages.some((message) => {
-        const executions = [
-          ...(message.toolExecutions ?? []),
-          ...(message.parts ?? []).flatMap((part) => (
-            part.type === "tool" ? [part.execution] : []
-          )),
-        ];
-        return executions.some(
-          (execution) => execution.status === "error"
-            && (execution.completedAt ?? 0) >= streamTs,
-        );
-      }) ?? false;
-      if (failureAlreadyShown) return;
+      // An earlier recoverable tool error does not terminate this request.
+      // Always settle its remaining progress on transport failure; independent
+      // background executions keep their own lifecycle.
       const hasStream = Boolean(
         get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
       );
@@ -738,11 +782,14 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         get().addErrorMessage(sessionId, errorMessage);
       }
     } finally {
+      if (failureExecutions.length) set(state => ({ sessions: updateSession(state.sessions, sessionId, current => ({
+        messages: failureExecutions.reduce((messages, execution) => mergeToolExecution(messages, execution), current.messages),
+      })) }));
       // 本轮请求已结束（成功/出错都走这里）。只有当会话的连接仍归本轮所有时
       // 才收尾：如果发新消息时旧连接已被替换（stream 指向更新一轮的连接），
       // 由新一轮负责后续状态。
       const runtime = get().sessions[sessionId];
-      if (runtime && (runtime.stream === streamEs || runtime.stream === null)) {
+      if (runtime && !runtime.detachedChatRequestId && (runtime.stream === streamEs || runtime.stream === null)) {
         // 还有生产任务在跑：保持连接与 isStreaming，等任务自己的终态事件
         //（tool:end → agent:complete）到来时由 stream-events 收尾。
         const taskInFlight = hasAnyInFlightExecution(runtime.messages);
@@ -766,7 +813,10 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, () => ({ lastFailedSend: undefined })),
     }));
-    await get().sendMessage(sessionId, failed.text, failed.options);
+    await get().sendMessage(sessionId, failed.text, {
+      ...failed.options, activeBookId: session.bookId ?? undefined,
+      workId: session.workId, profileId: session.profileId, sessionKind: session.sessionKind,
+    });
     },
   };
 };

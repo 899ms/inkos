@@ -1,3 +1,13 @@
+import { createProfileWorkTools } from "./tools/work-creation.js";
+import {existsSync} from "node:fs";
+import { readdir } from "node:fs/promises";
+import {join} from "node:path";
+import { bindProductionTool } from "./tools/bound-production.js";
+import { createBuiltInWorkProfileRegistry } from "./builtin-profiles.js";
+import { createArtifactMethodTools, createDeliverWorkArtifactTool } from "./tools/artifact-methods.js";
+import { createShortProductionStageTools } from "./tools/short-production.js";
+import { createInspectPlayStateTool } from "./tools/play-state.js";
+import { createPlayImageTool } from "./tools/play-image.js";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type, type TSchema } from "@sinclair/typebox";
 import type { PipelineRunner } from "../pipeline/runner.js";
@@ -30,6 +40,7 @@ import {
   createRetrieveMaterialTool,
   createScriptCreationTool,
   createShortFictionRunTool,
+  createShortFictionReviseTool,
   createSpinoffBookTool,
   createStoryboardCreationTool,
   createImitationBookTool,
@@ -54,8 +65,9 @@ import {
   createTranslationCreateTool,
   createTranslationExportTool,
   createTranslationRunTool,
+  createTranslationRevisionTool,
 } from "./tools/translation.js";
-import { createReplaceWorkArtifactTool } from "./tools/work-artifacts.js";
+import { createReplaceWorkArtifactTool, createExportWorkTool } from "./tools/work-artifacts.js";
 import { createFilmAuthoringTools, filmLLMDepsFromClient } from "../agent/film-authoring-tools.js";
 import {
   createNarrativeForecastCreateTool,
@@ -65,6 +77,7 @@ import {
 import { mergeActivatedSkillGuidance } from "../skills/index.js";
 import {
   ActionResultSchema,
+  ActionArtifactRefSchema,
   type ActionArtifactRef,
   type ActionResult,
   type ActionRisk,
@@ -77,9 +90,11 @@ import {
   type CapabilityExecutionContext,
 } from "./capability-registry.js";
 import { loadWorkManifest } from "./work-store.js";
-import { syncWorkSourceArtifacts } from "./source-sync.js";
+import { syncWorkSourceArtifacts, captureWorkSourceState, changedWorkSourcePaths } from "./source-sync.js";
 import { ObservationSchema, type Observation } from "../models/observation.js";
 import { StateManager } from "../state/manager.js";
+import { isActionAuthorized } from "./runtime.js";
+import { readArtifactRevision } from "./artifact-reader.js";
 
 export interface ProductionCapabilityEnvironment {
   readonly pipeline: PipelineRunner;
@@ -105,14 +120,20 @@ export interface ProductionCapabilityEnvironment {
   ) => ReadonlyArray<ActivatedSkillGuidance>;
   readonly skillActivations?: (...skillIds: ReadonlyArray<string>) => ReadonlyArray<ActivatedSkillGuidance>;
   readonly interactiveFilmAuthoring?: boolean;
+  readonly confirmedCreation?: boolean;
 }
 
-type ProductionAgentTool = AgentTool<any, any>;
+type ProductionAgentTool = AgentTool<any, any> & { readonly artifactsCommitted?: boolean; readonly managesWorkLock?: boolean };
+
+function withoutInlineImportSource(tool:ReturnType<typeof createImportChaptersTool>):ProductionAgentTool {
+  return {...tool,parameters:Type.Omit(tool.parameters,['sourceText'],{additionalProperties:false})};
+}
 
 interface ProductionToolAction {
   readonly tool: ProductionAgentTool;
   readonly risk: ActionRisk;
   readonly requiresConfirmation?: boolean;
+  readonly artifactsCommitted?: boolean;
 }
 
 export interface ConfirmedCapabilityBinding {
@@ -139,7 +160,7 @@ const CONFIRMED_CAPABILITY_BINDINGS: Readonly<Partial<Record<RequestedIntent, Co
   translation_create: { capabilityId: "translation", actionId: "translation_create", profileId: "translation", risk: "recoverable-write" },
   draft_structure: { capabilityId: "interactive-film", actionId: "draft_structure", profileId: "interactive-film", risk: "recoverable-write" },
   connect_choice: { capabilityId: "interactive-film", actionId: "connect_choice", profileId: "interactive-film", risk: "recoverable-write" },
-  remove_node: { capabilityId: "interactive-film", actionId: "remove_node", profileId: "interactive-film", risk: "destructive-write" },
+  remove_node: { capabilityId: "interactive-film", actionId: "remove_node", profileId: "interactive-film", risk: "recoverable-write" },
 };
 
 export function confirmedCapabilityBinding(intent: RequestedIntent): ConfirmedCapabilityBinding | undefined {
@@ -165,7 +186,17 @@ export function createProductionCapabilityRegistry(
 ): CapabilityRegistry {
   const registry = new CapabilityRegistry();
   const lang = environment.language === "en" ? "en" : "zh";
-  const proposalTool = createProposeActionTool(lang, {
+  const profile = createBuiltInWorkProfileRegistry(environment.projectRoot).require(environment.work?.profileId ?? environment.profileId);
+  // The same policy governs execution and the offered confirmation action space.
+  const allowedProposals = Object.entries(CONFIRMED_CAPABILITY_BINDINGS).flatMap(([intent, binding]) => {
+    const action = proposedActionName(intent as RequestedIntent);
+    if (!action || !binding) return [];
+    if (binding.risk === "destructive-write" && !profile.capabilityIds.includes(binding.capabilityId)) return [];
+    return !isActionAuthorized(profile, binding, "agent", false)
+      || !isActionAuthorized(profile, binding, "explicit", false) ? [action] : [];
+  });
+  const proposalTool = allowedProposals.length ? createProposeActionTool(lang, {
+    allowedActions: allowedProposals,
     sameSession: environment.sameSessionProposal,
     proposalAction: environment.work
       ? undefined
@@ -173,34 +204,43 @@ export function createProductionCapabilityRegistry(
     playMode: environment.playMode,
     requestedSkillIds: environment.requestedSkillIds,
     attachmentPaths: environment.attachmentPaths,
-  });
+  }) : undefined;
   const workspaceTools: ProductionToolAction[] = [
-    readAction(proposalTool),
+    ...createProfileWorkTools(environment.projectRoot, registry).map(tool => tool.name === "list_work_profiles" ? readAction(tool) : writeAction(tool)),
+    ...(proposalTool ? [readAction(proposalTool)] : []),
     readAction(createReadTool(environment.projectRoot, {
       scope: "project",
       allowSystemPaths: environment.allowSystemFileRead,
+      workId: environment.work?.id,
     })),
     readAction(createListWorksTool(environment.projectRoot)),
     readAction(createInspectWorkTool(environment.projectRoot)),
+    readAction(createLsTool(environment.projectRoot)),
     readAction(createResearchWebTool(environment.projectRoot)),
     writeAction(createIngestMaterialTool(environment.projectRoot)),
     readAction(createRetrieveMaterialTool(environment.projectRoot)),
   ];
-  if (environment.work && ["short-fiction", "script", "storyboard", "translation", "visual-asset"].includes(environment.work.profileId)) {
-    workspaceTools.push(writeAction(createReplaceWorkArtifactTool(environment.projectRoot, environment.work.id)));
+  if (environment.work) {
+    workspaceTools.push(committedAction(createReplaceWorkArtifactTool(environment.projectRoot, environment.work.id)));
+    workspaceTools.push(committedAction(createDeliverWorkArtifactTool(environment.pipeline, environment.projectRoot, environment.work.id)));
+    workspaceTools.push(committedAction(createExportWorkTool(environment.projectRoot, environment.work.id)));
   }
+  if (environment.work) workspaceTools.push(...createArtifactMethodTools(environment.pipeline, environment.projectRoot, environment.work.id).map(committedAction));
   if (environment.intentSkillTool) workspaceTools.push(readAction(environment.intentSkillTool));
   registerToolCapability(registry, "workspace", "Creative workspace", workspaceTools);
 
   const longformTools: ProductionToolAction[] = environment.work
     ? [
+        ...(!existsSync(join(environment.projectRoot,"works",environment.work.id,"source/book.json")) || environment.work.status==="draft"
+          ? [writeAction(createBookFoundationTool(environment.pipeline,{language:lang,activeSkills:environment.activeSkills,workerSkills:environment.workerSkills,activeWork:{work:environment.work,projectRoot:environment.projectRoot}}))]
+          : []),
         writeAction(createFoundationRevisionTool(environment.pipeline, environment.work.id, {
           language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
         })),
         writeAction(createWriteChaptersTool(environment.pipeline, environment.work.id, {
           language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
         })),
-        writeAction(createReviewChapterTool(environment.pipeline, environment.work.id, {
+        committedAction(createReviewChapterTool(environment.pipeline, environment.work.id, {
           language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
         })),
         writeAction(createReviseChapterTool(environment.pipeline, environment.work.id, {
@@ -223,10 +263,10 @@ export function createProductionCapabilityRegistry(
         })),
         destructiveAction(createDeleteLatestChapterTool(environment.projectRoot, environment.work.id)),
         writeAction(createManageBookReferenceTool(environment.projectRoot, environment.work.id)),
-        writeAction(createImportChaptersTool(environment.pipeline, environment.work.id, environment.projectRoot, {
+        writeAction(withoutInlineImportSource(createImportChaptersTool(environment.pipeline, environment.work.id, environment.projectRoot, {
           defaultSkills: environment.profileSkills?.("longform-novel"),
           activeSkills: environment.activeSkills,
-        })),
+        }))),
         writeAction(createImportCanonTool(environment.pipeline, environment.work.id)),
         writeAction(createRefreshFanficCanonTool(environment.pipeline, environment.projectRoot, environment.work.id, {
           defaultSkills: [
@@ -249,32 +289,39 @@ export function createProductionCapabilityRegistry(
         language: lang,
         activeSkills: environment.activeSkills,
         workerSkills: environment.workerSkills,
+      })), writeAction(createWriteChaptersTool(environment.pipeline, null, {
+        language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
       }))];
   registerToolCapability(registry, "longform", "Long-form creation", longformTools);
 
   registerToolCapability(registry, "short-fiction", "Short fiction", [
+    ...createShortProductionStageTools(environment.pipeline, environment.projectRoot, environment.work?.id).map(committedAction),
+    ...(environment.work && createBuiltInWorkProfileRegistry(environment.projectRoot).require(environment.work.profileId).capabilityIds.includes("short-fiction") ? [writeAction(createShortFictionReviseTool(environment.pipeline,environment.projectRoot,environment.work.id,{
+      defaultSkills:environment.profileSkills?.(environment.work?.profileId ?? "short-fiction"),activeSkills:environment.activeSkills,
+    }))] : []),
     confirmedAction(createShortFictionRunTool(environment.pipeline, environment.projectRoot, {
       actionPayload: environment.actionPayload,
+      activeWorkId: environment.work?.id,
       language: lang,
-      defaultSkills: environment.profileSkills?.("short-fiction"),
+      defaultSkills: environment.profileSkills?.(environment.work?.profileId ?? "short-fiction"),
       activeSkills: environment.activeSkills,
     })),
   ]);
   registerToolCapability(registry, "script", "Script creation", [
-    confirmedAction(createScriptCreationTool(environment.pipeline, environment.projectRoot, {
-      actionPayload: environment.actionPayload,
+    ...scopedProduction(createScriptCreationTool(environment.pipeline, environment.projectRoot, {
+      actionPayload: environment.confirmedCreation ? environment.actionPayload : undefined,
       language: lang,
       defaultSkills: environment.profileSkills?.("script"),
       activeSkills: environment.activeSkills,
-    })),
+    }), environment),
   ]);
   registerToolCapability(registry, "storyboard", "Storyboard creation", [
-    confirmedAction(createStoryboardCreationTool(environment.pipeline, environment.projectRoot, {
-      actionPayload: environment.actionPayload,
+    ...scopedProduction(createStoryboardCreationTool(environment.pipeline, environment.projectRoot, {
+      actionPayload: environment.confirmedCreation ? environment.actionPayload : undefined,
       language: lang,
       defaultSkills: environment.profileSkills?.("storyboard"),
       activeSkills: environment.activeSkills,
-    })),
+    }), environment),
   ]);
 
   const interactiveFilmTools: ProductionToolAction[] = environment.interactiveFilmAuthoring && environment.work
@@ -291,22 +338,21 @@ export function createProductionCapabilityRegistry(
             ),
           },
         ),
-        proposeActionTool: proposalTool,
         language: lang,
-      }).map((tool) => tool === proposalTool ? readAction(tool) : writeAction(tool))
-    : [confirmedAction(createInteractiveFilmCreationTool(environment.pipeline, environment.projectRoot, {
-        actionPayload: environment.actionPayload,
+      }).map((tool) => tool.name==='inspect_story_graph' ? readAction(tool) : writeAction(tool))
+    : scopedProduction(createInteractiveFilmCreationTool(environment.pipeline, environment.projectRoot, {
+        actionPayload: environment.confirmedCreation ? environment.actionPayload : undefined,
         language: lang,
         defaultSkills: environment.profileSkills?.("interactive-film"),
         activeSkills: environment.activeSkills,
-      }))];
+      }), environment);
   registerToolCapability(registry, "interactive-film", "Interactive film", interactiveFilmTools);
 
-  const interactiveWorldId = environment.work?.profileId === "interactive-world"
-    ? environment.work.id
-    : environment.sessionId;
+  const interactiveWorldId = environment.work?.id ?? environment.sessionId;
   const interactiveWorldTools: ProductionToolAction[] = environment.playWorldExists
     ? [
+        readAction(createInspectPlayStateTool(environment.projectRoot, interactiveWorldId)),
+        writeAction(createPlayImageTool(environment.projectRoot, interactiveWorldId)),
         writeAction(createPlayEditTool(environment.projectRoot, interactiveWorldId, lang)),
         writeAction(createPlayReviseTool(environment.pipeline, environment.projectRoot, interactiveWorldId, {
           language: lang,
@@ -333,17 +379,20 @@ export function createProductionCapabilityRegistry(
       ))];
   registerToolCapability(registry, "interactive-world", "Interactive world", interactiveWorldTools);
 
-  const translationTools: ProductionToolAction[] = environment.work?.profileId === "translation"
-    ? [
-        writeAction(createTranslationRunTool(environment.pipeline, environment.projectRoot, environment.work.id, {
-          defaultSkills: environment.profileSkills?.("translation"),
-          activeSkills: environment.activeSkills,
-        })),
-        writeAction(createTranslationExportTool(environment.projectRoot, environment.work.id)),
-      ]
-    : [confirmedAction(createTranslationCreateTool(environment.projectRoot, { actionPayload: environment.actionPayload }))];
+  const translationWorkId = environment.work?.profileId === "translation" ? environment.work.id : undefined;
+  const translationTools: ProductionToolAction[] = [
+    ...(!translationWorkId ? [writeAction(createTranslationCreateTool(environment.projectRoot, { actionPayload: environment.actionPayload }))] : []),
+    writeAction(createTranslationRunTool(environment.pipeline, environment.projectRoot, translationWorkId, {
+      defaultSkills: environment.profileSkills?.("translation"), activeSkills: environment.activeSkills,
+    })),
+    committedAction(createTranslationRevisionTool(environment.pipeline,environment.projectRoot,translationWorkId,{defaultSkills:environment.profileSkills?.("translation"),activeSkills:environment.activeSkills})),
+    committedAction(createTranslationExportTool(environment.projectRoot, translationWorkId)),
+  ];
   registerToolCapability(registry, "translation", "Translation", translationTools);
   registerToolCapability(registry, "adaptation", "Adaptation", [
+    ...(!environment.work ? [writeAction(createWriteChaptersTool(environment.pipeline, null, {
+      language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
+    }))] : []),
     confirmedAction(createFanficBookTool(environment.pipeline, environment.projectRoot, {
       defaultSkills: mergeActivatedSkillGuidance(
         environment.profileSkills?.("longform-novel") ?? [],
@@ -373,9 +422,9 @@ export function createProductionCapabilityRegistry(
       activeSkills: environment.activeSkills,
     })),
   ]);
-  registerToolCapability(registry, "visual", "Visual assets", [
-    confirmedAction(createGenerateCoverTool(environment.projectRoot, { actionPayload: environment.actionPayload })),
-  ]);
+  registerToolCapability(registry, "visual", "Visual assets", environment.work ? [
+    committedAction(createGenerateCoverTool(environment.projectRoot, { actionPayload: environment.actionPayload, activeWorkId: environment.work.id })),
+  ] : []);
   return registry;
 }
 
@@ -432,7 +481,7 @@ function actionTool(
   risk: ActionRisk,
   requiresConfirmation = false,
 ): ProductionToolAction {
-  return { tool, risk, requiresConfirmation };
+  return { tool, risk, requiresConfirmation, artifactsCommitted: tool.artifactsCommitted };
 }
 
 function readAction(tool: ProductionAgentTool): ProductionToolAction {
@@ -443,8 +492,17 @@ function writeAction(tool: ProductionAgentTool): ProductionToolAction {
   return actionTool(tool, "recoverable-write");
 }
 
+function committedAction(tool: ProductionAgentTool): ProductionToolAction {
+  return { ...writeAction(tool), artifactsCommitted: true };
+}
+
 function confirmedAction(tool: ProductionAgentTool): ProductionToolAction {
-  return actionTool(tool, "recoverable-write", true);
+  return actionTool(tool, "recoverable-write");
+}
+
+function scopedProduction(tool: ProductionAgentTool, environment: ProductionCapabilityEnvironment): ProductionToolAction[] {
+  if (environment.confirmedCreation) return [confirmedAction(tool)];
+  return environment.work ? [writeAction(bindProductionTool(environment.projectRoot, environment.work, tool))] : [];
 }
 
 function destructiveAction(tool: ProductionAgentTool): ProductionToolAction {
@@ -459,9 +517,17 @@ function toolBackedAction(spec: ProductionToolAction) {
     description: tool.description || tool.name,
     risk,
     requiresConfirmation,
+    managesWorkLock: tool.managesWorkLock,
     parameters: tool.parameters ?? Type.Any(),
     async execute(context: CapabilityExecutionContext, input: unknown): Promise<ActionResult> {
       const before = await loadKnownWork(context.projectRoot, context.work?.id);
+      const observeWrites = risk !== "read" && !spec.artifactsCommitted;
+      const beforeSources = observeWrites && before ? await captureWorkSourceState(context.projectRoot, before.id) : undefined;
+      const existingWorkIds = new Set<string>();
+      if (observeWrites) {
+        try { for (const id of await readdir(join(context.projectRoot, "works"))) existingWorkIds.add(id); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
       const result = await tool.execute(context.episodeId, input, context.signal, context.onUpdate);
       return normalizeToolResult(
         context,
@@ -469,6 +535,10 @@ function toolBackedAction(spec: ProductionToolAction) {
         before,
         risk !== "read",
         tool.label || tool.name,
+        spec.artifactsCommitted,
+        beforeSources,
+        existingWorkIds,
+        tool.managesWorkLock,
       );
     },
   });
@@ -480,6 +550,10 @@ async function normalizeToolResult(
   before: WorkManifest | null,
   syncArtifacts: boolean,
   summary: string,
+  artifactsCommitted = false,
+  beforeSources?: ReadonlyMap<string, string>,
+  existingWorkIds: ReadonlySet<string> = new Set(),
+  exactCommittedArtifacts = false,
 ): Promise<ActionResult> {
   const content = result.content
     .filter((item): item is Extract<typeof item, { type: "text" }> => item.type === "text")
@@ -490,18 +564,31 @@ async function normalizeToolResult(
   const isError = (result as { isError?: boolean }).isError === true;
   const workIds = new Set<string>();
   if (syncArtifacts && context.work) workIds.add(context.work.id);
-  if (details && typeof details === "object") {
+  if (syncArtifacts && details && typeof details === "object") {
     const workId = (details as Record<string, unknown>).workId;
     if (typeof workId === "string" && workId) workIds.add(workId);
   }
   const artifacts: ActionArtifactRef[] = [];
+  if (exactCommittedArtifacts) {
+    const refs = ActionArtifactRefSchema.array().parse((details as { committedArtifacts?: unknown })?.committedArtifacts);
+    for (const ref of refs) {
+      if (ref.workId !== context.work?.id || !ref.revisionId) throw new Error('Invalid committed artifact receipt');
+      const { revision } = await readArtifactRevision({ projectRoot: context.projectRoot, ...ref });
+      if (ref.path !== revision.path) throw new Error('Committed artifact path does not match its revision');
+      artifacts.push(ref);
+    }
+  }
   for (const workId of workIds) {
-    if (await loadKnownWork(context.projectRoot, workId)) {
+    if (exactCommittedArtifacts) continue;
+    if (!artifactsCommitted && await loadKnownWork(context.projectRoot, workId)) {
       await syncWorkSourceArtifacts({
         projectRoot: context.projectRoot,
         workId,
         episodeId: context.episodeId,
         accept: !isError,
+        acceptPaths: before?.id === workId && beforeSources
+          ? await changedWorkSourcePaths(context.projectRoot, workId, beforeSources)
+          : existingWorkIds.has(workId) ? [] : await changedWorkSourcePaths(context.projectRoot, workId, new Map()),
       });
     }
     const after = await loadKnownWork(context.projectRoot, workId);

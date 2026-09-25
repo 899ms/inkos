@@ -1,9 +1,10 @@
 import { BaseAgent } from "./base.js";
 import type { BookConfig, FanficMode } from "../models/book.js";
 import { join } from "node:path";
+import { readdir } from "node:fs/promises";
 import { renderHooksProjection } from "../state/state-projections.js";
 import { BookRulesSchema, type BookRules } from "../models/book-rules.js";
-import { FoundationDetailsToolSchema, FoundationOutlineToolSchema } from "./architect-tool.js";
+import { FoundationDetailsToolSchema, FoundationOutlineToolSchema, FoundationCastIndexToolSchema, foundationCastDocumentsToolSchema } from "./architect-tool.js";
 import type { HookRecord } from "../models/runtime-state.js";
 import { createInitialRuntimeState } from "../state/runtime-state-store.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
@@ -158,12 +159,24 @@ ${reviseFrom.userFeedback || "（无）"}
         content: `${role.content.trim()}\n`,
       });
     }
+    const replacementPaths=new Set(writes.map(write=>write.relativePath));
+    const deletes:string[]=[];
+    if (mode === "revise") {
+      for (const tier of ["主要角色","次要角色"]) {
+        const directory=join("story","roles",tier);
+        let entries;
+        try { entries=await readdir(join(bookDir,directory),{withFileTypes:true}); }
+        catch(error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+        for(const entry of entries) {
+          const path=join(directory,entry.name);
+          if(entry.isFile()&&entry.name.endsWith(".md")&&!replacementPaths.has(path)) deletes.push(path);
+        }
+      }
+    }
     await commitAtomicFileSet({
       rootDir: bookDir,
       writes,
-      ...(mode === "revise"
-        ? { deletes: [join("story", "roles", "主要角色"), join("story", "roles", "次要角色")] }
-        : {}),
+      deletes,
     });
     if (mode === "init") {
       await createInitialRuntimeState({ bookDir, language, hooks: output.initialHooks });
@@ -200,8 +213,8 @@ ${reviseFrom.userFeedback || "（无）"}
       reviewFeedbackBlock,
       language: resolvedLanguage,
     }) + (resolvedLanguage === "en"
-      ? `\n\n${continuationDirective}\nDerive every fact from the source package. A compressed package is evidence, not permission to invent missing canon. ALL output MUST be written in English.`
-      : `\n\n${continuationDirective}\n所有事实必须从资料包推导；压缩资料包是证据，不是臆造缺失正典的许可。`);
+      ? `\n\n${continuationDirective}\nDerive established facts from the source package. Explicit continuation instructions control future plot and ending. Never infer a mandatory future event from tone or a mystery alone; keep unprescribed futures open. A compressed package is evidence, not permission to invent missing canon. ALL output MUST be written in English.`
+      : `\n\n${continuationDirective}\n既成事实从资料包推导；未来剧情和结局服从明确的续写指令。不能仅凭文风或悬念推导必须发生的未来事件，未指定的发展保留开放。压缩资料包是证据，不是臆造缺失正典的许可。`);
 
     const userMessage = resolvedLanguage === "en"
       ? `Generate the complete foundation for the imported ${book.genre} Work titled "${book.title}". Write everything in English.\n\n${chaptersText}`
@@ -266,15 +279,15 @@ ${reviseFrom.userFeedback || "（无）"}
           : "提交可读的故事框架与卷纲。",
         parameters: FoundationOutlineToolSchema,
       },
-      { temperature: input.temperature },
+      { temperature: input.temperature, maxTokens: Math.min(8192, this.ctx.client.defaults.maxTokens) },
     );
     await input.onOutline?.({
       storyFrame: outline.storyFrame.trim(),
       volumeMap: outline.volumeMap.trim(),
     });
     const detailsPrompt = input.language === "en"
-      ? `${input.userMessage}\n\n<story_frame>\n${outline.storyFrame}\n</story_frame>\n\n<volume_map>\n${outline.volumeMap}\n</volume_map>\n\nComplete the roles, readable book rules, structured rule data, and initial unresolved hooks.`
-      : `${input.userMessage}\n\n<story_frame>\n${outline.storyFrame}\n</story_frame>\n\n<volume_map>\n${outline.volumeMap}\n</volume_map>\n\n继续完成角色卡、可读本书规则、结构化规则数据和初始未解伏笔。`;
+      ? `${input.userMessage}\n\n<story_frame>\n${outline.storyFrame}\n</story_frame>\n\n<volume_map>\n${outline.volumeMap}\n</volume_map>\n\nComplete the readable book rules, structured rule data, and initial unresolved hooks.`
+      : `${input.userMessage}\n\n<story_frame>\n${outline.storyFrame}\n</story_frame>\n\n<volume_map>\n${outline.volumeMap}\n</volume_map>\n\n继续完成可读本书规则、结构化规则数据和初始未解伏笔。`;
     const { result: details } = await this.submitStructured(
       [
         { role: "system", content: input.systemPrompt },
@@ -284,8 +297,8 @@ ${reviseFrom.userFeedback || "（无）"}
         name: "submit_foundation_details",
         label: input.language === "en" ? "Submit foundation details" : "提交基础详情",
         description: input.language === "en"
-          ? "Submit role cards, book rules, and initial unresolved hooks grounded in the submitted outline."
-          : "提交服从已提交框架的角色卡、本书规则和初始未解伏笔。",
+          ? "Submit book rules and initial unresolved hooks. Arrays and objects must be native tool arguments, never JSON strings."
+          : "提交本书规则与初始未解伏笔。数组和对象必须是工具参数的原生类型，不要放入字符串。",
         parameters: FoundationDetailsToolSchema,
       },
       { temperature: input.temperature },
@@ -302,14 +315,27 @@ ${reviseFrom.userFeedback || "（无）"}
     }));
     const pendingHooks = renderHooksProjection({ hooks: initialHooks }, input.language);
 
+    const castContext=`${input.userMessage}\n\n${outline.storyFrame}\n\n${outline.volumeMap}\n\n${details.bookRules}`;
+    const {result:cast} = await this.submitStructured([
+      {role:"system",content:input.language==="en"
+        ? "List the named people who shape the opening conflict. Submit only their names and major/minor roles. Do not expand unnamed occupational groups into invented biographies."
+        : "列出影响开篇冲突的具名人物，只提交姓名和主要/次要角色级别，不把无名岗位群体扩写成虚构人物。"},
+      {role:"user",content:castContext},
+    ],{name:"submit_foundation_cast_index",label:"Identify opening cast",description:"Submit the names and tiers of the opening cast.",parameters:FoundationCastIndexToolSchema},
+    {temperature:input.temperature,maxTokens:Math.min(2048,this.ctx.client.defaults.maxTokens)});
+    const {result:cards} = await this.submitStructured([
+      {role:"system",content:input.language==="en"
+        ? "Create concise character cards for the named people who shape the opening conflict. Ground each card in the supplied story. Give present motive, knowledge, relationship pressure and limits in about 80–120 words; avoid repeating the plot or expanding unnamed occupational groups into full biographies."
+        : "为影响开篇冲突的具名人物写简明角色卡。每人约150—250字，写清当下动机、已知信息、关系压力与能力边界，依据已给定故事，不重复整篇情节，不把无名岗位群体扩写成完整传记。"},
+      {role:"user",content:castContext},
+    ],{name:"submit_foundation_cast_documents",label:"Submit opening character cards",description:"Submit each character card as text in its named field.",parameters:foundationCastDocumentsToolSchema(cast.roles)},
+    {temperature:input.temperature,maxTokens:Math.min(8192,this.ctx.client.defaults.maxTokens)});
+    const roles: ArchitectRole[] = cast.roles.map((role,index)=>({tier:role.tier,name:role.name.trim(),content:cards[`role_${index+1}_content`]!.trim()}));
+
     return {
       storyFrame: outline.storyFrame.trim(),
       volumeMap: outline.volumeMap.trim(),
-      roles: details.roles.map((role) => ({
-        tier: role.tier,
-        name: role.name.trim(),
-        content: role.content.trim(),
-      })),
+      roles,
       bookRules: details.bookRules.trim(),
       bookRulesData,
       pendingHooks,

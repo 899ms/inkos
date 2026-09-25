@@ -1,9 +1,10 @@
 import { BaseAgent } from "./base.js";
+import {renderChapterDocument} from '../utils/chapter-document.js';
 import type { BookConfig } from "../models/book.js";
 import type { BookRules } from "../models/book-rules.js";
 import { buildWriterSystemPrompt } from "./writer-prompts.js";
 import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./settler-prompts.js";
-import { SettlementToolSchema } from "./settler-tool.js";
+import { createSettlementToolSchema } from "./settler-tool.js";
 import { ChapterDraftToolSchema } from "./writer-tool.js";
 import { readBookRules } from "./rules-reader.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage } from "../models/input-governance.js";
@@ -11,7 +12,6 @@ import type { LengthSpec } from "../models/length-governance.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { RuntimeStateDeltaSchema, type RuntimeStateDelta } from "../models/runtime-state.js";
 import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js";
-import { buildGovernedMemoryEvidenceBlocks } from "../utils/governed-context.js";
 import {
   buildRuntimeStateArtifacts,
   buildRuntimeStateArtifactsFromSnapshot,
@@ -111,11 +111,10 @@ export class WriterAgent extends BaseAgent {
 
     const resolvedLanguage = book.language;
     const targetWords = input.lengthSpec?.target ?? input.wordCountOverride ?? book.chapterWordCount;
-    const resolvedLengthSpec = input.lengthSpec ?? buildLengthSpec(targetWords, resolvedLanguage);
+    const resolvedLengthSpec = input.lengthSpec ?? buildLengthSpec(targetWords, resolvedLanguage, book);
     if (!input.chapterIntent || !input.chapterMemo || !input.contextPackage) {
       throw new Error("Writer requires governed chapter intent, memo, and context package.");
     }
-    const governedMemoryBlocks = buildGovernedMemoryEvidenceBlocks(input.contextPackage, resolvedLanguage);
     // ── Phase 1: Creative writing (temperature 0.7) ──
     const creativeSystemPrompt = buildWriterSystemPrompt(
       book, bookRules, bookRulesBody, styleGuide,
@@ -131,7 +130,6 @@ export class WriterAgent extends BaseAgent {
       externalContext: input.externalContext,
       lengthSpec: resolvedLengthSpec,
       language: book.language,
-      selectedEvidenceBlock: this.joinGovernedEvidenceBlocks(governedMemoryBlocks),
     });
 
     const creativeTemperature = input.temperatureOverride ?? 0.7;
@@ -175,10 +173,10 @@ export class WriterAgent extends BaseAgent {
       chapterNumber,
       title: creative.title,
       content: creative.content,
-      selectedEvidenceBlock: this.joinGovernedEvidenceBlocks(governedMemoryBlocks),
       chapterIntent: input.chapterIntent,
       contextPackage: input.contextPackage,
       validationFeedback: undefined,
+      baselineSnapshot: runtimeSnapshot,
     });
     const settlement = settleResult.settlement;
     const settleUsage = settleResult.usage;
@@ -225,7 +223,6 @@ export class WriterAgent extends BaseAgent {
     const parsedBookRules = await readBookRules(input.bookDir);
     const bookRules = parsedBookRules.rules;
     const resolvedLanguage = input.book.language;
-    const governedMemoryBlocks = buildGovernedMemoryEvidenceBlocks(input.contextPackage, resolvedLanguage);
 
     const settleResult = await this.settle({
       book: input.book,
@@ -235,10 +232,11 @@ export class WriterAgent extends BaseAgent {
       chapterNumber: input.chapterNumber,
       title: input.title,
       content: input.content,
-      selectedEvidenceBlock: this.joinGovernedEvidenceBlocks(governedMemoryBlocks),
       chapterIntent: input.chapterIntent,
       contextPackage: input.contextPackage,
       validationFeedback: input.validationFeedback,
+      baselineSnapshot: runtimeSnapshot,
+      allowNewHooks: input.allowNewHooks,
     });
     const settlement = settleResult.settlement;
     const runtimeStateArtifacts = await this.buildRuntimeStateArtifactsIfPresent(
@@ -278,10 +276,11 @@ export class WriterAgent extends BaseAgent {
     readonly chapterNumber: number;
     readonly title: string;
     readonly content: string;
-    readonly selectedEvidenceBlock?: string;
     readonly chapterIntent: string;
     readonly contextPackage: ContextPackage;
     readonly validationFeedback?: string;
+    readonly baselineSnapshot: RuntimeStateSnapshot;
+    readonly allowNewHooks?: boolean;
   }): Promise<{
     settlement: {
       readonly postSettlement: string;
@@ -306,14 +305,11 @@ export class WriterAgent extends BaseAgent {
       chapterNumber: params.chapterNumber,
       title: params.title,
       content: params.content,
-      selectedEvidenceBlock: params.selectedEvidenceBlock,
       governedControlBlock,
       validationFeedback: params.validationFeedback,
       language: resolvedLang,
-    });
-    const knownHookIds = new Set(
-      (await loadRuntimeStateSnapshot(params.bookDir)).hooks.hooks.map((hook) => hook.hookId),
-    );
+    }) + `\n\n## Settlement baseline\nApply the delta to this exact baseline. Existing hook operations may name only its hook IDs. Later projections in retrieved context are references, not the baseline to be mutated.\n${JSON.stringify({ chapter: params.baselineSnapshot.manifest.lastAppliedChapter, currentState: params.baselineSnapshot.currentState, hooks: params.baselineSnapshot.hooks, allowNewHooks: params.allowNewHooks ?? true })}`;
+    const knownHookIds = new Set(params.baselineSnapshot.hooks.hooks.map((hook) => hook.hookId));
     const { result, usage } = await this.submitStructured(
       [
         { role: "system", content: systemPrompt },
@@ -325,10 +321,10 @@ export class WriterAgent extends BaseAgent {
         description: resolvedLang === "en"
           ? "Submit only chapter-grounded incremental state changes. The host owns the chapter number."
           : "只提交正文有证据的增量状态变更；章节号由宿主持有。",
-        parameters: SettlementToolSchema,
+        parameters: createSettlementToolSchema(params.allowNewHooks),
         validate: (value) => validateSettlementHookIds(value, knownHookIds),
       },
-      { temperature: 0.3 },
+      { temperature: 0.3, maxTokens: Math.min(16384, this.ctx.client.defaults.maxTokens) },
     );
     const runtimeStateDelta = RuntimeStateDeltaSchema.parse({
       chapter: params.chapterNumber,
@@ -385,14 +381,7 @@ export class WriterAgent extends BaseAgent {
     const supersededChapterFiles = existingChapterFiles
       .filter((file) => file.startsWith(`${paddedNum}_`) && file.endsWith(".md") && file !== filename);
 
-    const heading = language === "en"
-      ? `# Chapter ${output.chapterNumber}: ${output.title}`
-      : `# 第${output.chapterNumber}章 ${output.title}`;
-    const chapterContent = [
-      heading,
-      "",
-      output.content,
-    ].join("\n");
+    const chapterContent = renderChapterDocument(output.chapterNumber,output.title,output.content,language);
     const runtimeStateArtifacts = await this.resolveRuntimeStateArtifactsForOutput(
       bookDir,
       output,
@@ -469,7 +458,6 @@ export class WriterAgent extends BaseAgent {
     readonly externalContext?: string;
     readonly lengthSpec: LengthSpec;
     readonly language?: "zh" | "en";
-    readonly selectedEvidenceBlock?: string;
   }): string {
     const language = params.language ?? "zh";
     // The user's steering docs (author_intent = long-term direction, current_focus =
@@ -490,9 +478,6 @@ export class WriterAgent extends BaseAgent {
       : "";
 
     const lengthRequirementBlock = this.buildLengthRequirementBlock(params.lengthSpec, params.language ?? "zh");
-    const selectedEvidenceBlock = params.selectedEvidenceBlock
-      ? `\n${params.selectedEvidenceBlock}\n`
-      : "";
     const chapterContextBlock = this.buildChapterContextBlock(params.externalContext, language);
     const briefNarrative = renderMemoAsNarrativeBlock(params.chapterMemo, params.chapterIntentData, language);
 
@@ -506,7 +491,6 @@ ${briefNarrative}
 
 ## Selected Context
 ${contextSections || "(none)"}
-${selectedEvidenceBlock}
 
 ${lengthRequirementBlock}
 - Submit the complete title and prose through the chapter-draft result tool.`;
@@ -521,7 +505,6 @@ ${briefNarrative}
 
 ## 已选上下文
 ${contextSections || "(无)"}
-${selectedEvidenceBlock}
 
 ${lengthRequirementBlock}
 - 通过章节初稿结果工具提交完整标题和正文。`;
@@ -540,26 +523,6 @@ Obey this direct instruction for the current chapter. If it specifies a chapter 
 ${trimmed}
 
 这是用户对当前章节的直接指令。若其中指定章节标题，结果工具中的标题必须原样使用。保持连续性，但不要用卷纲兜底替换这条指令。`;
-  }
-
-  private joinGovernedEvidenceBlocks(blocks: ReturnType<typeof buildGovernedMemoryEvidenceBlocks> | undefined): string | undefined {
-    if (!blocks) {
-      return undefined;
-    }
-
-    const joined = [
-      blocks.titleHistoryBlock,
-      blocks.moodTrailBlock,
-      blocks.canonBlock,
-      blocks.referencedHooksBlock,
-      blocks.hooksBlock,
-      blocks.summariesBlock,
-      blocks.volumeSummariesBlock,
-    ]
-      .filter((block): block is string => Boolean(block))
-      .join("\n");
-
-    return joined || undefined;
   }
 
   private buildSettlerGovernedControlBlock(
@@ -586,14 +549,20 @@ ${selectedContext || "- none"}\n`;
   }
 
   private buildLengthRequirementBlock(lengthSpec: LengthSpec, language: "zh" | "en"): string {
+    const bounds=[
+      ...(lengthSpec.minChapterLength!==undefined?[`Minimum: ${lengthSpec.minChapterLength}`]:[]),
+      ...(lengthSpec.maxChapterLength!==undefined?[`Maximum: ${lengthSpec.maxChapterLength}`]:[]),
+    ];
     if (language === "en") {
       return `Requirements:
 - User target length: ${lengthSpec.target} words
+- ${bounds.join("; ") || "No additional hard range specified."} (words)
 - Keep the scene complete; do not pad or cut mechanically`;
     }
 
     return `要求：
 - 用户目标字数：${lengthSpec.target}字
+- ${bounds.join("; ") || "未指定额外硬性范围"}；中文按正文非空白字符计数，含标点，不含标题
 - 保持场景完整，不要机械注水或裁切`;
   }
 

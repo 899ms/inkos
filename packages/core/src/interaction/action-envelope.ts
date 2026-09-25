@@ -39,6 +39,8 @@ export const CreateBookActionPayloadSchema = z.object({
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
+  minChapterLength:z.number().int().min(1).optional(),
+  maxChapterLength:z.number().int().min(1).optional(),
 }).strict();
 
 export const WriteNextActionPayloadSchema = z.object({
@@ -46,6 +48,10 @@ export const WriteNextActionPayloadSchema = z.object({
 }).strict();
 
 export const ShortRunActionPayloadSchema = z.object({
+  maxChapterLength:z.number().int().positive().optional(),
+  minChapterLength:z.number().int().positive().optional(),
+  openingHookChars:z.number().int().positive().optional(),
+  minChapterLengthRatio:z.number().positive().max(1).optional(),
   title: z.string().min(1).optional(),
   direction: z.string().min(1).optional(),
   reference: z.string().min(1).optional(),
@@ -57,6 +63,7 @@ export const ShortRunActionPayloadSchema = z.object({
 }).strict();
 
 export const PlayStartActionPayloadSchema = z.object({
+  choiceCount:z.number().int().positive().optional(),
   title: z.string().min(1).optional(),
   premise: z.string().min(1).optional(),
   worldContract: z.string().min(1).optional(),
@@ -117,6 +124,8 @@ export const InteractiveFilmCreateActionPayloadSchema = z.object({
 }).strict();
 
 export const TranslationCreateActionPayloadSchema = z.object({
+  sourceText: z.string().min(1).optional(),
+  glossary: z.array(z.object({ source: z.string(), target: z.string(), note: z.string().optional() })).optional(),
   filePath: z.string().min(1).optional(),
   sourceLanguage: z.string().min(1).optional(),
   targetLanguage: z.string().min(1).optional(),
@@ -124,7 +133,10 @@ export const TranslationCreateActionPayloadSchema = z.object({
   segmentMaxChars: z.number().int().min(1).optional(),
 }).strict();
 
+const CreationSourceReferenceSchema = z.object({workId:z.string().min(1),artifactId:z.string().min(1),revisionId:z.string().min(1).optional()}).strict();
+
 export const FanficCreateActionPayloadSchema = z.object({
+  source: CreationSourceReferenceSchema.optional(),
   title: z.string().min(1).optional(),
   sourceText: z.string().min(1).optional(),
   sourcePath: z.string().min(1).optional(),
@@ -135,12 +147,15 @@ export const FanficCreateActionPayloadSchema = z.object({
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
+  minChapterLength:z.number().int().min(1).optional(),
+  maxChapterLength:z.number().int().min(1).optional(),
 }).strict().refine(
-  (payload) => Boolean(payload.sourceText?.trim() || payload.sourcePath?.trim()),
-  { message: "fanficCreate requires sourceText or sourcePath" },
+  (payload) => Boolean(payload.source || payload.sourceText?.trim() || payload.sourcePath?.trim()),
+  { message: "fanficCreate requires source, sourceText or sourcePath" },
 );
 
 export const ContinuationImportActionPayloadSchema = z.object({
+  instruction: z.string().min(1).optional(),
   bookId: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   sourcePath: z.string().min(1).optional(),
@@ -151,9 +166,12 @@ export const ContinuationImportActionPayloadSchema = z.object({
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
+  minChapterLength:z.number().int().min(1).optional(),
+  maxChapterLength:z.number().int().min(1).optional(),
 }).strict();
 
 export const SpinoffCreateActionPayloadSchema = z.object({
+  source: CreationSourceReferenceSchema.optional(),
   title: z.string().min(1).optional(),
   parentBookId: z.string().min(1).optional(),
   direction: z.string().min(1).optional(),
@@ -162,9 +180,12 @@ export const SpinoffCreateActionPayloadSchema = z.object({
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
+  minChapterLength:z.number().int().min(1).optional(),
+  maxChapterLength:z.number().int().min(1).optional(),
 }).strict();
 
 export const ImitationCreateActionPayloadSchema = z.object({
+  source: CreationSourceReferenceSchema.optional(),
   title: z.string().min(1).optional(),
   referenceText: z.string().min(1).optional(),
   referencePath: z.string().min(1).optional(),
@@ -175,9 +196,11 @@ export const ImitationCreateActionPayloadSchema = z.object({
   language: z.enum(["zh", "en"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
+  minChapterLength:z.number().int().min(1).optional(),
+  maxChapterLength:z.number().int().min(1).optional(),
 }).strict().refine(
-  (payload) => Boolean(payload.referenceText?.trim() || payload.referencePath?.trim()),
-  { message: "imitationCreate requires referenceText or referencePath" },
+  (payload) => Boolean(payload.source || payload.referenceText?.trim() || payload.referencePath?.trim()),
+  { message: "imitationCreate requires source, referenceText or referencePath" },
 );
 
 export const ActionPayloadSchema = z.object({

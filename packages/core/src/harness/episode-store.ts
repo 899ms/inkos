@@ -13,6 +13,11 @@ import {
   type EpisodeStatus,
 } from "./contracts.js";
 
+function isLiveProcess(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+}
+
 export class CreativeEpisodeStore {
   private readonly db: DatabaseSync;
 
@@ -21,15 +26,23 @@ export class CreativeEpisodeStore {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.initializeSchema();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const columns = this.db.prepare("PRAGMA table_info(creative_episodes)").all();
+      if (!columns.some((column) => column.name === "owner_pid")) this.db.exec("ALTER TABLE creative_episodes ADD COLUMN owner_pid INTEGER");
+      this.db.exec("CREATE INDEX IF NOT EXISTS creative_episode_event_work ON creative_episode_events(work_id, episode_id)");
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
   create(input: CreativeEpisode): CreativeEpisode {
     const episode = CreativeEpisodeSchema.parse(input);
     this.db.prepare(`
       INSERT INTO creative_episodes (
-        episode_id, work_id, profile_id, status, started_at, completed_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        episode_id, work_id, profile_id, status, started_at, completed_at, owner_pid
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       episode.id,
       episode.workId,
@@ -37,6 +50,7 @@ export class CreativeEpisodeStore {
       episode.status,
       episode.startedAt,
       episode.completedAt,
+      process.pid,
     );
     return episode;
   }
@@ -200,12 +214,19 @@ export class CreativeEpisodeStore {
       SELECT episode_id AS id, work_id AS workId, profile_id AS profileId,
              status, started_at AS startedAt, completed_at AS completedAt
       FROM creative_episodes
-      WHERE (? IS NULL OR work_id = ?)
+      WHERE (? IS NULL OR work_id = ? OR EXISTS (
+        SELECT 1 FROM creative_episode_events e WHERE e.episode_id=creative_episodes.episode_id
+          AND (e.work_id=? OR (e.type='action-started' AND (
+            json_extract(e.payload_json,'$.parameters.workId')=?
+            OR json_extract(e.payload_json,'$.parameters.projectId')=?
+            OR json_extract(e.payload_json,'$.parameters.bookId')=?
+          )))
+      ))
         AND (? IS NULL OR profile_id = ?)
         AND (? IS NULL OR status = ?)
       ORDER BY started_at DESC, episode_id DESC
       LIMIT ?
-    `).all(workId, workId, profileId, profileId, status, status, limit) as unknown as ReadonlyArray<Record<string, unknown>>;
+    `).all(workId, workId, workId, workId, workId, workId, profileId, profileId, status, status, limit) as unknown as ReadonlyArray<Record<string, unknown>>;
     return rows.map((row) => CreativeEpisodeSchema.parse({ version: HARNESS_VERSION, ...row }));
   }
 
@@ -234,12 +255,14 @@ export class CreativeEpisodeStore {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const rows = this.db.prepare(`
-        SELECT episode_id AS episodeId, work_id AS workId
+        SELECT episode_id AS episodeId, work_id AS workId, owner_pid AS ownerPid
         FROM creative_episodes
         WHERE status = 'running'
         ORDER BY started_at ASC, episode_id ASC
-      `).all() as unknown as ReadonlyArray<{ readonly episodeId: string; readonly workId: string | null }>;
+      `).all() as unknown as ReadonlyArray<{ readonly episodeId: string; readonly workId: string | null; readonly ownerPid: number | null }>;
+      let recovered = 0;
       for (const row of rows) {
+        if (row.ownerPid && isLiveProcess(row.ownerPid)) continue;
         const seqRow = this.db.prepare(
           "SELECT COALESCE(MAX(seq), -1) + 1 AS seq FROM creative_episode_events WHERE episode_id = ?",
         ).get(row.episodeId) as unknown as { readonly seq: number };
@@ -272,9 +295,10 @@ export class CreativeEpisodeStore {
           SET status = 'failed', completed_at = ?
           WHERE episode_id = ? AND status = 'running'
         `).run(completedAt, row.episodeId);
+        recovered++;
       }
       this.db.exec("COMMIT");
-      return rows.length;
+      return recovered;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;

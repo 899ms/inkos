@@ -22,6 +22,13 @@ export async function extractTranslationSource(
   projectRoot: string,
   input: CreateTranslationProjectInput,
 ): Promise<ExtractedTranslationSource> {
+  if (input.sourceText !== undefined) {
+    if (input.filePath) throw Object.assign(new Error("Choose inline text or a source file, not both"), { code: "TRANSLATION_SOURCE_AMBIGUOUS" });
+    const text = normalizeTranslationText(input.sourceText);
+    if (!text || Buffer.byteLength(text, "utf8") > MAX_INPUT_BYTES) throw Object.assign(new Error("Inline translation source is empty or too large"), { code: "TRANSLATION_SOURCE_INVALID" });
+    return { title: input.title?.trim() || "Translation", kind: "markdown", sourcePath: "inline", charCount: text.length, chapters: splitTranslationChapters(text) };
+  }
+  if (!input.filePath) throw Object.assign(new Error("Provide sourceText or filePath"), { code: "TRANSLATION_SOURCE_REQUIRED" });
   const safePath = safeChildPath(projectRoot, input.filePath);
   const buffer = await readFile(safePath);
   if (buffer.byteLength > MAX_INPUT_BYTES) {

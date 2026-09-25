@@ -1,4 +1,4 @@
-import type { Condition, Effect, StoryNode, Choice, Variable, VarValue } from "./graph-schema.js";
+import type { Condition, Effect, StoryNode, Choice, DialogueLine, Variable, VarValue } from "./graph-schema.js";
 
 export type VarState = Record<string, VarValue>;
 
@@ -33,6 +33,10 @@ export function applyEffects(vars: VarState, effects: readonly Effect[] | undefi
 
 export function visibleChoices(node: StoryNode, vars: VarState): Choice[] {
   return node.choices.filter((c) => evaluateCondition(c.condition, vars));
+}
+
+export function visibleDialogue(node: StoryNode, vars: VarState): DialogueLine[] {
+  return node.dialogue.filter(line => evaluateCondition(line.condition, vars));
 }
 
 export function initVarState(variables: readonly Variable[]): VarState {

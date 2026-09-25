@@ -28,7 +28,7 @@ import {
 import { ProjectArtifactDrawer } from "../components/chat/ProjectArtifactDrawer";
 import { PlayHud } from "../components/chat/PlayHud";
 import { PlayChoicePanel } from "../components/chat/PlayChoicePanel";
-import { latestPlayChoiceSet } from "../components/chat/play-choices";
+import { presentationChoiceSet, type PlayPresentation } from "../components/chat/play-choices";
 import {
   BotMessageSquare,
   ArrowUp,
@@ -57,6 +57,7 @@ import {
   getProjectChatSessionId,
   pickProjectChatSessionId,
   pickModelSelection,
+  resolveWorkSessionBinding,
   setBookCreateSessionId,
   setProjectChatSessionId,
   isChatScrollNearBottom,
@@ -102,6 +103,8 @@ interface PlayImageSettings {
 }
 
 interface PlayRunImagePayload {
+  readonly currentPresentation?: PlayPresentation | null;
+  readonly mode?: "open" | "guided" | null;
   readonly imageSettings?: PlayImageSettings;
 }
 
@@ -316,6 +319,9 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   const setSelectedModel = useChatStore((s) => s.setSelectedModel);
   const loadSessionList = useChatStore((s) => s.loadSessionList);
   const createSession = useChatStore((s) => s.createSession);
+  const createDraftSession = useChatStore((s) => s.createDraftSession);
+  const [creatingWorkSession, setCreatingWorkSession] = useState(false);
+  const [workSessionError, setWorkSessionError] = useState<string | null>(null);
   const markProposalResolved = useChatStore((s) => s.markProposalResolved);
   const loadSessionDetail = useChatStore((s) => s.loadSessionDetail);
   const activateSession = useChatStore((s) => s.activateSession);
@@ -334,15 +340,27 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
       : mode === "work" ? "work"
       : mode === "book-create" ? "book-create"
       : activeBookId ? "book" : "chat");
-  const playMode = activeSession?.playMode;
+  const [playRun, setPlayRun] = useState<{ worldId: string; payload: PlayRunImagePayload } | null>(null);
+  const workSessionBinding = resolveWorkSessionBinding({
+    routeWorkId: activeWorkId ?? activeBookId,
+    routeProfileId: workProfileId,
+    sessionWorkId: activeSession?.workId,
+    sessionProfileId: activeSession?.profileId,
+  });
+  const isPlaySurface = currentSessionKind === "play" || workSessionBinding?.profileId === "interactive-world";
+  const playWorldId = isPlaySurface ? workSessionBinding?.workId ?? activeSessionId : null;
+  const currentPlayRun = playRun?.worldId === playWorldId ? playRun.payload : undefined;
+  const playMode = currentPlayRun?.mode ?? activeSession?.playMode;
+  const routeWorkId = activeWorkId ?? activeBookId;
+  const sessionMatchesRoute = !routeWorkId || (activeSession?.workId ?? activeSession?.bookId) === routeWorkId;
   // A play session must pick its playstyle (点着玩 / 自由玩) before chatting.
-  const needsPlayModeChoice = currentSessionKind === "play" && !playMode;
+  const needsPlayModeChoice = isPlaySurface && !workSessionBinding && !playMode;
   // Even in 点着玩 the world is shaped by free typing first; the choice panel
   // only replaces the input once play has actually started (a play tool
   // produced choices).
   const playChoiceSet = useMemo(
-    () => (currentSessionKind === "play" && playMode === "guided" ? latestPlayChoiceSet(messages) : null),
-    [currentSessionKind, playMode, messages],
+    () => (isPlaySurface && playMode === "guided" && !loading ? presentationChoiceSet(currentPlayRun?.currentPresentation) : null),
+    [isPlaySurface, playMode, currentPlayRun, loading],
   );
   const [consumedPlayChoiceKey, setConsumedPlayChoiceKey] = useState<string | null>(null);
   const playChoices = playChoiceSet?.choices ?? [];
@@ -366,7 +384,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const { data: skillsData, loading: skillsLoading, error: skillsError, refetch: refetchSkills } = useApi<SkillsResponse>("/skills");
-  const worldPanelInsetClass = currentSessionKind === "play" && worldPanelOpen ? "lg:pr-[380px]" : "";
+  const worldPanelInsetClass = isPlaySurface && worldPanelOpen ? "lg:pr-[380px]" : "";
   const availableSkills = skillsData?.skills ?? [];
   const selectedSkills = useMemo(
     () => selectedSkillIds
@@ -454,9 +472,8 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   useEffect(() => {
     if (!serviceConfigLoaded) return;
     if (activeSession?.modelOverride) {
-      const sessionGroup = groupedModels.find((group) =>
-        group.models.some((model) => model.id === activeSession.modelOverride)
-      );
+      const matchingGroups = groupedModels.filter((group) => group.models.some((model) => model.id === activeSession.modelOverride));
+      const sessionGroup = matchingGroups.find(group => group.service === (activeSession.serviceOverride ?? selectedService)) ?? matchingGroups[0];
       if (sessionGroup
         && (selectedModel !== activeSession.modelOverride || selectedService !== sessionGroup.service)) {
         setSelectedModel(activeSession.modelOverride, sessionGroup.service);
@@ -472,7 +489,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
     if (nextSelection) {
       setSelectedModel(nextSelection.model, nextSelection.service);
     }
-  }, [activeSession?.modelOverride, configuredModelSelection, groupedModels, selectedModel, selectedService, serviceConfigLoaded, setSelectedModel]);
+  }, [activeSession?.modelOverride, activeSession?.serviceOverride, configuredModelSelection, groupedModels, selectedModel, selectedService, serviceConfigLoaded, setSelectedModel]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -516,6 +533,8 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   // Entering a book loads its latest session; book-create mode persists its orphan session in localStorage.
   useEffect(() => {
     let cancelled = false;
+    const activeAtStart=useChatStore.getState().activeSessionId;
+    const superseded=()=>cancelled||useChatStore.getState().activeSessionId!==activeAtStart;
 
     void (async () => {
       if (mode === "work" && activeWorkId && workProfileId) {
@@ -525,7 +544,11 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
           if (!currentSession.isDraft) await loadSessionDetail(currentSession.sessionId);
           return;
         }
-        await createSession(null, "work", undefined, { workId: activeWorkId, profileId: workProfileId });
+        const summaries = await loadSessionList(null);
+        if (superseded()) return;
+        const existing = summaries.find(session => session.workId === activeWorkId && session.profileId === workProfileId);
+        if (existing) { activateSession(existing.sessionId); await loadSessionDetail(existing.sessionId); return; }
+        createDraftSession(null, "work", undefined, { workId: activeWorkId, profileId: workProfileId });
         return;
       }
       if (!activeBookId && mode === "project-chat") {
@@ -538,7 +561,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
 
       if (activeBookId) {
         await loadSessionList(activeBookId);
-        if (cancelled) return;
+        if (superseded()) return;
 
         const state = useChatStore.getState();
         const currentSession = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
@@ -553,7 +576,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
           return;
         }
 
-        await createSession(activeBookId, mode === "interactive-film-authoring" ? "interactive-film-authoring" : "book");
+        createDraftSession(activeBookId, mode === "interactive-film-authoring" ? "interactive-film-authoring" : "book");
         return;
       }
 
@@ -562,7 +585,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
         : getBookCreateSessionId();
       if (existingId) {
         await loadSessionDetail(existingId);
-        if (cancelled) return;
+        if (superseded()) return;
 
         const state = useChatStore.getState();
         const session = state.sessions[existingId];
@@ -574,7 +597,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
 
       if (mode === "project-chat") {
         const projectSessions = await loadSessionList(null);
-        if (cancelled) return;
+        if (superseded()) return;
 
         const latestState = useChatStore.getState();
         const latestSession = latestState.activeSessionId
@@ -587,14 +610,14 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
         const reusableSessionId = pickProjectChatSessionId(projectSessions);
         if (reusableSessionId) {
           activateSession(reusableSessionId);
+          setProjectChatSessionId(reusableSessionId);
           await loadSessionDetail(reusableSessionId);
-          if (!cancelled) setProjectChatSessionId(reusableSessionId);
           return;
         }
       }
 
-      const newSessionId = await createSession(null, mode === "book-create" ? "book-create" : "chat");
-      if (!cancelled) {
+      const newSessionId = createDraftSession(null, mode === "book-create" ? "book-create" : "chat");
+      if (!cancelled&&useChatStore.getState().activeSessionId===newSessionId) {
         if (mode === "project-chat") {
           setProjectChatSessionId(newSessionId);
         } else {
@@ -606,7 +629,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
     return () => {
       cancelled = true;
     };
-  }, [activeBookId, activeWorkId, activateSession, createSession, loadSessionDetail, loadSessionList, mode, workProfileId]);
+  }, [activeBookId, activeWorkId, activateSession, createDraftSession, loadSessionDetail, loadSessionList, mode, workProfileId]);
 
   const addAttachedFiles = (files: FileList | File[]) => {
     const incoming = Array.from(files);
@@ -626,7 +649,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   };
 
   const onSend = async (text: string) => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !sessionMatchesRoute || creatingWorkSession) return;
     const hasPendingMessage = Boolean(text.trim()) || attachedFiles.length > 0;
     if (!hasPendingMessage) {
       if (chatStreaming || loading) await abortSession(activeSessionId);
@@ -672,7 +695,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   };
 
   const handleQuickAction = (command: string, requestedIntent?: "write_next") => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !sessionMatchesRoute || creatingWorkSession) return;
     autoScrollPinnedRef.current = true;
     void sendMessage(activeSessionId, command, {
       activeBookId,
@@ -762,15 +785,16 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   useEffect(() => { setPlayImageError(null); }, [activeSessionId]);
 
   useEffect(() => {
-    if (!activeSessionId || currentSessionKind !== "play") return;
+    if (!playWorldId || loading) return;
     let cancelled = false;
-    void fetchJson<PlayRunImagePayload>(`/play/runs/${encodeURIComponent(activeSessionId)}/main`)
+    void fetchJson<PlayRunImagePayload>(`/play/runs/${encodeURIComponent(playWorldId)}/main`)
       .then((payload) => {
-        if (!cancelled && payload.imageSettings) setPlayImageSettings(payload.imageSettings);
+        if (cancelled) return;
+        setPlayRun({ worldId: playWorldId, payload });
+        setConsumedPlayChoiceKey(null);
+        if (payload.imageSettings) setPlayImageSettings(payload.imageSettings);
       })
-      .catch(() => {
-        // No persisted play world yet.
-      });
+      .catch(() => { if (!cancelled) setPlayRun(null); });
     void fetchJson<CoverConfigResponse>("/cover/config")
       .then((cfg) => {
         if (cancelled) return;
@@ -783,15 +807,15 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
         if (!cancelled) setPlayImageCoverReady(false);
       });
     return () => { cancelled = true; };
-  }, [activeSessionId, currentSessionKind]);
+  }, [activeSessionId, playWorldId, loading]);
 
   const togglePlayImageSetting = async (key: keyof PlayImageSettings) => {
-    if (!activeSessionId || currentSessionKind !== "play" || !playImageCoverReady) return;
+    if (!playWorldId || !playImageCoverReady) return;
     const next = { ...playImageSettings, [key]: !playImageSettings[key] };
     setPlayImageSettings(next);
     setPlayImageError(null);
     try {
-      await fetchJson(`/play/runs/${encodeURIComponent(activeSessionId)}/main/image-settings`, {
+      await fetchJson(`/play/runs/${encodeURIComponent(playWorldId)}/main/image-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(next),
@@ -808,7 +832,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
         ? "说一个短篇方向、标题灵感、人物压力或核心冲突，我会走 InkOS Short 生成正文、简介和封面。"
         : "Describe a short-fiction direction, title hook, pressure, or core conflict to run InkOS Short.";
     }
-    if (currentSessionKind === "play") {
+    if (isPlaySurface) {
       return isZh
         ? "说一个可玩的世界、角色处境或开场动作，我会启动互动世界；之后你可以自由行动或点建议动作。"
         : "Describe a playable world, character situation, or opening action to start an interactive world.";
@@ -820,6 +844,21 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
 
   return (
     <div className="flex flex-col h-full flex-1 min-w-0 relative">
+      {workSessionBinding ? (
+        <div className="flex shrink-0 items-center justify-end gap-3 border-b border-border/30 px-4 py-2">
+          {workSessionError ? <span role="alert" className="text-xs text-destructive">{workSessionError}</span> : null}
+          <button type="button" disabled={!sessionMatchesRoute || loading || creatingWorkSession || Boolean(input.trim()) || attachedFiles.length > 0}
+            className="rounded-lg border border-border/50 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-40"
+            onClick={() => { void (async () => {
+              setCreatingWorkSession(true); setWorkSessionError(null);
+              try { createDraftSession(null, "work", undefined, workSessionBinding); }
+              catch(error) { setWorkSessionError(error instanceof Error ? error.message : String(error)); }
+              finally { setCreatingWorkSession(false); }
+            })(); }}>
+            {isZh ? "新建作品会话" : "New work session"}
+          </button>
+        </div>
+      ) : null}
       {/* Message scroll area */}
       <div
         ref={scrollRef}
@@ -859,6 +898,10 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                 <div className="mt-1 text-xs leading-5 text-muted-foreground">{isZh ? "自己打字，想干嘛干嘛" : "Type anything you want"}</div>
               </button>
             </div>
+          </div>
+        ) : messages.length === 0 && !loading && currentPlayRun?.currentPresentation ? (
+          <div className="max-w-3xl mx-auto whitespace-pre-wrap leading-8" data-testid="current-play-scene">
+            {currentPlayRun.currentPresentation.sceneText}
           </div>
         ) : messages.length === 0 && !loading ? (
           <div className="h-full flex flex-col items-center justify-center text-center select-none">
@@ -988,7 +1031,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
       {/* Play choices are shortcuts, not a replacement for free actions. Scene
           images render inside their corresponding chat result card so the
           visual history scrolls with the conversation. */}
-      {currentSessionKind === "play" && !needsPlayModeChoice && showChoicePanel && (
+      {isPlaySurface && !needsPlayModeChoice && showChoicePanel && (
         <div className={`shrink-0 transition-[padding] duration-200 ${worldPanelInsetClass}`}>
           <PlayChoicePanel
             choices={playChoices}
@@ -998,7 +1041,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
               if (!activeSessionId || !playChoiceSet) return;
               setConsumedPlayChoiceKey(playChoiceSet.key);
               autoScrollPinnedRef.current = true;
-              void sendMessage(activeSessionId, action, { activeBookId, sessionKind: "play", actionSource: "button" });
+              void sendMessage(activeSessionId, action, { activeBookId, sessionKind: currentSessionKind, actionSource: "button" });
             }}
           />
         </div>
@@ -1128,14 +1171,14 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void onSend(input); } }}
                   placeholder={isZh ? "输入指令..." : "Enter command..."}
-                  disabled={!activeSessionId}
+                  disabled={!activeSessionId || !sessionMatchesRoute || creatingWorkSession}
                   rows={1}
                   className="flex-1 bg-transparent text-base leading-7 placeholder:text-muted-foreground/50 outline-none! border-none! ring-0! shadow-none focus:outline-none! focus:ring-0! focus:border-none! resize-none disabled:opacity-50 max-h-[200px] overflow-y-auto"
                 />
                 <button
                   type="button"
                   onClick={() => void onSend(input)}
-                  disabled={(!input.trim() && attachedFiles.length === 0 && !loading) || !activeSessionId}
+                  disabled={(!input.trim() && attachedFiles.length === 0 && !loading) || !activeSessionId || !sessionMatchesRoute || creatingWorkSession}
                   className="w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-all disabled:opacity-20 disabled:scale-100 shadow-sm shadow-primary/20"
                   title={loading && !input.trim() && attachedFiles.length === 0 ? (isZh ? "停止当前回复" : "Stop") : undefined}
                 >
@@ -1171,7 +1214,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                     {isZh ? "配置模型 →" : "Set up models →"}
                   </button>
                 )}
-                {currentSessionKind === "play" && (
+                {isPlaySurface && (
                   <button
                     type="button"
                     onClick={() => setWorldPanelOpen((v) => !v)}
@@ -1184,7 +1227,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                 )}
               </div>
             </div>
-            {currentSessionKind === "play" ? (
+            {isPlaySurface ? (
               <div className="relative mt-1 shrink-0">
                 <button
                   type="button"
@@ -1240,9 +1283,9 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
       </div>
       )}
 
-      {currentSessionKind === "play" && activeSessionId && (
+      {isPlaySurface && playWorldId && (
         <PlayHud
-          sessionId={activeSessionId}
+          sessionId={playWorldId}
           isStreaming={loading}
           isZh={isZh}
           open={worldPanelOpen}

@@ -32,6 +32,7 @@ import type {
 } from "../references/reference-context.js";
 import { Type } from "@sinclair/typebox";
 import { loadRuntimeStateSnapshot } from "../state/runtime-state-store.js";
+import { recordExecutionEvidence } from "../harness/execution-evidence.js";
 
 export interface ComposeChapterInput {
   readonly book: BookConfig;
@@ -91,9 +92,6 @@ export interface ComposeChapterOutput {
 
 export async function composeGovernedChapter(input: ComposeChapterInput): Promise<ComposeChapterOutput> {
   const storyDir = join(input.bookDir, "story");
-  const runtimeDir = join(storyDir, "runtime");
-  await mkdir(runtimeDir, { recursive: true });
-
   const baseContext = await collectSelectedContext(
     storyDir,
     input.plan,
@@ -102,6 +100,16 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     input.memorySemanticSelector,
   );
   const referenceContext = await loadReferenceContext(input);
+  return persistComposedContext(input, baseContext, referenceContext);
+}
+
+async function persistComposedContext(
+  input: ComposeChapterInput,
+  baseContext: Awaited<ReturnType<typeof collectSelectedContext>>,
+  referenceContext: BookReferenceContextSelection,
+): Promise<ComposeChapterOutput> {
+  const runtimeDir = join(input.bookDir, "story", "runtime");
+  await mkdir(runtimeDir, { recursive: true });
   const selectedContext = [...baseContext.entries, ...referenceContext.entries];
   const initialContextPackage = ContextPackageSchema.parse({
     chapter: input.chapterNumber,
@@ -304,14 +312,23 @@ export class ComposerAgent extends BaseAgent {
 
   async composeChapter(input: ComposeChapterInput): Promise<ComposeChapterOutput> {
     const contextBudget = input.contextBudget ?? contextBudgetFromClient(this.ctx.client);
-    return composeGovernedChapter({
+    const configured: ComposeChapterInput = {
       ...input,
       contextBudget,
       compressibleContextCompiler: input.compressibleContextCompiler
         ?? (contextBudget ? (request) => this.compileCompressibleContext(request) : undefined),
       outlineSectionSelector: input.outlineSectionSelector ?? ((request) => this.selectOutlineSections(request)),
       memorySemanticSelector: input.memorySemanticSelector ?? ((request) => this.selectMemoryCandidates(request)),
-    });
+    };
+    if (contextBudget && !input.outlineSectionSelector && !input.memorySemanticSelector) {
+      const reference = await loadReferenceContext(configured);
+      const complete = await this.completeContextWithinBudget(input.bookDir, input.plan, input.book.language, contextBudget, reference.entries);
+      if (complete) return persistComposedContext(configured, complete, reference);
+      const selected = await collectSelectedContext(join(input.bookDir, "story"), input.plan, input.book.language,
+        configured.outlineSectionSelector, configured.memorySemanticSelector);
+      return persistComposedContext(configured, selected, reference);
+    }
+    return composeGovernedChapter(configured);
   }
 
   async selectTaskContext(input: {
@@ -319,6 +336,7 @@ export class ComposerAgent extends BaseAgent {
     readonly chapterNumber: number;
     readonly goal: string;
     readonly language: "zh" | "en";
+    readonly contextBudget?: ContextBudget;
   }): Promise<ContextPackage> {
     const plan: PlanChapterOutput = {
       intent: { chapter: input.chapterNumber, goal: input.goal },
@@ -332,7 +350,9 @@ export class ComposerAgent extends BaseAgent {
       runtimePath: "runtime/task-context",
       plannerInputs: [],
     };
-    const selected = await collectSelectedContext(
+    const budget = input.contextBudget ?? contextBudgetFromClient(this.ctx.client);
+    const complete = budget ? await this.completeContextWithinBudget(input.bookDir, plan, input.language, budget) : undefined;
+    const selected = complete ?? await collectSelectedContext(
       join(input.bookDir, "story"),
       plan,
       input.language,
@@ -343,6 +363,24 @@ export class ComposerAgent extends BaseAgent {
       chapter: input.chapterNumber,
       selectedContext: selected.entries,
     });
+  }
+
+  private async completeContextWithinBudget(
+    bookDir: string, plan: PlanChapterOutput, language: "zh" | "en", budget: ContextBudget,
+    references: ContextPackage["selectedContext"] = [],
+  ): Promise<Awaited<ReturnType<typeof collectSelectedContext>> | undefined> {
+    // Reserve the other half for the consumer's instructions, methods, current
+    // manuscript and protocol. This is a context allocation, not a prose limit.
+    const contextAllowance = Math.floor((budget.contextWindowTokens - Math.max(0, budget.reservedOutputTokens)) / 2);
+    if (contextAllowance <= 0) return undefined;
+    const complete = await collectSelectedContext(join(bookDir, "story"), plan, language,
+      async request => request.candidates.map(candidate => candidate.source),
+      async request => request.candidates.map(candidate => candidate.id));
+    const tokens = estimateSelectedContextTokens([...complete.entries, ...references]);
+    if (tokens > contextAllowance) return undefined;
+    recordExecutionEvidence("context-selection", {scope:"story_context",mode:"complete",estimatedTokens:tokens,budgetTokens:contextAllowance,
+      sourceCount:complete.entries.length,modelCalls:0});
+    return {...complete,retrievalTrace:{...complete.retrievalTrace,selectionMode:"complete",semanticSelectedIds:[]}};
   }
 
   async selectMemoryCandidates(request: MemorySemanticSelectionRequest): Promise<ReadonlyArray<string>> {
@@ -363,7 +401,7 @@ export class ComposerAgent extends BaseAgent {
       const ids = await this.submitSelectedSources([
         {
           role: "system",
-          content: "Select story-memory candidates that materially help the current chapter task. Understand corrections, causality, aliases, and paraphrases. Submit only exact candidate ids. An empty selection is valid.",
+          content: "Select story-memory candidates that materially help the current chapter task. Understand corrections, causality, aliases, and paraphrases. An empty selection is valid.",
         },
         {
           role: "user",
@@ -389,8 +427,8 @@ export class ComposerAgent extends BaseAgent {
       {
         role: "system",
         content: request.language === "en"
-          ? `Select the ${semanticCandidateLabel(request.kind, "en")} needed for the current chapter. Submit only exact candidate source ids.`
-          : `选择当前章节需要的${semanticCandidateLabel(request.kind, "zh")}，只提交候选中的精确 source id。`,
+          ? `Select the ${semanticCandidateLabel(request.kind, "en")} needed for the current chapter.`
+          : `选择当前章节需要的${semanticCandidateLabel(request.kind, "zh")}。`,
       },
       {
         role: "user",
@@ -417,8 +455,8 @@ export class ComposerAgent extends BaseAgent {
       {
         role: "system",
         content: request.language === "en"
-          ? "Select user-bound reference sections useful for the current task. References are guidance, not canon. Submit only exact candidate source ids."
-          : "选择当前任务需要的用户绑定参考段落。参考资料不是正典，只提交候选中的精确 source id。",
+          ? "Select user-bound reference sections useful for the current task. References are guidance, not canon."
+          : "选择当前任务需要的用户绑定参考段落。参考资料不是正典。",
       },
       {
         role: "user",
@@ -434,29 +472,20 @@ export class ComposerAgent extends BaseAgent {
   ): Promise<ReadonlyArray<string>> {
     const allowedIds = [...allowed];
     if (allowedIds.length === 0) return [];
-    const literalSchemas = allowedIds.map((id) => Type.Literal(id));
-    const sourceIdSchema = literalSchemas.length === 1
-      ? literalSchemas[0]!
-      : Type.Union(literalSchemas as [typeof literalSchemas[number], ...typeof literalSchemas[number][]]);
     const selectedSourcesToolSchema = Type.Object({
-      selectedSources: Type.Array(sourceIdSchema, { uniqueItems: true }),
+      selectedIndices: Type.Array(Type.Integer({minimum:1,maximum:allowedIds.length}), { uniqueItems: true }),
     });
     const { result } = await this.submitStructured(
-      messages,
+      [...messages,{role:'user',content:JSON.stringify({candidateIndex:allowedIds.map((sourceId,index)=>({number:index+1,sourceId})),instruction:'Submit the selected candidate numbers in selectedIndices. The host resolves them to exact source identifiers; do not rewrite identifiers or names.'})}],
       {
         name: "submit_selected_sources",
         label: "Submit selected sources",
-        description: "Submit only exact ids from the supplied candidate set.",
+        description: "Submit the numbers of the selected entries in candidateIndex.",
         parameters: selectedSourcesToolSchema,
       },
       { temperature: 0.1, maxTokens },
     );
-    const selected = [...new Set(result.selectedSources)];
-    const unknown = selected.filter((source) => !allowed.has(source));
-    if (unknown.length > 0) {
-      throw new Error(`Semantic selector returned unknown source ids: ${unknown.join(", ")}`);
-    }
-    return selected;
+    return result.selectedIndices.map(index=>allowedIds[index-1]!);
   }
   async compileCompressibleContext(request: CompressibleContextCompileRequest): Promise<string> {
     const fragments: ContextFragment[] = request.compressibleEntries.map((entry, index) => ({

@@ -3,6 +3,7 @@ import type {
   ValidationResult,
 } from "../agents/state-validator.js";
 import type { StateValidatorAgent } from "../agents/state-validator.js";
+import type { StateValidationAuthorityContext } from "../agents/state-validator.js";
 import type { WriteChapterOutput } from "../agents/writer.js";
 import type { WriterAgent } from "../agents/writer.js";
 import type { Logger } from "../utils/logger.js";
@@ -27,6 +28,7 @@ export interface SettlementRetryParams {
   readonly oldState: string;
   readonly oldHooks: string;
   readonly originalValidation: ValidationResult;
+  readonly authorityContext?: StateValidationAuthorityContext;
   readonly language: LengthLanguage;
   readonly logWarn?: (message: { zh: string; en: string }) => void;
   readonly logger?: Pick<Logger, "warn">;
@@ -80,6 +82,7 @@ export async function reconcileChapterStateAfterReview(
       params.oldHooks,
       retryOutput.updatedHooks,
       params.language,
+      params.authorityContext,
     );
   } catch (error) {
     const validation: ValidationResult = {
