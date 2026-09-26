@@ -40,7 +40,7 @@ radarCommand
         log("Recommendations:");
 
         for (const rec of result.recommendations) {
-          log(`  [${(rec.confidence * 100).toFixed(0)}%] ${rec.platform}/${rec.genre}`);
+          log(`  ${rec.platform}/${rec.genre}`);
           log(`    Concept: ${rec.concept}`);
           log(`    Reasoning: ${rec.reasoning}`);
           log(`    Benchmarks: ${rec.benchmarkTitles.join(", ")}`);

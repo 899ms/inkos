@@ -9,6 +9,7 @@ import {
   nextTranscriptSeq,
   readTranscriptEvents,
   transcriptPath,
+  confirmedRequestInstruction,
 } from "../interaction/session-transcript.js";
 import { deriveBookSessionFromTranscript, restoreAgentMessagesFromTranscript } from "../interaction/session-transcript-restore.js";
 import type {
@@ -26,6 +27,16 @@ describe("session transcript codec", () => {
 
   afterEach(async () => {
     await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('recovers the originating request for a confirmed action across later chat turns',async()=>{
+    const base={version:1 as const,sessionId:'s1',timestamp:100};
+    await appendTranscriptEvent(projectRoot,{...base,type:'request_started',requestId:'r1',seq:1,input:'Import then write, review and export'});
+    await appendTranscriptEvent(projectRoot,{...base,type:'message',requestId:'r1',seq:2,uuid:'proposal',parentUuid:null,role:'toolResult',message:{role:'toolResult',toolCallId:'proposal',toolName:'workspace__propose_action',content:[],details:{kind:'proposed_action',action:'continuation_import',instruction:'Import'},isError:false,timestamp:100}});
+    await appendTranscriptEvent(projectRoot,{...base,type:'request_started',requestId:'r2',seq:3,input:'Show status'});
+    const events=await readTranscriptEvents(projectRoot,'s1');
+    expect(confirmedRequestInstruction(events,'continuation_import','Import')).toBe('Import then write, review and export');
+    expect(confirmedRequestInstruction(events,'create_book','Create')).toBe('Create');
   });
 
   it("一行写入一个 JSON event 并保留 raw AgentMessage 字段", async () => {
@@ -87,7 +98,7 @@ describe("session transcript codec", () => {
     });
   });
 
-  it("跳过坏行并保留合法 event", async () => {
+  it("拒绝包含坏行的 transcript", async () => {
     const dir = join(projectRoot, ".inkos", "sessions");
     await mkdir(dir, { recursive: true });
     await writeFile(
@@ -114,8 +125,7 @@ describe("session transcript codec", () => {
       ].join("\n"),
     );
 
-    const events = await readTranscriptEvents(projectRoot, "s1");
-    expect(events.map((event) => event.type)).toEqual(["request_started", "request_committed"]);
+    await expect(readTranscriptEvents(projectRoot, "s1")).rejects.toThrow("Invalid transcript event");
   });
 
   it("按已有 transcript 分配单调递增 seq", async () => {
@@ -205,7 +215,7 @@ describe("session transcript codec", () => {
       timestamp: 10,
     }], "start play", {
       sessionKind: "play",
-      legacyDisplay: {
+      display: {
         toolExecutions: [{
           id: "play-1",
           tool: "play_start",
@@ -232,11 +242,4 @@ describe("session transcript codec", () => {
       }),
     ]);
   });
-
-  it("从 core index 导出 transcript helper", async () => {
-    const core = await import("../index.js");
-    expect(typeof core.readTranscriptEvents).toBe("function");
-    expect(typeof core.restoreAgentMessagesFromTranscript).toBe("function");
-    expect(typeof core.TranscriptEventSchema.safeParse).toBe("function");
-  }, 15_000);
 });

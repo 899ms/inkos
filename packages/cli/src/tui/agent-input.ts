@@ -1,10 +1,13 @@
 import {
   ActionPayloadSchema,
+  CreativeEpisodeStore,
   appendInteractionMessage,
-  clearPendingDecision,
   createLLMClient,
   RequestedIntentSchema,
   runAgentSession,
+  listWorkManifests,
+  loadWorkManifest,
+  resolveSessionHarnessBinding,
   SessionKindSchema,
   type ActionPayload,
   type ActionSource,
@@ -14,6 +17,7 @@ import {
   type RequestedIntent,
   type SessionKind,
 } from "@actalk/inkos-core";
+import { join } from "node:path";
 import { persistProjectSession } from "./session-store.js";
 import { buildPipelineConfig, loadConfig } from "../utils.js";
 
@@ -28,6 +32,8 @@ interface TuiAgentRoute {
   readonly detachBook?: boolean;
   readonly clearPending?: boolean;
   readonly localResponse?: string;
+  readonly profileId?: string;
+  readonly workId?: string | null;
 }
 
 export async function processTuiAgentInput(params: {
@@ -49,15 +55,42 @@ export async function processTuiAgentInput(params: {
   const userTimestamp = Date.now();
   const currentBookId = params.activeBookId ?? params.session.activeBookId ?? null;
   const language = config.language === "en" ? "en" : "zh";
-  const route = resolveTuiAgentRoute(params.input, params.session, currentBookId, language);
+  const useWork = params.input.trim().match(/^\/use\s+([^\s]+)$/i)?.[1];
+  const selectedWork = useWork ? await loadWorkManifest(params.projectRoot, useWork) : null;
+  const localWorkResponse = selectedWork
+    ? (language === "en"
+        ? `Using Work "${selectedWork.title}" (${selectedWork.id}) with profile ${selectedWork.profileId}.`
+        : `已切换到 Work「${selectedWork.title}」（${selectedWork.id}），Profile：${selectedWork.profileId}。`)
+    : await resolveLocalWorkCommand(params.projectRoot, params.input, language);
+  const currentKind = params.session.sessionKind ?? (currentBookId ? "book" : "chat");
+  const route = localWorkResponse
+    ? {
+        userMessage: params.input.trim(),
+        sessionKind: selectedWork ? "work" as const : currentKind,
+        actionSource: "slash" as const,
+        localResponse: localWorkResponse,
+        ...(selectedWork ? { profileId: selectedWork.profileId, workId: selectedWork.id, detachBook: true } : {}),
+      }
+    : resolveTuiAgentRoute(params.input, params.session, currentBookId, language);
   const resolvedBookId = route.detachBook ? null : currentBookId;
-  const initialMessages = params.session.messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
-    .map((message) => ({ role: message.role, content: message.content }));
-
-  let nextSession = appendInteractionMessage(clearPendingDecision({
+  const surfaceBinding = resolveSessionHarnessBinding({
+    sessionKind: route.sessionKind,
+    bookId: resolvedBookId,
+    sessionId: params.session.sessionId,
+  });
+  const harnessBinding = {
+    profileId: route.profileId ?? (route.sessionKind === params.session.sessionKind ? params.session.profileId : undefined) ?? surfaceBinding.profileId,
+    workId: route.workId !== undefined
+      ? route.workId
+      : route.sessionKind === params.session.sessionKind && params.session.workId !== undefined
+        ? params.session.workId
+        : surfaceBinding.workId,
+  };
+  let nextSession = appendInteractionMessage({
     ...params.session,
     sessionKind: route.sessionKind,
+    profileId: harnessBinding.profileId,
+    workId: harnessBinding.workId,
     ...(route.playMode ? { playMode: route.playMode } : {}),
     ...(route.detachBook ? { activeBookId: undefined } : resolvedBookId ? { activeBookId: resolvedBookId } : {}),
     currentExecution: {
@@ -66,7 +99,7 @@ export async function processTuiAgentInput(params: {
       ...(params.session.activeChapterNumber ? { chapterNumber: params.session.activeChapterNumber } : {}),
       stageLabel: "agent",
     },
-  }), {
+  }, {
     role: "user",
     content: params.input,
     timestamp: userTimestamp,
@@ -98,6 +131,8 @@ export async function processTuiAgentInput(params: {
       sessionId: params.session.sessionId,
       bookId: resolvedBookId,
       sessionKind: route.sessionKind,
+      profileId: harnessBinding.profileId,
+      workId: harnessBinding.workId,
       actionSource: route.actionSource,
       ...(route.requestedIntent ? { requestedIntent: route.requestedIntent } : {}),
       ...(route.actionPayload ? { actionPayload: route.actionPayload } : {}),
@@ -110,6 +145,8 @@ export async function processTuiAgentInput(params: {
         ? client._piModel
         : { provider: config.llm.provider ?? "openai", modelId: config.llm.model },
       apiKey: client._apiKey,
+      stream: client.stream,
+      proxyUrl: client.proxyUrl,
       onEvent: (event: any) => {
         if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
           params.onTextDelta?.(event.assistantMessageEvent.delta);
@@ -117,23 +154,25 @@ export async function processTuiAgentInput(params: {
       },
     },
     route.userMessage,
-    initialMessages,
   );
   const createdBookId = extractCreatedBookId(result.messages);
   const activeBookId = createdBookId ?? resolvedBookId;
   const proposedAction = extractProposedAction(result.messages);
-  const responseText = proposedAction
+  const failure = result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined);
+  const responseText = failure ?? (proposedAction
     ? formatProposedAction(proposedAction, language)
-    : result.responseText;
+    : result.responseText);
 
   const completedSession = {
     ...nextSession,
     sessionKind: route.sessionKind,
+    profileId: createdBookId ? "longform-novel" : result.profileId ?? harnessBinding.profileId,
+    workId: createdBookId ?? result.workId ?? harnessBinding.workId,
     ...(route.playMode ? { playMode: route.playMode } : {}),
     ...(activeBookId ? { activeBookId } : {}),
     ...(proposedAction ? { pendingProposedAction: proposedAction } : {}),
     currentExecution: {
-      status: "completed" as const,
+      status: failure ? "failed" as const : "completed" as const,
       ...(activeBookId ? { bookId: activeBookId } : {}),
       ...(params.session.activeChapterNumber ? { chapterNumber: params.session.activeChapterNumber } : {}),
       stageLabel: "agent",
@@ -160,6 +199,38 @@ export async function processTuiAgentInput(params: {
 
   await persistProjectSession(params.projectRoot, nextSession);
   return { responseText, session: nextSession };
+}
+
+async function resolveLocalWorkCommand(
+  projectRoot: string,
+  rawInput: string,
+  language: "zh" | "en",
+): Promise<string | undefined> {
+  const input = rawInput.trim();
+  if (/^\/works$/i.test(input)) {
+    const works = await listWorkManifests(projectRoot);
+    if (works.length === 0) return language === "en" ? "No creative Works found." : "还没有创作 Work。";
+    return [
+      language === "en" ? "Creative Works:" : "创作 Works：",
+      ...works.map((work) => `- ${work.id} | ${work.profileId} | ${work.title} | ${work.artifacts.length} artifacts`),
+    ].join("\n");
+  }
+  const match = input.match(/^\/work\s+([^\s]+)$/i);
+  if (!match?.[1]) return undefined;
+  const work = await loadWorkManifest(projectRoot, match[1]);
+  const episodes = new CreativeEpisodeStore(join(projectRoot, ".inkos", "harness.sqlite"));
+  try {
+    const recent = episodes.listEpisodes({ workId: work.id, limit: 10 });
+    return [
+      `${work.title} (${work.id})`,
+      `${language === "en" ? "Profile" : "类型"}: ${work.profileId}`,
+      `${language === "en" ? "Artifacts" : "生成物"}: ${work.artifacts.length}`,
+      `${language === "en" ? "Recent episodes" : "最近执行"}: ${recent.length}`,
+      ...recent.map((episode) => `- ${episode.status} | ${episode.startedAt}`),
+    ].join("\n");
+  } finally {
+    episodes.close();
+  }
 }
 
 export function resolveTuiAgentRoute(

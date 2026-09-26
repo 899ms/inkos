@@ -1,28 +1,18 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { z } from "zod";
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 
 export interface SecretsFile {
   services: Record<string, { apiKey: string }>;
 }
 
+const SecretsFileSchema = z.object({
+  services: z.record(z.string(), z.object({ apiKey: z.string().min(1) }).strict()).default({}),
+}).strict();
+
 const SECRETS_DIR = ".inkos";
 const SECRETS_FILE = "secrets.json";
-
-const LEGACY_SERVICE_ID_REMAP: Record<string, string> = {
-  siliconflow: "siliconcloud",
-};
-
-function migrateLegacyServiceIds(secrets: SecretsFile): { data: SecretsFile; changed: boolean } {
-  let changed = false;
-  for (const [oldId, newId] of Object.entries(LEGACY_SERVICE_ID_REMAP)) {
-    if (secrets.services[oldId] && !secrets.services[newId]) {
-      secrets.services[newId] = secrets.services[oldId];
-      delete secrets.services[oldId];
-      changed = true;
-    }
-  }
-  return { data: secrets, changed };
-}
 
 async function readSecretsRaw(projectRoot: string): Promise<SecretsFile> {
   try {
@@ -30,34 +20,29 @@ async function readSecretsRaw(projectRoot: string): Promise<SecretsFile> {
       join(projectRoot, SECRETS_DIR, SECRETS_FILE),
       "utf-8",
     );
-    const parsed = JSON.parse(raw) as SecretsFile;
-    if (!parsed || typeof parsed !== "object" || !parsed.services) {
-      return { services: {} };
-    }
-    return parsed;
-  } catch {
-    return { services: {} };
+    return SecretsFileSchema.parse(JSON.parse(raw));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { services: {} };
+    throw error;
   }
 }
 
 export async function loadSecrets(projectRoot: string): Promise<SecretsFile> {
-  const raw = await readSecretsRaw(projectRoot);
-  const { data, changed } = migrateLegacyServiceIds(raw);
-  if (changed) await saveSecrets(projectRoot, data);
-  return data;
+  return readSecretsRaw(projectRoot);
 }
 
 export async function saveSecrets(
   projectRoot: string,
   secrets: SecretsFile,
 ): Promise<void> {
-  const dir = join(projectRoot, SECRETS_DIR);
-  await mkdir(dir, { recursive: true });
-  await writeFile(
-    join(dir, SECRETS_FILE),
-    JSON.stringify(secrets, null, 2),
-    "utf-8",
-  );
+  const parsed = SecretsFileSchema.parse(secrets);
+  await commitAtomicFileSet({
+    rootDir: projectRoot,
+    writes: [{
+      relativePath: join(SECRETS_DIR, SECRETS_FILE),
+      content: `${JSON.stringify(parsed, null, 2)}\n`,
+    }],
+  });
 }
 
 export async function getServiceApiKey(

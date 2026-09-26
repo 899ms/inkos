@@ -14,7 +14,10 @@ describe("PlayStore", () => {
         id: "rain-teahouse",
         title: "雨夜茶馆",
         premise: "主角在雨夜茶馆查一笔旧账。",
+        worldContract: "时间按场景自然推进。",
+        visualContract: "雨夜写实插画。",
         mode: "open",
+        language: "zh",
       });
       await store.ensureRun("rain-teahouse", "run-001");
       await store.ensureRun("rain-teahouse", "run-002");
@@ -51,7 +54,8 @@ describe("PlayStore", () => {
           "物件不使用 RPG 稀有度，只按情绪重量分层。",
         ].join("\n"),
         visualContract: "物件的情绪重量通过摆放距离、磨损、光线和人物反应体现，不要游戏边框或数值 UI。",
-      } as any);
+        language: "zh",
+      });
 
       await expect(store.loadWorld("contract-world")).resolves.toMatchObject({
         title: "雨夜合租屋",
@@ -116,15 +120,17 @@ describe("PlayStore", () => {
 
       await store.saveCurrentState("rain-teahouse", "run-001", {
         turn: 1,
-        activeSceneId: "scene-car",
-        activeLocation: "车内",
-        currentObjective: "确认徐晋安是否隐瞒同居地点",
+        worldId: "rain-teahouse",
+        runId: "run-001",
+        mode: "open",
+        premise: "车内调查",
       });
       await store.writeProjection("rain-teahouse", "run-001", "state/current.md", "# 当前状态\n\n车内。");
 
       expect(await store.readTranscript("rain-teahouse", "run-001")).toHaveLength(2);
       expect(await store.loadCurrentState("rain-teahouse", "run-001")).toMatchObject({
-        activeSceneId: "scene-car",
+        worldId: "rain-teahouse",
+        runId: "run-001",
       });
       await expect(store.readProjection("rain-teahouse", "run-001", "state/current.md"))
         .resolves.toContain("车内");
@@ -133,7 +139,7 @@ describe("PlayStore", () => {
     }
   });
 
-  it("ignores malformed JSONL rows when reading logs", async () => {
+  it("rejects malformed JSONL rows", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-play-store-"));
     const store = new PlayStore(root);
 
@@ -149,9 +155,7 @@ describe("PlayStore", () => {
         createdAt: "2026-05-28T00:00:00.000Z",
       });
 
-      const events = await store.readEvents("rain-teahouse", "run-001");
-      expect(events).toHaveLength(1);
-      expect(events[0]?.actionKind).toBe("wait");
+      await expect(store.readEvents("rain-teahouse", "run-001")).rejects.toThrow("Invalid Play event");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

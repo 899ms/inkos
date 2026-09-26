@@ -36,33 +36,25 @@ describe("buildPartsFromEvents", () => {
     expect(parts[2]).toEqual({ type: "text", content: "Here is the analysis." });
   });
 
-  it("moves pre-tool text to thinking when tool starts", () => {
+  it("keeps tool execution structurally separate from pre-tool narration", () => {
     const parts = buildPartsFromEvents([
       { type: "thinking:start" },
       { type: "thinking:delta", text: "Reasoning here" },
       { type: "thinking:end" },
       { type: "draft:delta", text: "I will call writer now" },
-      { type: "tool:start", id: "t1", tool: "sub_agent", agent: "writer", stages: ["准备章节输入", "撰写章节草稿"] },
+      { type: "tool:start", id: "t1", tool: "write_chapters", stages: ["准备章节输入", "撰写章节草稿"] },
       { type: "log:stage", stageName: "准备章节输入" },
       { type: "log:stage", stageName: "撰写章节草稿" },
       { type: "tool:end", id: "t1" },
       { type: "draft:delta", text: "Chapter written." },
     ]);
 
-    // Pre-tool text "I will call writer now" should become thinking, not a text part
-    expect(parts[0].type).toBe("thinking");
-    if (parts[0].type === "thinking") {
-      expect(parts[0].content).toContain("Reasoning here");
-      expect(parts[0].content).toContain("I will call writer now");
+    expect(parts.map((part) => part.type)).toEqual(["thinking", "text", "tool", "text"]);
+    if (parts[2].type === "tool") {
+      expect(parts[2].execution.stages).toHaveLength(2);
+      expect(parts[2].execution.stages![0].status).toBe("completed");
+      expect(parts[2].execution.stages![1].status).toBe("completed");
     }
-    expect(parts[1].type).toBe("tool");
-    if (parts[1].type === "tool") {
-      expect(parts[1].execution.agent).toBe("writer");
-      expect(parts[1].execution.stages).toHaveLength(2);
-      expect(parts[1].execution.stages![0].status).toBe("completed");
-      expect(parts[1].execution.stages![1].status).toBe("completed");
-    }
-    expect(parts[2]).toEqual({ type: "text", content: "Chapter written." });
   });
 
   it("handles multiple tool calls in sequence", () => {
@@ -71,7 +63,7 @@ describe("buildPartsFromEvents", () => {
       { type: "tool:end", id: "t1" },
       { type: "tool:start", id: "t2", tool: "grep" },
       { type: "tool:end", id: "t2" },
-      { type: "tool:start", id: "t3", tool: "sub_agent", agent: "writer", stages: ["准备章节输入"] },
+      { type: "tool:start", id: "t3", tool: "write_chapters", stages: ["准备章节输入"] },
       { type: "tool:end", id: "t3" },
       { type: "draft:delta", text: "Done." },
     ]);
@@ -85,7 +77,7 @@ describe("buildPartsFromEvents", () => {
 
   it("tracks pipeline stages and progress on running tool", () => {
     const parts = buildPartsFromEvents([
-      { type: "tool:start", id: "t1", tool: "sub_agent", agent: "writer", stages: ["步骤1", "步骤2"] },
+      { type: "tool:start", id: "t1", tool: "write_chapters", stages: ["步骤1", "步骤2"] },
       { type: "log:stage", stageName: "步骤1" },
       { type: "llm:progress", status: "thinking", elapsedMs: 5000, totalChars: 0, chineseChars: 0 },
     ]);
@@ -132,7 +124,7 @@ describe("buildPartsFromEvents", () => {
 
   it("renders story context compression as a visible stage inside the running writer tool", () => {
     const parts = buildPartsFromEvents([
-      { type: "tool:start", id: "t1", tool: "sub_agent", agent: "writer", stages: ["准备章节输入", "撰写章节草稿"] },
+      { type: "tool:start", id: "t1", tool: "write_chapters", stages: ["准备章节输入", "撰写章节草稿"] },
       {
         type: "context:compression",
         category: "story_context",
@@ -164,7 +156,7 @@ describe("buildPartsFromEvents", () => {
 
   it("shows context compression token budget and source trace while running", () => {
     const parts = buildPartsFromEvents([
-      { type: "tool:start", id: "t1", tool: "sub_agent", agent: "writer", stages: ["准备章节输入"] },
+      { type: "tool:start", id: "t1", tool: "write_chapters", stages: ["准备章节输入"] },
       {
         type: "context:compression",
         category: "story_context",
@@ -216,7 +208,7 @@ describe("buildPartsFromEvents", () => {
 
   it("marks tool error correctly", () => {
     const parts = buildPartsFromEvents([
-      { type: "tool:start", id: "t1", tool: "sub_agent", agent: "writer" },
+      { type: "tool:start", id: "t1", tool: "write_chapters" },
       { type: "tool:end", id: "t1", isError: true, result: "timeout" },
     ]);
 
@@ -287,6 +279,7 @@ describe("buildPartsFromEvents", () => {
         result: "advanced",
         details: {
           kind: "play_turn_advanced",
+          presentation: "immersive-scene",
           sceneText: "工具生成的权威场景。",
           suggestedActions: ["检查票根"],
         },
@@ -309,6 +302,7 @@ describe("buildPartsFromEvents", () => {
         result: "revised",
         details: {
           kind: "play_turn_revised",
+          presentation: "immersive-scene",
           sceneText: "工具生成的新版本场景。",
           suggestedActions: ["检查录音笔"],
         },
@@ -332,24 +326,6 @@ describe("buildPartsFromEvents", () => {
     expect(parts[0].type === "tool" ? parts[0].execution.label : "").toBe("确认动作");
   });
 
-  it("localizes known tool errors", () => {
-    const parts = buildPartsFromEvents([
-      { type: "tool:start", id: "t1", tool: "sub_agent", agent: "writer" },
-      {
-        type: "tool:end",
-        id: "t1",
-        isError: true,
-        result: "Latest chapter 1 is state-degraded. Repair state or rewrite that chapter before continuing.",
-      },
-    ]);
-
-    expect(parts[0].type).toBe("tool");
-    if (parts[0].type === "tool") {
-      expect(parts[0].execution.error).toBe(
-        "最新第 1 章处于状态降级（state-degraded）。继续写下一章前，请先修复状态，或重写这一章。",
-      );
-    }
-  });
 });
 
 describe("buildPartsFromEvents in English app language", () => {
@@ -362,12 +338,12 @@ describe("buildPartsFromEvents in English app language", () => {
     const parts = buildPartsFromEvents([
       { type: "tool:start", id: "t1", tool: "read" },
       { type: "tool:end", id: "t1" },
-      { type: "tool:start", id: "t2", tool: "sub_agent", agent: "writer" },
+      { type: "tool:start", id: "t2", tool: "write_chapters" },
       { type: "tool:end", id: "t2" },
     ]);
 
     expect(parts[0].type === "tool" ? parts[0].execution.label : "").toBe("Read file");
-    expect(parts[1].type === "tool" ? parts[1].execution.label : "").toBe("Write");
+    expect(parts[1].type === "tool" ? parts[1].execution.label : "").toBe("Write chapters");
   });
 
   it("labels session context compression and its progress in English", () => {
@@ -397,23 +373,4 @@ describe("buildPartsFromEvents in English app language", () => {
     }
   });
 
-  it("keeps English runtime error messages untouched", () => {
-    setAppLanguage("en");
-    const parts = buildPartsFromEvents([
-      { type: "tool:start", id: "t1", tool: "sub_agent", agent: "writer" },
-      {
-        type: "tool:end",
-        id: "t1",
-        isError: true,
-        result: "Latest chapter 1 is state-degraded. Repair state or rewrite that chapter before continuing.",
-      },
-    ]);
-
-    expect(parts[0].type).toBe("tool");
-    if (parts[0].type === "tool") {
-      expect(parts[0].execution.error).toBe(
-        "Latest chapter 1 is state-degraded. Repair state or rewrite that chapter before continuing.",
-      );
-    }
-  });
 });

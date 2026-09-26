@@ -1,28 +1,32 @@
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
+import { recoverSessionAfterAgentFailure, workSessionResponseMetadata } from "./work-session.js";
+import { ChatRequestStore } from "./chat-request-store.js";
+import type { ChatAttachmentPayload, StudioCompletionStatus } from "../shared/session-request.js";
 import {
   StateManager,
+  recoverAtomicFileSets,
+  commitAtomicFileSet,
   PipelineRunner,
   createLLMClient,
   createLogger,
-  createInteractionToolsFromDeps,
   computeAnalytics,
   loadProjectConfig,
-  loadProjectSession,
-  processProjectInteractionRequest,
-  resolveSessionActiveBook,
   listBookSessions,
   loadBookSession,
   appendManualSessionMessages,
+  readTranscriptEvents,
+  confirmedRequestInstruction,
   createAndPersistBookSession,
   renameBookSession,
   deleteBookSession,
-  migrateBookSession,
-  SessionAlreadyMigratedError,
+  transitionSessionToWork,
+  SessionAlreadyBoundError,
   abortAgentSession,
   runAgentSession,
   resolveServicePreset,
@@ -30,6 +34,8 @@ import {
   resolveServiceModelsBaseUrl,
   guessServiceFromBaseUrl,
   resolveServiceModel,
+  ServiceApiKeyNotFoundError,
+  LLMConfigurationError,
   loadSecrets,
   saveSecrets,
   listModelsForService,
@@ -39,18 +45,19 @@ import {
   fetchWithProxy,
   chatCompletion,
   runWorkerAgent,
+  appendActivatedSkillGuidance,
+  hydrateActivatedSkillGuidance,
   buildExportArtifact,
-  evaluateBookQuality,
-  ConsolidatorAgent,
+  ChapterExportSourceError,
   DetectionConfigSchema,
   ResearchSearchConfigSchema,
   GLOBAL_ENV_PATH,
   COVER_PROVIDER_PRESETS,
   createPlayDB,
   PlayStore,
-  buildPlayEntityImagePrompt,
-  buildPlaySceneImagePrompt,
-  generatePlayImage,
+  playSceneImageKey,
+  playImageContext,
+  createPlayImageTool,
   readPlayImageManifest,
   readPlayImageSettings,
   writePlayImageSettings,
@@ -65,24 +72,24 @@ import {
   normalizePlayMode as normalizeCorePlayMode,
   normalizeRequestedIntent as normalizeCoreRequestedIntent,
   normalizeSkillIdList as normalizeCoreSkillIdList,
-  inferLanguage,
+  isLLMApiFormat,
   ingestMaterial,
   createSkillRegistry,
   loadAvailableAgentSkills,
-  activatedSkillIds,
   mergeActivatedSkillGuidance,
-  resolveProductionSkillActivations,
+  resolveProfileSkillActivations,
+  confirmedCapabilityBinding,
+  capabilityActionId,
+  createBuiltInWorkProfileRegistry,
+  executeExplicitCapabilityTool,
+  createExportBookTool,
+  resolveSessionHarnessBinding,
   parseAgentSkillDocument,
-  getBuiltinPrompt,
-  listBuiltinPromptPacks,
-  listBuiltinPrompts,
-  loadPromptPackPrompt,
-  promptOverridePath,
   toPosixPath,
   type ActionPayload,
   type ActionSource,
   type AgentSkill,
-  type BuiltinPrompt,
+  type WorkManifest,
   createGenerateCoverTool,
   createInteractiveFilmCreationTool,
   createPlayStartTool,
@@ -90,15 +97,29 @@ import {
   createShortFictionRunTool,
   createStoryboardCreationTool,
   createTranslationCreateTool,
+  createTranslationRunTool,
+  createTranslationExportTool,
+  createReplaceWorkArtifactTool,
+  createAdoptWorkRevisionTool,
+  WorkProfileSchema,
   createFanficBookTool,
   createContinuationImportTool,
   createSpinoffBookTool,
   createImitationBookTool,
-  createSubAgentTool,
+  createBookFoundationTool,
+  createWriteChaptersTool,
+  createFoundationRevisionTool,
+  createReviewChapterTool,
+  createReviseChapterTool,
+  createGenerateStyleGuideTool,
+  createResyncChapterStateTool,
+  createImportChaptersTool,
+  createImportCanonTool,
+  createRefreshFanficCanonTool,
+  DEFAULT_REVISE_MODE,
   createDraftStructureTool,
   createConnectChoiceTool,
   createRemoveNodeTool,
-  createLLMTranslationModel,
   deleteLatestChapter,
   executeEditTransaction,
   listChapterVersions,
@@ -106,18 +127,21 @@ import {
   readChapterUserBrief,
   readChapterVersion,
   saveChapterUserBrief,
-  createTranslationProjectFromFile,
   loadTranslationChapter,
   loadTranslationManifest,
-  runTranslationProject,
-  writeTranslationExport,
+  translationProjectDir,
+  listWorkManifests,
+  loadWorkManifest,
+  CreativeEpisodeStore,
   filmLLMDepsFromClient,
   applyGraphDelta,
   loadStoryGraph,
+  storyGraphPath,
+  workDirectory,
+  safeChildPath,
   reviewStoryGraph,
   exportInk,
   buildPlayableHtml,
-  analyzeEmotionalArcs,
   analyzePathDistribution,
   generateNodeImage,
   defaultNodeImageDeps,
@@ -128,17 +152,20 @@ import {
   type ProjectConfig,
   type LogSink,
   type LogEntry,
+  type LLMApiFormat,
   type RequestedIntent,
   type SessionKind,
   type AgentSessionAttachment,
+  type ActionResult,
+  type ConfirmedCapabilityBinding,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
-import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
-import { buildStudioBookConfig } from "./book-create.js";
+import { buildStudioBookConfig, normalizeStudioPlatform } from "./book-create.js";
 import {
   deleteStudioTaskSnapshot,
   loadStudioTaskSnapshot,
@@ -158,6 +185,28 @@ function pick(lang: StudioLanguage, zh: string, en: string): string {
   return lang === "en" ? en : zh;
 }
 
+async function resolveStudioProfileSkills(
+  root: string,
+  profileId: string,
+  options: {
+    readonly includeRecommended?: boolean;
+    readonly extraSkillIds?: ReadonlyArray<string>;
+  } = {},
+) {
+  const available = await loadAvailableAgentSkills({ projectRoot: root });
+  const profiles = createBuiltInWorkProfileRegistry(root);
+  const profileSkills = resolveProfileSkillActivations(
+    available.skills,
+    profiles.require(profileId),
+    { includeRecommended: options.includeRecommended },
+  );
+  const extras = (options.extraSkillIds ?? []).flatMap((id) => {
+    const skill = available.skills.find((candidate) => candidate.id === id);
+    return skill ? [{ skill, resources: [] }] : [];
+  });
+  return mergeActivatedSkillGuidance(profileSkills, extras);
+}
+
 // -- Pipeline stage definitions per agent type --
 
 interface BilingualLabel {
@@ -165,48 +214,11 @@ interface BilingualLabel {
   readonly en: string;
 }
 
-const PIPELINE_STAGES: Record<string, ReadonlyArray<BilingualLabel>> = {
-  writer: [
-    { zh: "准备章节输入", en: "Prepare chapter input" },
-    { zh: "撰写章节草稿", en: "Write chapter draft" },
-    { zh: "落盘最终章节", en: "Save final chapter" },
-    { zh: "生成最终真相文件", en: "Generate final truth files" },
-    { zh: "校验真相文件变更", en: "Validate truth file changes" },
-    { zh: "同步记忆索引", en: "Sync memory index" },
-    { zh: "更新章节索引与快照", en: "Update chapter index and snapshot" },
-  ],
-  architect: [
-    { zh: "生成基础设定", en: "Generate foundation" },
-    { zh: "保存书籍配置", en: "Save book config" },
-    { zh: "写入基础设定文件", en: "Write foundation files" },
-    { zh: "初始化控制文档", en: "Initialize control documents" },
-    { zh: "创建初始快照", en: "Create initial snapshot" },
-  ],
-  reviser: [
-    { zh: "加载修订上下文", en: "Load revision context" },
-    { zh: "修订章节", en: "Revise chapter" },
-    { zh: "落盘修订结果", en: "Save revision result" },
-    { zh: "更新索引与快照", en: "Update index and snapshot" },
-  ],
-  auditor: [{ zh: "审计章节", en: "Audit chapter" }],
-};
-
-function pipelineStages(agent: string, lang: StudioLanguage = "zh"): string[] | undefined {
-  return PIPELINE_STAGES[agent]?.map((stage) => pick(lang, stage.zh, stage.en));
-}
-
 function attachmentDisposition(fileName: string): string {
   const safeAscii = fileName.replace(/[^A-Za-z0-9._-]+/g, "_") || "download";
   return `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
-const AGENT_LABELS: Record<string, BilingualLabel> = {
-  architect: { zh: "建书", en: "Book setup" },
-  writer: { zh: "写作", en: "Writing" },
-  auditor: { zh: "审计", en: "Audit" },
-  reviser: { zh: "修订", en: "Revision" },
-  exporter: { zh: "导出", en: "Export" },
-};
 const TOOL_LABELS: Record<string, BilingualLabel> = {
   read: { zh: "读取文件", en: "Read file" },
   edit: { zh: "编辑文件", en: "Edit file" },
@@ -226,17 +238,20 @@ const TOOL_LABELS: Record<string, BilingualLabel> = {
   play_edit: { zh: "编辑互动世界", en: "Edit interactive world" },
   play_start: { zh: "启动互动世界", en: "Start interactive world" },
   play_revise: { zh: "重做互动回合", en: "Redo interactive turn" },
+  generate: { zh: "生成当前作品", en: "Generate current work" },
   play_step: { zh: "推进互动世界", en: "Advance interactive world" },
+  create_book: { zh: "创建长篇", en: "Create long-form Work" },
+  revise_foundation: { zh: "重建设定", en: "Revise foundation" },
+  write_chapters: { zh: "写作章节", en: "Write chapters" },
+  review_chapter: { zh: "审查章节", en: "Review chapter" },
+  revise_chapter: { zh: "修订章节", en: "Revise chapter" },
+  export_book: { zh: "导出作品", en: "Export Work" },
   create_narrative_forecast: { zh: "剧情多线推演", en: "Narrative forecast" },
   get_narrative_forecast: { zh: "核验剧情推演", en: "Recheck forecast" },
   select_narrative_branch: { zh: "采用候选分支", en: "Select candidate branch" },
 };
 
-function resolveToolLabel(tool: string, agent?: string, lang: StudioLanguage = "zh"): string {
-  if (tool === "sub_agent" && agent) {
-    const label = AGENT_LABELS[agent];
-    return label ? pick(lang, label.zh, label.en) : agent;
-  }
+function resolveToolLabel(tool: string, _agent?: string, lang: StudioLanguage = "zh"): string {
   const label = TOOL_LABELS[tool];
   return label ? pick(lang, label.zh, label.en) : tool;
 }
@@ -425,7 +440,7 @@ function nonTextModelMessage(modelId: string, lang: StudioLanguage = "zh"): stri
 }
 
 function extractToolError(result: unknown): string {
-  return summarizeToolResult(result, 500);
+  return summarizeToolResult(result);
 }
 
 function resolveProjectImageFile(root: string, rawPath: string): { readonly resolved: string; readonly contentType: string } {
@@ -444,8 +459,8 @@ function resolveProjectImageFile(root: string, rawPath: string): { readonly reso
   ) {
     throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Invalid project file path");
   }
-  if (!relPath.startsWith("shorts/") && !relPath.startsWith("covers/") && !relPath.startsWith("interactive-films/")) {
-    throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Only generated shorts/, covers/, interactive-films/ images can be previewed");
+  if (!relPath.startsWith("works/")) {
+    throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Only generated work images can be previewed");
   }
 
   const ext = relPath.split(".").pop()?.toLowerCase() ?? "";
@@ -485,7 +500,7 @@ function normalizeProjectGeneratedPath(root: string, rawPath: string, code: stri
     throw new ApiError(400, code, "Invalid project artifact path");
   }
 
-  const allowedRoots = ["dramas/", "storyboards/", "interactive-films/", "shorts/", "covers/"];
+  const allowedRoots = ["works/"];
   if (!allowedRoots.some((prefix) => relPath.startsWith(prefix))) {
     throw new ApiError(400, code, "Only generated writing artifacts can be opened");
   }
@@ -515,37 +530,14 @@ function resolveProjectTextArtifactFile(root: string, rawPath: string): { readon
   return { ...file, contentType };
 }
 
-function isLikelyFailedToolResult(exec: CollectedToolExec): boolean {
-  if (exec.status === "error") return true;
-  const text = `${exec.error ?? ""}\n${exec.result ?? ""}`.toLowerCase();
-  return /\bfailed\b|\berror\b|失败|异常|出错/.test(text);
-}
-
-function hasSuccessfulSubAgentExec(
-  execs: ReadonlyArray<CollectedToolExec>,
-  agent: string,
-): boolean {
-  return execs.some((exec) =>
-    exec.tool === "sub_agent"
-    && exec.agent === agent
-    && exec.status === "completed"
-    && !isLikelyFailedToolResult(exec)
-  );
-}
-
 function hasSuccessfulToolExec(
   execs: ReadonlyArray<CollectedToolExec>,
   tool: string,
 ): boolean {
   return execs.some((exec) =>
-    exec.tool === tool
+    exec.tool.split("__").at(-1) === tool.split("__").at(-1)
     && exec.status === "completed"
-    && !isLikelyFailedToolResult(exec)
   );
-}
-
-function hasSuccessfulToolResult(execs: ReadonlyArray<CollectedToolExec>): boolean {
-  return execs.some((exec) => exec.status === "completed" && !isLikelyFailedToolResult(exec));
 }
 
 function normalizeStudioSessionKind(value: unknown, fallback: SessionKind): SessionKind {
@@ -571,6 +563,23 @@ function normalizeStudioRequestedIntent(value: unknown): RequestedIntent | undef
   } catch {
     throw new ApiError(400, "INVALID_REQUESTED_INTENT", `Invalid requestedIntent: ${String(value)}`);
   }
+}
+
+const CREATION_ENTRY_PROPOSAL_ACTIONS: ReadonlySet<RequestedIntent> = new Set([
+  "fanfic_init",
+  "spinoff_create",
+  "style_imitation",
+  "continuation_import",
+  "translation_create",
+]);
+
+function normalizeStudioProposalAction(value: unknown): RequestedIntent | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const action = normalizeStudioRequestedIntent(value);
+  if (!action || !CREATION_ENTRY_PROPOSAL_ACTIONS.has(action)) {
+    throw new ApiError(400, "INVALID_PROPOSAL_ACTION", `Invalid proposalAction: ${String(value)}`);
+  }
+  return action;
 }
 
 function normalizeStudioActionPayload(value: unknown): ActionPayload | undefined {
@@ -607,7 +616,7 @@ type StudioAgentAttachmentPayload = {
 
 const MAX_AGENT_ATTACHMENTS = 8;
 const MAX_AGENT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
-const MAX_AGENT_ATTACHMENT_TEXT_CHARS = 120_000;
+const MAX_AGENT_INLINE_TEXT_CHARS = 120_000;
 const MAX_TRANSLATION_UPLOAD_BYTES = 80 * 1024 * 1024;
 const MAX_CANON_UPLOAD_BYTES = 18 * 1024 * 1024;
 const MAX_SKILL_IMPORT_FILES = 128;
@@ -697,16 +706,13 @@ async function normalizeAgentAttachments(
 
     if (isTextAttachment(filename, mimeType)) {
       const text = parsed.buffer.toString("utf-8");
-      if (text.length > MAX_AGENT_ATTACHMENT_TEXT_CHARS) {
-        throw new ApiError(413, "ATTACHMENT_TEXT_TOO_LARGE", `${filename} is too large to inject without semantic compaction`);
-      }
       out.push({
         id: payload.id || `${Date.now()}-${index}`,
         filename,
         mimeType,
         size: parsed.buffer.byteLength,
         storedPath: relPath,
-        text,
+        ...(text.length <= MAX_AGENT_INLINE_TEXT_CHARS ? { text } : {}),
       });
       continue;
     }
@@ -934,30 +940,6 @@ async function loadStudioSkills(root: string) {
   };
 }
 
-async function toStudioPromptPackPrompt(root: string, prompt: BuiltinPrompt) {
-  const loaded = await loadPromptPackPrompt({ promptId: prompt.id, projectRoot: root });
-  const overridePath = promptOverridePath(root, prompt.id);
-  return {
-    id: prompt.id,
-    packId: prompt.packId,
-    title: prompt.title,
-    defaultContent: prompt.content,
-    content: loaded.content,
-    source: loaded.source,
-    overridden: loaded.source === "project",
-    // Windows 上 relative() 产生反斜杠，这个 path 会被前端展示/断言为 posix 相对路径
-    path: loaded.source === "project" ? toPosixPath(relative(root, overridePath)) : undefined,
-  };
-}
-
-function normalizeStudioPromptId(value: unknown): string {
-  const promptId = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (!promptId || !getBuiltinPrompt(promptId)) {
-    throw new ApiError(404, "PROMPT_PACK_PROMPT_NOT_FOUND", `Prompt pack prompt not found: ${String(value)}`);
-  }
-  return promptId;
-}
-
 async function listProjectSkillIds(root: string): Promise<Set<string>> {
   try {
     const entries = await readdir(projectSkillsDir(root), { withFileTypes: true });
@@ -995,117 +977,47 @@ function validateAgentActionExecution(args: {
   readonly language?: StudioLanguage;
 }): string | undefined {
   const lang = args.language ?? "zh";
-  const failedExec = args.collectedToolExecs.find(isLikelyFailedToolResult);
-  if (failedExec) {
-    const detail = failedExec.error ?? failedExec.result ?? pick(lang, "未知错误", "unknown error");
+  const binding = args.requestedIntent
+    ? confirmedCapabilityBinding(args.requestedIntent)
+    : undefined;
+  if (binding && !hasSuccessfulToolExec(args.collectedToolExecs, binding.actionId)) {
     return pick(
       lang,
-      `${failedExec.label} 执行失败：${detail}`,
-      `${failedExec.label} failed: ${detail}`,
-    );
-  }
-
-  if (
-    args.agentBookId
-    && args.requestedIntent === "write_next"
-    && !hasSuccessfulSubAgentExec(args.collectedToolExecs, "writer")
-  ) {
-    return pick(
-      lang,
-      "模型声称已完成下一章，但没有实际调用写作工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "The model claimed the next chapter is done, but it never called the writing tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (
-    !args.agentBookId
-    && args.requestedIntent === "create_book"
-    && !hasSuccessfulSubAgentExec(args.collectedToolExecs, "architect")
-  ) {
-    return pick(
-      lang,
-      "已确认建书，但模型没有实际调用建书工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Book creation was confirmed, but the model never called the book setup tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (args.requestedIntent === "short_run" && !hasSuccessfulToolExec(args.collectedToolExecs, "short_fiction_run")) {
-    return pick(
-      lang,
-      "已确认生成短篇，但模型没有实际调用短篇生产工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Short fiction was confirmed, but the model never called the short fiction tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (args.requestedIntent === "play_start" && !hasSuccessfulToolExec(args.collectedToolExecs, "play_start")) {
-    return pick(
-      lang,
-      "已确认启动互动世界，但模型没有实际调用互动世界工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Starting the interactive world was confirmed, but the model never called the interactive world tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (args.requestedIntent === "generate_cover" && !hasSuccessfulToolExec(args.collectedToolExecs, "generate_cover")) {
-    return pick(
-      lang,
-      "已确认生成封面，但模型没有实际调用封面工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Cover generation was confirmed, but the model never called the cover tool. Retry; if it keeps failing, check whether the model supports tool calls.",
+      `已确认动作 ${binding.actionId}，但模型没有执行对应 capability action。请重试或检查模型工具调用支持。`,
+      `Action ${binding.actionId} was confirmed, but the model did not execute the matching capability action. Retry or check model tool-call support.`,
     );
   }
 
   return undefined;
 }
 
-type AgentFailureKind = "busy" | "llm" | "internal" | "unknown";
-
-function classifyAgentFailure(message: string): AgentFailureKind {
-  const text = message.trim();
-  if (!text) return "unknown";
-  if (/BookWriteLockError|locked by an active InkOS write|BOOK_BUSY/i.test(text)) {
-    return "busy";
-  }
-  if (
-    /API\s*返回|上游|upstream|Bad Gateway|temporarily unavailable|rate limit|quota|API Key|unauthorized|forbidden|无法连接到 API|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|LLM returned empty response|Provider finish_reason|reasoning_content/i.test(text)
-  ) {
-    return "llm";
-  }
-  if (
-    /PlannerParseError|Architect output missing|required sections|missing YAML frontmatter|frontmatter delimiters|parseMemo|Book creation artifact is incomplete|Short-hit draft is incomplete|工具执行失败|执行失败|sub_agent|tool execution|RUNTIME_STATE_DELTA|JSON parse|解析失败/i.test(text)
-  ) {
-    return "internal";
-  }
-  return "unknown";
-}
-
 function formatAgentFailure(
-  message: string,
+  error: unknown,
   lang: StudioLanguage = "zh",
+  origin: "model" | "host" = "host",
 ): { readonly code: string; readonly message: string; readonly status: 409 | 500 | 502 } {
-  const kind = classifyAgentFailure(message);
-  if (kind === "busy") {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof Error && error.name === "BookWriteLockError") {
     return { code: "BOOK_BUSY", message, status: 409 };
   }
-  if (kind === "llm") {
+  if (origin === "model") {
     return { code: "AGENT_LLM_ERROR", message, status: 502 };
   }
-  if (kind === "internal") {
-    return {
-      code: "AGENT_INTERNAL_ERROR",
-      message: pick(lang, `InkOS 内部流程错误：${message}`, `InkOS internal pipeline error: ${message}`),
-      status: 500,
-    };
-  }
-  return { code: "AGENT_ERROR", message, status: 500 };
+  return {
+    code: "INKOS_ACTION_ERROR",
+    message: pick(lang, `InkOS 动作失败：${message}`, `InkOS action failed: ${message}`),
+    status: 500,
+  };
 }
 
 function formatAgentActionFailure(
-  message: string,
+  error: unknown,
   lang: StudioLanguage,
-): { readonly code: string; readonly message: string; readonly status: 409 | 502 } {
-  const failure = formatAgentFailure(message, lang);
+): { readonly code: string; readonly message: string; readonly status: 409 | 500 } {
+  const failure = formatAgentFailure(error, lang, "host");
   return failure.code === "BOOK_BUSY"
     ? { code: failure.code, message: failure.message, status: 409 }
-    : { code: "AGENT_ACTION_FAILED", message, status: 502 };
+    : { code: failure.code, message: failure.message, status: 500 };
 }
 
 interface CollectedToolExec {
@@ -1137,21 +1049,17 @@ class ConfirmedActionExecutionError extends Error {
   }
 }
 
-function suppressManualTextForTool(exec: CollectedToolExec): boolean {
-  return exec.tool === "play_start"
-    || exec.tool === "play_step"
-    || exec.tool === "play_revise"
-    || exec.tool === "script_create"
-    || exec.tool === "storyboard_create"
-    || exec.tool === "interactive_film_create";
-}
-
 function hasSuccessfulToolOwnedResponse(execs: ReadonlyArray<CollectedToolExec>): boolean {
   return execs.some((exec) =>
     exec.status === "completed"
-    && !isLikelyFailedToolResult(exec)
-    && suppressManualTextForTool(exec)
+    && hasDomainOwnedResult(exec.details)
   );
+}
+
+function hasDomainOwnedResult(details: unknown): boolean {
+  if (!details || typeof details !== "object") return false;
+  const record = details as Record<string, unknown>;
+  return record.kind === "proposed_action" || record.presentation === "immersive-scene";
 }
 
 function manualToolAssistantMessage(
@@ -1162,7 +1070,7 @@ function manualToolAssistantMessage(
 ): any {
   return {
     role: "assistant",
-    content: [{ type: "text", text: suppressManualTextForTool(exec) ? "" : responseText }],
+    content: [{ type: "text", text: hasDomainOwnedResult(exec.details) ? "" : responseText }],
     api: "anthropic-messages",
     provider,
     model,
@@ -1181,11 +1089,11 @@ function manualToolAssistantMessage(
 
 function manualToolAppendOptions(sessionKind: SessionKind, exec: CollectedToolExec): {
   readonly sessionKind: SessionKind;
-  readonly legacyDisplay: { readonly toolExecutions: readonly CollectedToolExec[] };
+  readonly display: { readonly toolExecutions: readonly CollectedToolExec[] };
 } {
   return {
     sessionKind,
-    legacyDisplay: { toolExecutions: [exec] },
+    display: { toolExecutions: [exec] },
   };
 }
 
@@ -1219,7 +1127,11 @@ async function executeConfirmedProductionAction(args: {
   readonly sourceRequestId?: string;
   readonly signal: AbortSignal;
   readonly onTaskChange: (exec: CollectedToolExec) => Promise<void>;
-}): Promise<CollectedToolExec> {
+}): Promise<{
+  readonly execution: CollectedToolExec;
+  readonly actionResult: ActionResult;
+  readonly binding: ConfirmedCapabilityBinding;
+}> {
   const lang = args.language ?? "zh";
   const id = args.taskId;
   const actionPayload = args.actionPayload;
@@ -1229,13 +1141,21 @@ async function executeConfirmedProductionAction(args: {
     disabledSkills: args.disabledSkills,
   });
   const requestedSkillActivations = skillResolution.usedSkills.map((skill) => ({ skill, resources: [] }));
-  const productionSkills = (
-    capability: Parameters<typeof resolveProductionSkillActivations>[1],
-  ) => mergeActivatedSkillGuidance(
-    resolveProductionSkillActivations(skillResolution.availableSkills, capability),
+  const profileRegistry = createBuiltInWorkProfileRegistry(args.root);
+  const profileSkills = (profileId: string, includeRecommended = false) => mergeActivatedSkillGuidance(
+    resolveProfileSkillActivations(
+      skillResolution.availableSkills,
+      profileRegistry.require(profileId),
+      { includeRecommended },
+    ),
     requestedSkillActivations,
   );
-  let tool: ReturnType<typeof createSubAgentTool>
+  const namedSkills = (...skillIds: ReadonlyArray<string>) => skillIds.flatMap((id) => {
+    const skill = skillResolution.availableSkills.find((candidate) => candidate.id === id);
+    return skill ? [{ skill, resources: [] }] : [];
+  });
+  let tool: ReturnType<typeof createBookFoundationTool>
+    | ReturnType<typeof createWriteChaptersTool>
     | ReturnType<typeof createShortFictionRunTool>
     | ReturnType<typeof createGenerateCoverTool>
     | ReturnType<typeof createScriptCreationTool>
@@ -1251,18 +1171,16 @@ async function executeConfirmedProductionAction(args: {
     | ReturnType<typeof createConnectChoiceTool>
     | ReturnType<typeof createRemoveNodeTool>;
   let params: Record<string, unknown>;
-  let agent: string | undefined;
 
   if (args.requestedIntent === "create_book") {
     const payload = actionPayload?.createBook;
     const title = requirePayloadText(payload?.title, pick(lang, "确认建书缺少书名，请重新生成确认卡。", "The book creation confirmation is missing a title. Regenerate the confirmation card."));
-    tool = createSubAgentTool(args.pipeline, null, args.root, {
+    tool = createBookFoundationTool(args.pipeline, {
+      language: lang,
       actionPayload,
-      workerSkills: (worker) => worker === "architect" ? productionSkills("longWriting") : [],
+      workerSkills: (worker) => worker === "architect" ? profileSkills("longform-novel") : [],
     });
-    agent = "architect";
     params = {
-      agent,
       instruction: args.instruction,
       title,
       ...(payload?.genre ? { genre: payload.genre } : {}),
@@ -1278,7 +1196,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createShortFictionRunTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("shortWriting"),
+      defaultSkills: profileSkills("short-fiction"),
     });
     params = {
       direction,
@@ -1293,13 +1211,15 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "BOOK_ID_REQUIRED", pick(lang, "写下一章需要先打开一本书。", "Writing the next chapter requires an active book."));
     }
     const chapterCount = actionPayload?.writeNext?.chapterCount ?? 1;
-    tool = createSubAgentTool(args.pipeline, args.bookId, args.root, {
+    tool = createWriteChaptersTool(args.pipeline, args.bookId, {
       language: lang,
-      workerSkills: (worker) => worker === "writer" ? productionSkills("longWriting") : [],
+      workerSkills: (worker) => (
+        worker === "auditor" || worker === "reviser"
+          ? profileSkills("longform-novel", true)
+          : profileSkills("longform-novel")
+      ),
     });
-    agent = "writer";
     params = {
-      agent: "writer",
       bookId: args.bookId,
       instruction: args.instruction,
       chapterCount,
@@ -1321,7 +1241,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createScriptCreationTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("script"),
+      defaultSkills: profileSkills("script"),
     });
     params = {
       title,
@@ -1334,7 +1254,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.episodeCount ? { episodeCount: payload.episodeCount } : {}),
       ...(payload?.episodeDuration ? { episodeDuration: payload.episodeDuration } : {}),
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
-      ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
   } else if (args.requestedIntent === "storyboard_create") {
     const payload = actionPayload?.storyboardCreate;
@@ -1342,7 +1261,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createStoryboardCreationTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("storyboard"),
+      defaultSkills: profileSkills("storyboard"),
     });
     params = {
       title,
@@ -1356,7 +1275,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.granularity ? { granularity: payload.granularity } : {}),
       ...(payload?.maxShots ? { maxShots: payload.maxShots } : {}),
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
-      ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
   } else if (args.requestedIntent === "interactive_film_create") {
     const payload = actionPayload?.interactiveFilmCreate;
@@ -1364,7 +1282,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createInteractiveFilmCreationTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("interactiveFilm"),
+      defaultSkills: profileSkills("interactive-film"),
     });
     params = {
       title,
@@ -1379,16 +1297,16 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.budget ? { budget: payload.budget } : {}),
       ...(payload?.referenceMode ? { referenceMode: payload.referenceMode } : {}),
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
-      ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
   } else if (args.requestedIntent === "translation_create") {
     const payload = actionPayload?.translationCreate;
-    const filePath = requirePayloadText(payload?.filePath, pick(lang, "确认创建翻译项目缺少文件路径，请重新生成确认卡。", "The translation confirmation is missing a file path. Regenerate the confirmation card."));
+    const filePath = payload?.filePath;
+    if (!filePath && !payload?.sourceText) throw new ApiError(400, "TRANSLATION_SOURCE_REQUIRED", "Provide source text or a source file");
     const sourceLanguage = requirePayloadText(payload?.sourceLanguage, pick(lang, "确认创建翻译项目缺少源语言，请重新生成确认卡。", "The translation confirmation is missing a source language. Regenerate the confirmation card."));
     const targetLanguage = requirePayloadText(payload?.targetLanguage, pick(lang, "确认创建翻译项目缺少目标语言，请重新生成确认卡。", "The translation confirmation is missing a target language. Regenerate the confirmation card."));
     tool = createTranslationCreateTool(args.root, { actionPayload });
     params = {
-      filePath,
+      filePath, sourceText: payload?.sourceText, glossary: payload?.glossary,
       sourceLanguage,
       targetLanguage,
       ...(payload?.title ? { title: payload.title } : {}),
@@ -1397,13 +1315,17 @@ async function executeConfirmedProductionAction(args: {
   } else if (args.requestedIntent === "fanfic_init") {
     const payload = actionPayload?.fanficCreate;
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建同人缺少书名，请补充后重新确认。", "The fanfiction confirmation is missing a title."));
-    if (!payload?.sourceText?.trim() && !payload?.sourcePath?.trim()) {
+    if (!payload?.source && !payload?.sourceText?.trim() && !payload?.sourcePath?.trim()) {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "创建同人需要原作资料或上传文件。", "Fanfiction creation requires source material or an uploaded file."));
     }
     tool = createFanficBookTool(args.pipeline, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-story-import", "inkos-fanfic-writing"),
+      ),
     });
     params = {
+      ...payload,
       title,
       ...(payload.sourceText ? { sourceText: payload.sourceText } : {}),
       ...(payload.sourcePath ? { sourcePath: payload.sourcePath } : {}),
@@ -1423,12 +1345,17 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "导入续写需要选择已有书籍或填写新书名。", "Continuation import requires an existing book or a new title."));
     }
     tool = createContinuationImportTool(args.pipeline, args.bookId, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-story-import", "inkos-continuation-writing"),
+      ),
     });
     params = {
+      ...payload,
       ...(targetBookId ? { bookId: targetBookId } : {}),
       ...(payload?.title ? { title: payload.title } : {}),
       sourcePath,
+      instruction: payload?.instruction?.trim() || args.instruction,
       ...(payload?.splitPattern ? { splitPattern: payload.splitPattern } : {}),
       ...(payload?.resumeFrom ? { resumeFrom: payload.resumeFrom } : {}),
       ...(payload?.genre ? { genre: payload.genre } : {}),
@@ -1442,9 +1369,13 @@ async function executeConfirmedProductionAction(args: {
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建番外缺少书名。", "The side-story confirmation is missing a title."));
     const parentBookId = requirePayloadText(payload?.parentBookId ?? args.bookId ?? undefined, pick(lang, "创建番外需要指定正传书籍。", "Side-story creation requires a parent book."));
     tool = createSpinoffBookTool(args.pipeline, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-spinoff-writing"),
+      ),
     });
     params = {
+      ...payload,
       title,
       parentBookId,
       ...(payload?.direction ? { direction: payload.direction } : {}),
@@ -1458,13 +1389,17 @@ async function executeConfirmedProductionAction(args: {
     const payload = actionPayload?.imitationCreate;
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建仿写缺少书名。", "The imitation confirmation is missing a title."));
     const storyIdea = requirePayloadText(payload?.storyIdea, pick(lang, "仿写需要一个原创故事方向。", "Style imitation requires an original story idea."));
-    if (!payload?.referenceText?.trim() && !payload?.referencePath?.trim()) {
+    if (!payload?.source && !payload?.referenceText?.trim() && !payload?.referencePath?.trim()) {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "仿写需要参考文本或上传文件。", "Style imitation requires reference text or an uploaded file."));
     }
     tool = createImitationBookTool(args.pipeline, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-imitation-writing"),
+      ),
     });
     params = {
+      ...payload,
       title,
       storyIdea,
       ...(payload.referenceText ? { referenceText: payload.referenceText } : {}),
@@ -1493,7 +1428,8 @@ async function executeConfirmedProductionAction(args: {
       : undefined;
     tool = createPlayStartTool(args.pipeline, args.root, args.sessionId, args.playMode, {
       actionPayload: confirmedActionPayload,
-      defaultSkills: productionSkills("play"),
+      language: lang,
+      defaultSkills: profileSkills("interactive-world"),
     });
     params = {
       title,
@@ -1510,7 +1446,7 @@ async function executeConfirmedProductionAction(args: {
     if (!projectId) throw new ApiError(400, "INVALID_ID", "interactive-film action requires a project id (bookId)");
     const agentCtx = args.pipeline.createAgentContext("film-authoring", projectId);
     const deps = filmLLMDepsFromClient(agentCtx.client, agentCtx.model, {
-      activatedSkills: () => productionSkills("interactiveFilm"),
+      activatedSkills: () => profileSkills("interactive-film"),
     });
     tool = createDraftStructureTool(args.root, projectId, deps, lang);
     params = {
@@ -1542,26 +1478,26 @@ async function executeConfirmedProductionAction(args: {
     throw new ApiError(400, "UNSUPPORTED_CONFIRMED_ACTION", `Unsupported confirmed action: ${args.requestedIntent}`);
   }
 
+  const binding = confirmedCapabilityBinding(args.requestedIntent);
+  if (!binding) {
+    throw new ApiError(400, "UNSUPPORTED_CONFIRMED_ACTION", `Unsupported confirmed action: ${args.requestedIntent}`);
+  }
+  const toolName = `${binding.capabilityId}__${binding.actionId}`;
   const exec: CollectedToolExec = {
     id,
-    tool: tool.name,
-    agent,
-    label: resolveToolLabel(tool.name, agent, lang),
+    tool: toolName,
+    label: resolveToolLabel(binding.actionId, undefined, lang),
     status: "running",
     args: params,
-    stages: agent ? pipelineStages(agent, lang)?.map(label => ({ label, status: "pending" as const })) : undefined,
+    stages: undefined,
     startedAt: Date.now(),
   };
 
   await args.onTaskChange(exec);
-
-  // background: true 标明这是后台生产任务的工具启动（聊天轮工具不带）。
-  // free-text 命中写章启发式时前端在发送时无法预知这轮会按任务执行，
-  // 收到这个标记后把该轮从聊天轮重分类为任务轮。
   broadcast("tool:start", {
     sessionId: args.streamSessionId,
     id,
-    tool: tool.name,
+    tool: toolName,
     args: params,
     stages: exec.stages?.map(stage => stage.label),
     background: true,
@@ -1569,34 +1505,48 @@ async function executeConfirmedProductionAction(args: {
   });
 
   try {
-    const result = await tool.execute(
-      id,
-      params as never,
-      args.signal,
-      (partialResult: unknown) => {
+    const actionResult = await executeExplicitCapabilityTool({
+      projectRoot: args.root,
+      binding,
+      tool,
+      parameters: params,
+      workId: args.bookId,
+      authorRequest: args.instruction,
+      episodeId: `episode-${id}`,
+      conversationId: args.sessionId,
+      signal: args.signal,
+      onUpdate: (partialResult) => {
         const progress = toolResultText(partialResult, lang);
         if (progress) exec.logs = [...(exec.logs ?? []), progress].slice(-80);
         void args.onTaskChange(exec).catch(() => undefined);
       },
-    );
-    // 工具可以在结果里带 isError=true 表示"执行完成但结果需要人工处理"
-    //（如写章完成但审稿未通过）：任务卡按错误态展示，请求仍按成功返回结果文本。
-    const resultIsError = Boolean((result as { isError?: boolean } | null | undefined)?.isError);
-    exec.status = resultIsError ? "error" : "completed";
+    });
+    exec.status = "completed";
     exec.completedAt = Date.now();
-    exec.result = toolResultText(result, lang);
-    exec.details = (result as { details?: unknown } | undefined)?.details;
+    exec.result = actionResult.content ?? actionResult.summary;
+    exec.details = {
+      ...(actionResult.data && typeof actionResult.data === "object"
+        ? actionResult.data as Record<string, unknown>
+        : { actionResult: actionResult.data ?? actionResult }),
+      requestedIntent: args.requestedIntent,
+    };
     exec.stages = exec.stages?.map(stage => ({ ...stage, status: "completed" as const }));
     await args.onTaskChange(exec);
+    const result = {
+      content: [{ type: "text", text: exec.result }],
+      details: exec.details,
+      isError: false,
+      harnessResult: actionResult,
+    };
     broadcast("tool:end", {
       sessionId: args.streamSessionId,
       id,
-      tool: tool.name,
+      tool: toolName,
       result,
       details: exec.details,
-      isError: resultIsError,
+      isError: false,
     });
-    return exec;
+    return { execution: exec, actionResult, binding };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const result = { content: [{ type: "text", text: message }] };
@@ -1607,7 +1557,7 @@ async function executeConfirmedProductionAction(args: {
     broadcast("tool:end", {
       sessionId: args.streamSessionId,
       id,
-      tool: tool.name,
+      tool: toolName,
       result,
       isError: true,
     });
@@ -1639,7 +1589,7 @@ interface ServiceConfigEntry {
   baseUrl?: string;
   models?: string[];
   temperature?: number;
-  apiFormat?: "chat" | "responses";
+  apiFormat?: LLMApiFormat;
   stream?: boolean;
 }
 
@@ -1669,7 +1619,7 @@ interface ServiceProbeResult {
   ok: boolean;
   models: Array<{ id: string; name: string }>;
   selectedModel?: string;
-  apiFormat?: "chat" | "responses";
+  apiFormat?: LLMApiFormat;
   stream?: boolean;
   baseUrl?: string;
   modelsSource?: "api" | "fallback";
@@ -1693,17 +1643,12 @@ function deriveBookIdFromTitle(title: string): string {
 }
 
 async function completeBookExists(bookDir: string): Promise<boolean> {
-  try {
-    await access(join(bookDir, "book.json"));
-    await access(join(bookDir, "story", "story_bible.md"));
-    return true;
-  } catch {
-    return false;
-  }
+  const { isBookFoundationComplete } = await import("@actalk/inkos-core");
+  return isBookFoundationComplete(bookDir);
 }
 
-function resolveArchitectBookIdFromArgs(args?: Record<string, unknown>): string | null {
-  if (!args || args.agent !== "architect" || args.revise === true) return null;
+function resolveCreatedBookIdFromArgs(args?: Record<string, unknown>): string | null {
+  if (!args) return null;
   if (typeof args.bookId === "string" && args.bookId.trim()) return args.bookId.trim();
   if (typeof args.title === "string" && args.title.trim()) {
     return deriveBookIdFromTitle(args.title) || null;
@@ -1731,6 +1676,14 @@ function resolveCreatedBookIdFromDetails(details: Readonly<Record<string, unknow
   return null;
 }
 
+function resolveCreatedWorkIdFromToolExec(exec: CollectedToolExec): string | null {
+  if (exec.status !== "completed" || !exec.details || typeof exec.details !== "object") return null;
+  const details = exec.details as Record<string, unknown>;
+  return typeof details.workId === "string" && details.workId.trim()
+    ? details.workId.trim()
+    : null;
+}
+
 async function loadStudioBookListSummary(
   state: StateManager,
   bookId: string,
@@ -1738,6 +1691,15 @@ async function loadStudioBookListSummary(
   const book = await state.loadBookConfig(bookId);
   const nextChapter = await state.getNextChapterNumber(bookId);
   return { ...book, chaptersWritten: nextChapter - 1 };
+}
+
+async function loadWorkIfExists(root: string, workId: string): Promise<WorkManifest | null> {
+  try {
+    return await loadWorkManifest(root, workId);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 function isCustomServiceId(serviceId: string): boolean {
@@ -1775,7 +1737,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? { baseUrl: value.baseUrl } : {}),
       ...(Array.isArray(value.models) ? { models: normalizeServiceModelIds(value.models) } : {}),
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
+      ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
     };
   }
@@ -1787,7 +1749,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? { baseUrl: value.baseUrl } : {}),
       ...(Array.isArray(value.models) ? { models: normalizeServiceModelIds(value.models) } : {}),
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
+      ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
     };
   }
@@ -1796,7 +1758,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
     service: serviceId,
     ...(Array.isArray(value.models) ? { models: normalizeServiceModelIds(value.models) } : {}),
     ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-    ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
+    ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
     ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
   };
 }
@@ -1815,7 +1777,7 @@ function normalizeServiceConfig(raw: unknown): ServiceConfigEntry[] {
         ...(typeof entry.baseUrl === "string" && entry.baseUrl.length > 0 ? { baseUrl: entry.baseUrl } : {}),
         ...(Array.isArray(entry.models) ? { models: normalizeServiceModelIds(entry.models) } : {}),
         ...(typeof entry.temperature === "number" ? { temperature: entry.temperature } : {}),
-        ...(entry.apiFormat === "chat" || entry.apiFormat === "responses" ? { apiFormat: entry.apiFormat } : {}),
+        ...(isLLMApiFormat(entry.apiFormat) ? { apiFormat: entry.apiFormat } : {}),
         ...(typeof entry.stream === "boolean" ? { stream: entry.stream } : {}),
       }));
   }
@@ -1841,6 +1803,30 @@ function mergeServiceConfig(existing: ServiceConfigEntry[], updates: ServiceConf
     });
   }
   return [...merged.values()];
+}
+
+function appendModelToServiceCatalog(
+  llm: Record<string, unknown>,
+  serviceId: string | undefined,
+  modelId: string,
+): void {
+  const trimmedService = serviceId?.trim() ?? "";
+  const trimmedModel = modelId.trim();
+  if (!trimmedService || !trimmedModel || !isTextChatModelId(trimmedModel)) return;
+
+  const existing = normalizeServiceConfig(llm.services);
+  const previous = existing.find((entry) => serviceConfigKey(entry) === trimmedService);
+  const nextEntry: ServiceConfigEntry = previous
+    ? { ...previous, models: mergeServiceModelIds(previous.models, [trimmedModel]) }
+    : isCustomServiceId(trimmedService)
+      ? {
+          service: "custom",
+          name: decodeURIComponent(trimmedService.slice("custom:".length)),
+          models: [trimmedModel],
+        }
+      : { service: trimmedService, models: [trimmedModel] };
+
+  llm.services = mergeServiceConfig(existing, [nextEntry]);
 }
 
 function normalizeCoverConfig(raw: unknown): { service: string; model: string; baseUrl?: string } | undefined {
@@ -1889,73 +1875,6 @@ async function loadRawConfig(root: string): Promise<Record<string, unknown>> {
 
 async function saveRawConfig(root: string, config: Record<string, unknown>): Promise<void> {
   await writeFile(join(root, "inkos.json"), JSON.stringify(config, null, 2), "utf-8");
-}
-
-type ChapterReviewMode = "auto" | "manual";
-
-function normalizeChapterReviewMode(mode: unknown): ChapterReviewMode {
-  return mode === "manual" ? "manual" : "auto";
-}
-
-function readProjectChapterReviewMode(config: Record<string, unknown>): ChapterReviewMode {
-  const writing = config.writing && typeof config.writing === "object" && !Array.isArray(config.writing)
-    ? config.writing as Record<string, unknown>
-    : {};
-  return normalizeChapterReviewMode(writing.reviewMode);
-}
-
-function readBookChapterReviewMode(rawBook: Record<string, unknown>): ChapterReviewMode | undefined {
-  const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-    ? rawBook.writing as Record<string, unknown>
-    : undefined;
-  if (!writing || writing.reviewMode !== "manual" && writing.reviewMode !== "auto") return undefined;
-  return writing.reviewMode;
-}
-
-async function loadRawBookConfig(root: string, bookId: string): Promise<Record<string, unknown>> {
-  const raw = await readFile(join(root, "books", bookId, "book.json"), "utf-8");
-  return JSON.parse(raw) as Record<string, unknown>;
-}
-
-async function resolveBookChapterReviewMode(root: string, bookId: string | undefined, projectMode: ChapterReviewMode): Promise<ChapterReviewMode> {
-  if (!bookId || !isSafeBookId(bookId)) return projectMode;
-  try {
-    const rawBook = await loadRawBookConfig(root, bookId);
-    return readBookChapterReviewMode(rawBook) ?? projectMode;
-  } catch {
-    return projectMode;
-  }
-}
-
-type RevisionGateSetting = "strict" | "lenient" | "always";
-
-function normalizeRevisionGate(gate: unknown): RevisionGateSetting {
-  return gate === "lenient" || gate === "always" ? gate : "strict";
-}
-
-function readProjectRevisionGate(config: Record<string, unknown>): RevisionGateSetting {
-  const writing = config.writing && typeof config.writing === "object" && !Array.isArray(config.writing)
-    ? config.writing as Record<string, unknown>
-    : {};
-  return normalizeRevisionGate(writing.revisionGate);
-}
-
-function readBookRevisionGate(rawBook: Record<string, unknown>): RevisionGateSetting | undefined {
-  const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-    ? rawBook.writing as Record<string, unknown>
-    : undefined;
-  if (!writing || writing.revisionGate !== "strict" && writing.revisionGate !== "lenient" && writing.revisionGate !== "always") return undefined;
-  return writing.revisionGate;
-}
-
-async function resolveBookRevisionGate(root: string, bookId: string | undefined, projectGate: RevisionGateSetting): Promise<RevisionGateSetting> {
-  if (!bookId || !isSafeBookId(bookId)) return projectGate;
-  try {
-    const rawBook = await loadRawBookConfig(root, bookId);
-    return readBookRevisionGate(rawBook) ?? projectGate;
-  } catch {
-    return projectGate;
-  }
 }
 
 function unquoteEnvValue(value: string): string {
@@ -2067,12 +1986,12 @@ async function resolveConfiguredServiceEntry(root: string, serviceId: string): P
 }
 
 function buildProbePlans(
-  preferredApiFormat: "chat" | "responses" | undefined,
+  preferredApiFormat: LLMApiFormat | undefined,
   preferredStream: boolean | undefined,
-): Array<{ apiFormat: "chat" | "responses"; stream: boolean }> {
-  const candidates: Array<{ apiFormat: "chat" | "responses"; stream: boolean }> = [];
+): Array<{ apiFormat: LLMApiFormat; stream: boolean }> {
+  const candidates: Array<{ apiFormat: LLMApiFormat; stream: boolean }> = [];
   const seen = new Set<string>();
-  const push = (apiFormat: "chat" | "responses", stream: boolean) => {
+  const push = (apiFormat: LLMApiFormat, stream: boolean) => {
     const key = `${apiFormat}:${stream ? "1" : "0"}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -2192,15 +2111,13 @@ async function loadRadarHistory(root: string): Promise<Array<{
 
 function fallbackTextModelsForEndpoint(
   endpoint: ReturnType<typeof getAllEndpoints>[number] | undefined,
-  preset: ReturnType<typeof resolveServicePreset> | undefined,
 ): Array<{ id: string; name: string }> {
   const endpointModels = endpoint?.models
     .filter((model) => model.enabled !== false)
     .filter((model) => isTextChatModelId(model.id))
     .map((model) => ({ id: model.id, name: model.id }))
     ?? [];
-  if (endpointModels.length > 0) return endpointModels;
-  return preset?.knownModels?.map((id) => ({ id, name: id })) ?? [];
+  return endpointModels;
 }
 
 function shouldTrustStaticModelsWhenLiveListUnavailable(endpoint: ReturnType<typeof getAllEndpoints>[number] | undefined): boolean {
@@ -2229,7 +2146,7 @@ function formatServiceProbeError(args: {
   readonly label?: string;
   readonly baseUrl: string;
   readonly model?: string;
-  readonly apiFormat?: "chat" | "responses";
+  readonly apiFormat?: LLMApiFormat;
   readonly stream?: boolean;
   readonly error: string;
   readonly language?: StudioLanguage;
@@ -2241,7 +2158,11 @@ function formatServiceProbeError(args: {
   const upstreamDetail = rawDetail.includes("上游详情：")
     ? rawDetail
     : "";
-  const protocol = args.apiFormat === "responses" ? "Responses" : "Chat / Completions";
+  const protocol = args.apiFormat === "anthropic"
+    ? "Anthropic Messages"
+    : args.apiFormat === "responses"
+      ? "Responses"
+      : "Chat / Completions";
   const streamSuffix = typeof args.stream === "boolean"
     ? pick(lang, `，${args.stream ? "流式" : "非流式"}`, `, ${args.stream ? "streaming" : "non-streaming"}`)
     : "";
@@ -2336,8 +2257,8 @@ async function fetchModelsFromServiceBaseUrl(
         models: [],
         error: pick(
           lang,
-          `服务商返回 ${res.status}: ${body.slice(0, 200)}`,
-          `Service returned ${res.status}: ${body.slice(0, 200)}`,
+          `服务商返回 ${res.status}: ${body}`,
+          `Service returned ${res.status}: ${body}`,
         ),
         authFailed: res.status === 401 || res.status === 403,
       };
@@ -2372,7 +2293,7 @@ async function probeServiceCapabilities(args: {
   service: string;
   apiKey: string;
   baseUrl: string;
-  preferredApiFormat?: "chat" | "responses";
+  preferredApiFormat?: LLMApiFormat;
   preferredStream?: boolean;
   preferredModel?: string;
   proxyUrl?: string;
@@ -2430,7 +2351,7 @@ async function probeServiceCapabilities(args: {
     };
   }
   if (shouldTrustStaticModelsWhenLiveListUnavailable(endpoint)) {
-    const models = fallbackTextModelsForEndpoint(endpoint, preset);
+    const models = fallbackTextModelsForEndpoint(endpoint);
     const selectedModel =
       endpoint?.checkModel && models.some((model) => model.id === endpoint.checkModel)
         ? endpoint.checkModel
@@ -2450,7 +2371,6 @@ async function probeServiceCapabilities(args: {
   // Prefer live /models results; if unavailable, probe with the service's own check model before global defaults.
   const serviceFirstModel =
     endpoint?.checkModel
-    ?? preset?.knownModels?.[0]
     ?? endpoint?.models.find((model) => model.enabled !== false)?.id;
   const useDynamicLocalModels = baseService === "ollama" || baseService === "lmstudio";
   const useEndpointCheckModel = !useDynamicLocalModels
@@ -2517,7 +2437,7 @@ async function probeServiceCapabilities(args: {
         );
         const models = discoveredModels.length > 0
           ? discoveredModels
-          : fallbackTextModelsForEndpoint(endpoint, preset);
+          : fallbackTextModelsForEndpoint(endpoint);
         return {
           ok: true,
           models: models.length > 0 ? models : [{ id: model, name: model }],
@@ -2551,11 +2471,39 @@ async function probeServiceCapabilities(args: {
 
 // --- Server factory ---
 
-export function createStudioServer(initialConfig: ProjectConfig, root: string, overrides: { readonly nodeImageGenerator?: NodeImageDeps } = {}) {
+export function createStudioServer(initialConfig: ProjectConfig, root: string, overrides: { readonly nodeImageGenerator?: NodeImageDeps; readonly hostname?: string; readonly allowedOrigins?: readonly string[] } = {}) {
   const app = new Hono();
   const state = new StateManager(root);
+  const recoveryStore = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+  try {
+    const recovered = recoveryStore.recoverInterruptedEpisodes();
+    if (recovered > 0) {
+      console.warn(`[studio] Recovered ${recovered} interrupted creative episode${recovered === 1 ? "" : "s"}.`);
+    }
+  } finally {
+    recoveryStore.close();
+  }
   let cachedConfig = initialConfig;
   const activeConfirmedTasks = new Map<string, AbortController>();
+  // HTTP connectivity is not execution state. Retain the current chat request
+  // until its handler finishes so refresh/reconnect can observe and stop it.
+  const chatRequests = new Map<string, {
+    snapshot: import("../shared/session-request.js").StudioChatRequestSnapshot;
+    controller: AbortController;
+  }>();
+  const chatRequestStore = new ChatRequestStore(root);
+  const loadChatRequest = async (sessionId: string) => {
+    const live = chatRequests.get(sessionId);
+    if (live) return live.snapshot;
+    const saved = await chatRequestStore.load(sessionId);
+    // Recheck after I/O: a new request may have acquired the session meanwhile.
+    if (chatRequests.has(sessionId)) return chatRequests.get(sessionId)!.snapshot;
+    if (!saved || saved.status !== "running") return saved;
+    return { ...saved, status: "failed" as const, error: {
+      code: "CHAT_REQUEST_INTERRUPTED",
+      message: "Studio restarted before this request finished. Continue from the saved results.",
+    } };
+  };
   // 确认式生产任务的单任务名额（sessionId → taskId）。原来的检查是"await 读快照
   // → 之后才 set controller"的 check-then-act：两个并发确认请求都能通过检查，
   // 双任务同时启动、快照互相覆盖。这里在任何 await 之前同步占位，占位失败的
@@ -2654,18 +2602,36 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return task ? activeConfirmedTasks.get(task.execution.id) : undefined;
   };
 
-  app.use("/*", cors());
+  const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+  const bindHostname = overrides.hostname?.trim().toLowerCase() || "127.0.0.1";
+  const allowedOrigins = new Set((overrides.allowedOrigins ?? []).map(origin => new URL(origin).origin));
+  const allowedHosts = new Set([...loopbackHosts, ...[...allowedOrigins].map(origin => new URL(origin).hostname)]);
+  app.use("/*", async (c, next) => {
+    const url = new URL(c.req.url);
+    // A loopback listener must not become an API for an arbitrary DNS name.
+    // Explicit network binding retains its configured network scope.
+    if (loopbackHosts.has(bindHostname) && !allowedHosts.has(url.hostname)) {
+      throw new ApiError(403, "STUDIO_HOST_FORBIDDEN", "This host is not allowed for the local Studio server.");
+    }
+    const origin = c.req.header("Origin");
+    if (origin && origin !== url.origin && !allowedOrigins.has(origin)) {
+      throw new ApiError(403, "STUDIO_ORIGIN_FORBIDDEN", "This browser origin is not allowed to access Studio.");
+    }
+    await next();
+  });
+  // Only origins admitted above receive CORS headers; rejected requests never
+  // reach readers, mutations or preflight handling.
+  app.use("/*", cors({ origin: origin => origin || undefined }));
 
   // Structured error handler — ApiError returns typed JSON, others return 500
   app.onError((error, c) => {
     if (error instanceof ApiError) {
       return c.json({ error: { code: error.code, message: error.message } }, error.status as 400);
     }
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("LLM API key not set") || message.includes("INKOS_LLM_API_KEY not set")) {
-      return c.json({ error: { code: "LLM_CONFIG_ERROR", message } }, 400);
+    if (error instanceof LLMConfigurationError) {
+      return c.json({ error: { code: "LLM_CONFIG_ERROR", message: error.message } }, 400);
     }
-    console.error("[studio] Unexpected server error", error);
+    console.error("[studio] Unexpected server error", { method: c.req.method, path: new URL(c.req.url).pathname, aborted: c.req.raw.signal.aborted }, error);
     return c.json(
       { error: { code: "INTERNAL_ERROR", message: "Unexpected server error." } },
       500,
@@ -2722,7 +2688,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   }
 
   async function buildPipelineConfig(
-    overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model" | "revisionGate">> & {
+    overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model">> & {
       readonly currentConfig?: ProjectConfig;
       readonly sessionIdForSSE?: string;
       // 确认式生产任务的 execution id。给任务构建 pipeline 时传入，该 pipeline
@@ -2734,10 +2700,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     },
   ): Promise<PipelineConfig> {
     const currentConfig = overrides?.currentConfig ?? await loadCurrentProjectConfig();
-    const projectReviewMode = readProjectChapterReviewMode(currentConfig as unknown as Record<string, unknown>);
-    const chapterReviewMode = await resolveBookChapterReviewMode(root, overrides?.bookIdForSettings, projectReviewMode);
-    const projectRevisionGate = readProjectRevisionGate(currentConfig as unknown as Record<string, unknown>);
-    const revisionGate = await resolveBookRevisionGate(root, overrides?.bookIdForSettings, projectRevisionGate);
     const sseExecutionTag = overrides?.executionIdForSSE
       ? { executionId: overrides.executionIdForSSE }
       : {};
@@ -2760,10 +2722,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       model: overrides?.model ?? currentConfig.llm.model,
       projectRoot: root,
       defaultLLMConfig: currentConfig.llm,
-      foundationReviewRetries: currentConfig.foundation?.reviewRetries ?? 2,
-      writingReviewRetries: currentConfig.writing?.reviewRetries ?? 1,
-      chapterReviewMode,
-      revisionGate: overrides?.revisionGate ?? revisionGate,
       modelOverrides: currentConfig.modelOverrides,
       notifyChannels: currentConfig.notify,
       logger,
@@ -2790,10 +2748,141 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // --- Books ---
 
+  app.get("/api/v1/works", async (c) => {
+    const profileId = c.req.query("profileId")?.trim() || undefined;
+    const works = await listWorkManifests(root, profileId);
+    return c.json({
+      works: works.map((work) => ({
+        ...work,
+        artifactCount: work.artifacts.length,
+      })),
+    });
+  });
+
+  app.get("/api/v1/works/:id", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const work = await loadWorkManifest(root, id);
+      const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+      try {
+        return c.json({
+          work,
+          episodes: episodes.listEpisodes({ workId: id, limit: 50 }),
+        });
+      } finally {
+        episodes.close();
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, code === "ENOENT" ? 404 : 400);
+    }
+  });
+
+  app.get("/api/v1/works/:id/artifacts", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const work = await loadWorkManifest(root, id);
+      return c.json({ workId: id, artifacts: work.artifacts });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, code === "ENOENT" ? 404 : 400);
+    }
+  });
+
+  app.get("/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const work = await loadWorkManifest(root, id);
+      const artifact = work.artifacts.find((candidate) => candidate.id === c.req.param("artifactId"));
+      const revision = artifact?.revisions.find((candidate) => candidate.id === c.req.param("revisionId"));
+      if (!artifact || !revision) return c.json({ error: "Artifact revision not found" }, 404);
+      const bytes = await readFile(safeChildPath(workDirectory(root, id), revision.snapshotPath ?? revision.path));
+      if (`sha256:${createHash("sha256").update(bytes).digest("hex")}` !== revision.checksum) throw new ApiError(409, "ARTIFACT_SNAPSHOT_UNAVAILABLE", "Revision content does not match its recorded checksum");
+      const textLike = revision.contentType.startsWith("text/")
+        || revision.contentType === "application/json";
+      return c.json({
+        workId: id,
+        artifactId: artifact.id,
+        revision,
+        ...(textLike
+          ? { content: bytes.toString("utf-8") }
+          : { dataUrl: `data:${revision.contentType};base64,${bytes.toString("base64")}` }),
+      });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, code === "ENOENT" ? 404 : 400);
+    }
+  });
+
+  app.post("/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId/adopt", async (c) => {
+    const workId = c.req.param("id");
+    const work = await loadWorkManifest(root, workId);
+    const body = await c.req.json<{ expectedCurrentRevisionId: string | null }>();
+    const action = await executeExplicitCapabilityTool({ projectRoot: root, workId,
+      binding: { capabilityId: "workspace", actionId: "adopt_work_revision", profileId: work.profileId, risk: "recoverable-write" },
+      tool: createAdoptWorkRevisionTool(root, workId),
+      parameters: { artifactId: c.req.param("artifactId"), revisionId: c.req.param("revisionId"), expectedCurrentRevisionId: body.expectedCurrentRevisionId },
+    });
+    return c.json({ action });
+  });
+
+  app.get("/api/v1/episodes/:id", async (c) => {
+    const store = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+    try { return c.json({ episode: store.requireEpisode(c.req.param("id")), events: store.listEvents(c.req.param("id")) }); }
+    finally { store.close(); }
+  });
+
+  app.get("/api/v1/profiles", async (c) => c.json({ profiles: createBuiltInWorkProfileRegistry(root).list() }));
+  app.post("/api/v1/profiles", async (c) => {
+    const profile = WorkProfileSchema.parse(await c.req.json());
+    if (createBuiltInWorkProfileRegistry(root).get(profile.id)) throw new ApiError(409, "PROFILE_EXISTS", "Choose a new profile ID");
+    await commitAtomicFileSet({ rootDir: root, writes: [{ relativePath: `.inkos/profiles/${profile.id}.json`, content: JSON.stringify(profile, null, 2) }] });
+    return c.json({ profile }, 201);
+  });
+
+  app.put("/api/v1/profiles/:id", async (c) => {
+    const profile = WorkProfileSchema.parse(await c.req.json());
+    if (profile.id !== c.req.param("id")) throw new ApiError(400, "PROFILE_ID_MISMATCH", "Profile identity cannot change");
+    await commitAtomicFileSet({ rootDir: root, writes: [{ relativePath: `.inkos/profiles/${profile.id}.json`, content: JSON.stringify(profile, null, 2) }] });
+    return c.json({ profile });
+  });
+
+  app.get("/api/v1/episodes", async (c) => {
+    const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+    try {
+      const rawLimit = Number(c.req.query("limit") ?? "100");
+      const status = c.req.query("status")?.trim();
+      return c.json({
+        episodes: episodes.listEpisodes({
+          ...(c.req.query("workId")?.trim() ? { workId: c.req.query("workId")!.trim() } : {}),
+          ...(c.req.query("profileId")?.trim() ? { profileId: c.req.query("profileId")!.trim() } : {}),
+          ...(status ? { status: status as "running" | "completed" | "failed" | "cancelled" } : {}),
+          limit: Number.isFinite(rawLimit) ? rawLimit : 100,
+        }),
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    } finally {
+      episodes.close();
+    }
+  });
+
   app.get("/api/v1/books", async (c) => {
     const bookIds = await state.listBooks();
-    const books = await Promise.all(bookIds.map((id) => loadStudioBookListSummary(state, id)));
-    return c.json({ books });
+    const entries = await Promise.all(bookIds.map(async (id) => {
+      try {
+        return { book: await loadStudioBookListSummary(state, id) };
+      } catch (error) {
+        // A canonical Work can exist before its book foundation is written.
+        // Keep it in /works without making every initialized book unavailable.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return { incompleteWorkId: id };
+        throw error;
+      }
+    }));
+    return c.json({
+      books: entries.flatMap((entry) => entry.book ? [entry.book] : []),
+      incompleteWorkIds: entries.flatMap((entry) => entry.incompleteWorkId ? [entry.incompleteWorkId] : []),
+    });
   });
 
   app.get("/api/v1/books/:id", async (c) => {
@@ -2806,24 +2895,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     } catch {
       return c.json({ error: `Book "${id}" not found` }, 404);
     }
-  });
-
-  // --- Genres ---
-
-  app.get("/api/v1/genres", async (c) => {
-    const { listAvailableGenres, readGenreProfile } = await import("@actalk/inkos-core");
-    const rawGenres = await listAvailableGenres(root);
-    const genres = await Promise.all(
-      rawGenres.map(async (g) => {
-        try {
-          const { profile } = await readGenreProfile(root, g.id);
-          return { ...g, language: profile.language ?? "zh" };
-        } catch {
-          return { ...g, language: "zh" };
-        }
-      }),
-    );
-    return c.json({ genres });
   });
 
   // --- Book Create ---
@@ -2855,39 +2926,53 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     bookCreateStatus.set(bookId, { status: "creating" });
 
     const pipeline = new PipelineRunner(await buildPipelineConfig());
-    const tools = createInteractionToolsFromDeps(pipeline, state);
-    processProjectInteractionRequest({
-      projectRoot: root,
-      request: {
-        intent: "create_book",
+    const foundationSkills = await resolveStudioProfileSkills(root, "longform-novel");
+    const actionPayload: ActionPayload = {
+      createBook: {
         title: body.title,
-        genre: body.genre,
-        language: body.language === "en" ? "en" : body.language === "zh" ? "zh" : undefined,
-        platform: body.platform,
-        chapterWordCount: body.chapterWordCount,
-        targetChapters: body.targetChapters,
-        blurb: body.blurb,
+        ...(body.genre ? { genre: body.genre } : {}),
+        ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
+        ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
+        ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
+        ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
       },
-      tools,
+    };
+    const tool = createBookFoundationTool(pipeline, {
+      actionPayload,
+      language: body.language === "en" ? "en" : "zh",
+      workerSkills: () => foundationSkills,
+    });
+    const binding = confirmedCapabilityBinding("create_book")!;
+    executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding,
+      tool,
+      parameters: {
+        instruction: body.blurb?.trim() || `Create ${body.title}`,
+        title: body.title,
+        ...(body.genre ? { genre: body.genre } : {}),
+        ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
+        ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
+        ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
+        ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
+      },
     }).then(
-      async (result: {
-        readonly session: { readonly activeBookId?: string };
-        readonly details?: Readonly<Record<string, unknown>>;
-      }) => {
-        const createdBookId = resolveCreatedBookIdFromDetails(result.details);
+      async (result) => {
+        const details = result.data as Readonly<Record<string, unknown>> | undefined;
+        const createdBookId = resolveCreatedBookIdFromDetails(details);
         if (!createdBookId) {
           const error = "Book creation did not produce a completed book artifact.";
           bookCreateStatus.set(bookId, { status: "error", error });
           broadcast("book:error", { bookId, error });
           return;
         }
-        if (!await completeBookExists(join(root, "books", createdBookId))) {
+        if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
           const error = "Book creation artifact is incomplete on disk.";
           bookCreateStatus.set(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, error });
           return;
         }
-        const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
+        const book = await loadStudioBookListSummary(state, createdBookId);
         bookCreateStatus.delete(createdBookId);
         broadcast("book:created", { bookId: createdBookId, ...(book ? { book } : {}) });
       },
@@ -3005,25 +3090,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       ]);
       const language = book.language === "en" ? "en" : "zh";
       const requestedBrief = typeof body.brief === "string" ? body.brief.trim() : "";
+      const inspirationSkills = await hydrateActivatedSkillGuidance(
+        await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true }),
+        [requestedBrief || persistedBrief, plan, chapter].filter(Boolean).join("\n\n"),
+      );
       const response = await runWorkerAgent(
         pipelineConfig.client,
         pipelineConfig.model,
-        [
+        appendActivatedSkillGuidance([
           {
             role: "system",
             content: language === "en"
-              ? [
-                  "You are a fiction editor generating one optional inspiration card for a chapter rewrite.",
-                  "Offer a concrete alternative beat, evidence/action detail, and ending turn that fit the supplied canon.",
-                  "Do not rewrite the chapter, modify canon, or claim any file was changed.",
-                  "Return only a short, readable Markdown card.",
-                ].join("\n")
-              : [
-                  "你是小说编辑，只为本章重写生成一张可选的灵感卡。",
-                  "给出一个符合现有设定的具体替代场面、证据或行动细节，以及章尾转折。",
-                  "不要代写整章，不要改写既成事实，也不要声称已经修改文件。",
-                  "只返回简短、可读的 Markdown 灵感卡。",
-                ].join("\n"),
+              ? "Generate one optional Markdown inspiration card for revising the supplied chapter with the activated Skills. This is read-only advice: do not rewrite the chapter, alter canon, or claim persistence."
+              : "按已激活的 Skills，为所给章节生成一张可选的 Markdown 修订灵感卡。这是只读建议：不要代写整章、改变正典或声称已经落盘。",
           },
           {
             role: "user",
@@ -3037,7 +3116,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               `${language === "en" ? "Current chapter" : "当前章节"}:\n${chapter}`,
             ].filter(Boolean).join("\n\n"),
           },
-        ],
+        ], inspirationSkills),
         { temperature: 0.9, maxTokens: 600, signal: c.req.raw.signal },
       );
       const card = response.content.trim();
@@ -3146,39 +3225,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // --- Truth files ---
 
-  // Flat-file whitelist — the pre-Phase-5 story root files plus dev's legacy
-  // editor targets (author_intent / current_focus / volume_outline).
-  //
-  // Phase 5 cleanup #3 moved the authoritative YAML frontmatter + outline prose
-  // into story/outline/ and character sheets into story/roles/. `story_bible.md`
-  // and `book_rules.md` now exist only as compat pointer shims — we still allow
-  // reading them so legacy books keep rendering, but the server-side writer
-  // (write_truth_file) no longer accepts them as edit targets.
   const TRUTH_FLAT_FILES = [
     "author_intent.md", "current_focus.md",
-    "story_bible.md", "book_rules.md", "volume_outline.md", "current_state.md",
-    "particle_ledger.md", "pending_hooks.md", "chapter_summaries.md",
-    "subplot_board.md", "emotional_arcs.md", "character_matrix.md",
+    "book_rules.md", "current_state.md", "pending_hooks.md", "chapter_summaries.md",
     "style_guide.md", "parent_canon.md", "fanfic_canon.md",
   ];
 
-  // Authoritative Phase 5 paths — prose outline + role sheets live under
-  // dedicated subdirectories of story/. The full path (relative to story/) is
-  // matched literally here. `节奏原则.md` / `rhythm_principles.md` is optional
-  // after Phase 5 consolidation (rhythm lives in volume_map's closing paragraph);
-  // the entries stay whitelisted for legacy books and manual overrides.
   const TRUTH_OUTLINE_FILES = [
     "outline/story_frame.md",
     "outline/volume_map.md",
-    "outline/节奏原则.md",
-    "outline/rhythm_principles.md",
   ];
 
-  // Pointer shims that the runtime no longer treats as authoritative. The
-  // GET handler tags them with `legacy: true` so the UI can surface that the
-  // edits won't land where the user expects.
-  const LEGACY_SHIM_FILES = new Set(["story_bible.md", "book_rules.md"]);
-  const RUNTIME_DIAGNOSTIC_FILE_RE = /^runtime\/chapter-\d{4}\.(?:intent\.md|plan\.md|context\.json|rule-stack\.yaml|trace\.json)$/;
+  const RUNTIME_DIAGNOSTIC_FILE_RE = /^runtime\/chapter-\d{4}\.(?:intent\.md|plan\.json|context\.json|trace\.json)$/;
 
   /**
    * Validate a requested truth-file path:
@@ -3235,30 +3293,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "Invalid truth file" }, 400);
     }
 
-    // Phase 5: new-layout books keep the authoritative prose under outline/.
-    // A legacy book may only have story_bible.md / book_rules.md on disk —
-    // we still serve those for read-only display, but flag them so the UI
-    // can warn users their edits won't reach the runtime.
-    // Hotfix: only tag as legacy when the book actually HAS the new layout.
-    // Pre-Phase-5 books use story_bible/book_rules as the authoritative source.
-    const { isNewLayoutBook, tryParseBookRulesFrontmatter } = await import("@actalk/inkos-core");
-    const legacy = LEGACY_SHIM_FILES.has(file) && await isNewLayoutBook(bookDir);
-
     try {
       const content = await readFile(resolved, "utf-8");
-      // Files like outline/story_frame.md carry a YAML frontmatter block of
-      // structured fields (protagonist / genreLock / prohibitions / ...). Parse
-      // it here so the UI can render those as friendly cards instead of dumping
-      // raw YAML at the reader. `content` stays raw so the editor round-trips it
-      // unchanged; `body` is the prose with the frontmatter stripped.
-      const parsed = tryParseBookRulesFrontmatter(content);
-      const structured = parsed ? { frontmatter: parsed.rules, body: parsed.body } : {};
       const runtimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(file);
       return c.json({
         file,
         content,
-        ...structured,
-        ...(legacy ? { legacy: true } : {}),
         ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
       });
     } catch {
@@ -3266,7 +3306,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({
         file,
         content: null,
-        ...(legacy ? { legacy: true } : {}),
         ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
       });
     }
@@ -3292,11 +3331,33 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("write:start", { bookId: id });
 
-    // Fire and forget — progress/completion/errors pushed via SSE
     const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
-    pipeline.writeNextChapter(id, body.wordCount).then(
+    const [writingSkills, reviewSkills] = await Promise.all([
+      resolveStudioProfileSkills(root, "longform-novel"),
+      resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true }),
+    ]);
+    const tool = createWriteChaptersTool(pipeline, id, {
+      workerSkills: (worker) => worker === "auditor" || worker === "reviser" ? reviewSkills : writingSkills,
+    });
+    executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: confirmedCapabilityBinding("write_next")!,
+      tool,
+      parameters: {
+        instruction: "Write the next chapter for the active Work.",
+        bookId: id,
+        chapterCount: 1,
+        ...(body.wordCount ? { chapterWordCount: body.wordCount } : {}),
+      },
+      workId: id,
+    }).then(
       (result) => {
-        broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
+        const data = result.data as { chapters?: ReadonlyArray<{ chapterNumber: number; title: string; wordCount: number; observations?: unknown[] }> } | undefined;
+        const chapter = data?.chapters?.at(-1);
+        broadcast("write:complete", {
+          bookId: id,
+          ...(chapter ? { chapterNumber: chapter.chapterNumber, title: chapter.title, wordCount: chapter.wordCount, observationCount: chapter.observations?.length ?? 0 } : {}),
+        });
       },
       (e) => {
         broadcast("write:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
@@ -3306,89 +3367,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ status: "writing", bookId: id });
   });
 
-  app.post("/api/v1/books/:id/draft", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ wordCount?: number; context?: string }>().catch(() => ({ wordCount: undefined, context: undefined }));
-
-    broadcast("draft:start", { bookId: id });
-
-    const pipeline = new PipelineRunner(await buildPipelineConfig());
-    pipeline.writeDraft(id, body.context, body.wordCount).then(
-      (result) => {
-        broadcast("draft:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
-      },
-      (e) => {
-        broadcast("draft:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
-      },
-    );
-
-    return c.json({ status: "drafting", bookId: id });
-  });
-
-  app.get("/api/v1/books/:id/eval", async (c) => {
-    const id = c.req.param("id");
-    const chapters = c.req.query("chapters");
-    try {
-      return c.json(await evaluateBookQuality({ state, bookId: id, chapters }));
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/consolidate", async (c) => {
-    const id = c.req.param("id");
-    try {
-      const pipelineConfig = await buildPipelineConfig();
-      const consolidator = new ConsolidatorAgent({
-        client: pipelineConfig.client,
-        model: pipelineConfig.model,
-        projectRoot: root,
-      });
-      const result = await consolidator.consolidate(state.bookDir(id));
-      broadcast("consolidate:complete", { bookId: id, ...result });
-      return c.json(result);
-    } catch (e) {
-      broadcast("consolidate:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/plan", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ context?: string }>().catch(() => ({ context: undefined }));
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      return c.json(await pipeline.planChapter(id, body.context));
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/compose", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ context?: string }>().catch(() => ({ context: undefined }));
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      return c.json(await pipeline.composeChapter(id, body.context));
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/repair-state/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.repairChapterState(id, chapterNum);
-      broadcast("repair-state:complete", { bookId: id, chapter: chapterNum });
-      return c.json(result);
-    } catch (e) {
-      broadcast("repair-state:error", { bookId: id, chapter: chapterNum, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   app.post("/api/v1/books/:id/foundation/revise", async (c) => {
     const id = c.req.param("id");
     const { feedback } = await c.req.json<{ feedback?: string }>().catch(() => ({ feedback: undefined }));
@@ -3396,53 +3374,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "feedback is required" }, 400);
     }
     try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.reviseFoundation(id, feedback.trim());
+      const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel");
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_foundation", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createFoundationRevisionTool(pipeline, id, { workerSkills: () => skills }),
+        parameters: { instruction: feedback.trim(), bookId: id },
+        workId: id,
+      });
       broadcast("foundation:revised", { bookId: id });
       return c.json({ ok: true });
     } catch (e) {
       broadcast("foundation:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/chapters/:num/approve", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-
-    try {
-      const index = await state.loadChapterIndex(id);
-      const updated = index.map((ch) =>
-        ch.number === num ? { ...ch, status: "approved" as const } : ch,
-      );
-      await state.saveChapterIndex(id, updated);
-      return c.json({ ok: true, chapterNumber: num, status: "approved" });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/chapters/:num/reject", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-
-    try {
-      const index = await state.loadChapterIndex(id);
-      const target = index.find((ch) => ch.number === num);
-      if (!target) {
-        return c.json({ error: `Chapter ${num} not found` }, 404);
-      }
-
-      const rollbackTarget = num - 1;
-      const discarded = await state.rollbackToChapter(id, rollbackTarget);
-      return c.json({
-        ok: true,
-        chapterNumber: num,
-        status: "rejected",
-        rolledBackTo: rollbackTarget,
-        discarded,
-      });
-    } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
   });
@@ -3754,11 +3698,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/services/:service/test", async (c) => {
     const service = c.req.param("service");
-    const { apiKey, baseUrl, apiFormat, stream } = await c.req.json<{
+    const { apiKey, baseUrl, apiFormat, stream, preferredModel } = await c.req.json<{
       apiKey: string;
       baseUrl?: string;
-      apiFormat?: "chat" | "responses";
+      apiFormat?: LLMApiFormat;
       stream?: boolean;
+      preferredModel?: string;
     }>();
 
     const language = await currentProjectLanguage();
@@ -3789,6 +3734,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       service,
       apiKey: apiKey?.trim() ?? "",
       baseUrl: resolvedBaseUrl,
+      preferredModel: preferredModel?.trim() || undefined,
       preferredApiFormat: apiFormat,
       preferredStream: stream,
       proxyUrl: typeof llm.proxyUrl === "string" ? llm.proxyUrl : undefined,
@@ -3879,12 +3825,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         return Boolean(secrets.services[ep.id]?.apiKey) || (optional && configured);
       });
 
+    const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
+    const defaultModel = typeof llm.defaultModel === "string" ? llm.defaultModel.trim() : "";
+    const defaultService = typeof llm.service === "string" ? llm.service.trim() : "";
+
     const groups = endpoints.map((ep) => {
       const staticModels = ep.models
         .filter((m) => m.enabled !== false)
         .filter((m) => isTextChatModelId(m.id));
       const configuredModels = configuredById.get(ep.id)?.models ?? [];
-      const models = mergeServiceModelIds(staticModels.map((model) => model.id), configuredModels)
+      const preferredModel = defaultService === ep.id && defaultModel ? [defaultModel] : [];
+      const models = mergeServiceModelIds(staticModels.map((model) => model.id), configuredModels, preferredModel)
         .map((id) => {
           const known = staticModels.find((model) => model.id.toLowerCase() === id.toLowerCase());
           return {
@@ -3915,6 +3866,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         id: `custom:${s.name ?? "Custom"}`,
         baseUrl: s.baseUrl ?? "",
         label: s.name ?? "Custom",
+        models: s.models ?? [],
+        apiFormat: s.apiFormat,
       }))
       .filter((s) => s.baseUrl && Boolean(secrets.services[s.id]?.apiKey));
 
@@ -3922,7 +3875,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       service: s.id,
       label: s.label,
       models: filterTextChatModels(
-        await probeModelsFromUpstream(s.baseUrl, secrets.services[s.id].apiKey, 10_000),
+        // Explicit model choices belong to this service/protocol. A shared
+        // gateway catalog may advertise models that this protocol cannot call.
+        s.models.length > 0
+          ? mergeServiceModelIds(s.models).map(id => ({ id, name: id }))
+          : await probeModelsFromUpstream(
+              s.apiFormat === "anthropic" && !/\/v1\/?$/.test(s.baseUrl)
+                ? `${s.baseUrl.replace(/\/$/, "")}/v1` : s.baseUrl,
+              secrets.services[s.id].apiKey, 10_000,
+            ),
       ),
     })));
 
@@ -4013,41 +3974,49 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json(result);
   });
 
-  app.get("/api/v1/prompt-packs", async (c) => {
-    const prompts = await Promise.all(
-      listBuiltinPrompts().map((prompt) => toStudioPromptPackPrompt(root, prompt)),
-    );
-    return c.json({
-      packs: listBuiltinPromptPacks(),
-      prompts,
-    });
+  app.get("/api/v1/skills/:skillId/documents", async (c) => {
+    const id = normalizeStudioSkillId(c.req.param("skillId"), "skillId");
+    const available = await loadAvailableAgentSkills({ projectRoot: root });
+    const skill = new Map(available.skills.map(skill => [skill.id, skill])).get(id);
+    if (!skill?.baseDir) throw new ApiError(404, "SKILL_NOT_FOUND", "Skill documents unavailable");
+    const documents: Array<{ path: string; content: string }> = [];
+    const visit = async (directory: string) => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) await visit(path);
+        else if (entry.isFile() && [".md", ".txt"].some(extension => entry.name.endsWith(extension))) {
+          if ((await stat(path)).size > MAX_SKILL_IMPORT_FILE_BYTES) throw new ApiError(413, "SKILL_FILE_TOO_LARGE", "Skill file exceeds editor limit");
+          documents.push({ path: relative(skill.baseDir!, path).replaceAll("\\", "/"), content: await readFile(path, "utf8") });
+        }
+      }
+    };
+    await visit(skill.baseDir);
+    return c.json({ id, documents });
   });
 
-  app.put("/api/v1/prompt-packs/:promptId", async (c) => {
-    const promptId = normalizeStudioPromptId(c.req.param("promptId"));
-    const payload = await c.req.json().catch(() => {
-      throw new ApiError(400, "INVALID_PROMPT_PACK_PAYLOAD", "Prompt pack payload must be JSON");
-    });
-    const content = payload && typeof payload === "object" && "content" in payload
-      ? (payload as { readonly content?: unknown }).content
-      : undefined;
-    if (typeof content !== "string") {
-      throw new ApiError(400, "INVALID_PROMPT_PACK_PAYLOAD", "content must be a string");
+  app.put("/api/v1/skills/:skillId/documents", async (c) => {
+    const id = normalizeStudioSkillId(c.req.param("skillId"), "skillId");
+    const body = await c.req.json<{ documents: Array<{ path: string; content: string }> }>();
+    const { files } = normalizeSkillImportFiles(body.documents.map(document => ({
+      path: document.path, dataUrl: `data:text/plain;base64,${Buffer.from(document.content, "utf8").toString("base64")}`,
+    })));
+    const manifest = files.find(file => file.path === "SKILL.md");
+    if (!manifest) throw new ApiError(400, "INVALID_SKILL_MANIFEST", "SKILL.md must be at the folder root");
+    const parsed = parseAgentSkillDocument(manifest.buffer.toString("utf8"), { skillPath: projectSkillPath(root, id), source: "project" });
+    if (parsed.id !== id) throw new ApiError(400, "SKILL_ID_MISMATCH", "Skill identity cannot change");
+    for (const file of files) {
+      let parent = projectSkillDir(root, id);
+      for (const part of ["", ...file.path.split("/")]) {
+        if (part) parent = join(parent, part);
+        try { if ((await lstat(parent)).isSymbolicLink()) throw new ApiError(400, "INVALID_SKILL_PATH", "Skill editor cannot follow symlinks"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
     }
-
-    const file = promptOverridePath(root, promptId);
-    await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, content, "utf-8");
-    const prompt = listBuiltinPrompts().find((item) => item.id === promptId);
-    return c.json({ prompt: await toStudioPromptPackPrompt(root, prompt!) });
-  });
-
-  app.delete("/api/v1/prompt-packs/:promptId", async (c) => {
-    const promptId = normalizeStudioPromptId(c.req.param("promptId"));
-    const file = promptOverridePath(root, promptId);
-    await rm(file, { force: true });
-    const prompt = listBuiltinPrompts().find((item) => item.id === promptId);
-    return c.json({ prompt: await toStudioPromptPackPrompt(root, prompt!) });
+    await commitAtomicFileSet({ rootDir: root, writes: files.map(file => ({
+      relativePath: relative(root, join(projectSkillDir(root, id), file.path)), content: file.buffer,
+    })) });
+    return c.json({ id, saved: files.map(file => file.path) });
   });
 
   app.post("/api/v1/skills/import", async (c) => {
@@ -4111,13 +4080,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       throw new ApiError(400, "INVALID_PROJECT_ARTIFACT_BODY", "content must be a string");
     }
 
-    await mkdir(dirname(file.resolved), { recursive: true });
-    await writeFile(file.resolved, content, "utf-8");
+    const [rootName, workId, ...workPathParts] = file.relPath.split("/");
+    if (rootName !== "works" || !workId || workPathParts.length === 0) {
+      throw new ApiError(400, "INVALID_PROJECT_ARTIFACT_PATH", "Artifact must belong to a Work");
+    }
+    const work = await loadWorkIfExists(root, workId);
+    if (!work) throw new ApiError(404, "WORK_NOT_FOUND", `Work not found: ${workId}`);
+    const path = workPathParts.join("/");
+    const artifact = work.artifacts.find((candidate) => candidate.revisions.some((revision) => (
+      revision.id === candidate.currentRevisionId && revision.path === path
+    )));
+    if (!artifact) throw new ApiError(409, "ARTIFACT_NOT_REGISTERED", `Current artifact is not registered: ${path}`);
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "workspace", actionId: "replace_work_artifact", profileId: work.profileId, risk: "recoverable-write" },
+      tool: createReplaceWorkArtifactTool(root, workId),
+      workId,
+      parameters: { path, content, expectedRevisionId: (body as { expectedRevisionId?: string }).expectedRevisionId ?? artifact.currentRevisionId ?? undefined },
+    });
     return c.json({
       ok: true,
       path: file.relPath,
       contentType: file.contentType,
       size: Buffer.byteLength(content, "utf-8"),
+      action: result,
     });
   });
 
@@ -4186,21 +4172,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
     }
 
-    // Hotfix: only tag shim files as legacy when the book has the new layout.
-    const { isNewLayoutBook } = await import("@actalk/inkos-core");
-    const newLayout = await isNewLayoutBook(bookDir);
-
-    async function describe(relPath: string): Promise<{ readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true; readonly readonly?: true; readonly readonlyReason?: string } | null> {
+    async function describe(relPath: string): Promise<{ readonly name: string; readonly size: number; readonly preview: string; readonly readonly?: true; readonly readonlyReason?: string } | null> {
       try {
         const content = await readFile(join(storyDir, relPath), "utf-8");
-        const isShim = LEGACY_SHIM_FILES.has(relPath) && newLayout;
         const isRuntimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(relPath);
-        const entry: { readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true; readonly readonly?: true; readonly readonlyReason?: string } =
-          isShim
-            ? { name: relPath, size: content.length, preview: content.slice(0, 200), legacy: true }
-            : isRuntimeDiagnostic
-              ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true, readonlyReason: "runtime-diagnostic" }
-              : { name: relPath, size: content.length, preview: content.slice(0, 200) };
+        const entry = isRuntimeDiagnostic
+          ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true as const, readonlyReason: "runtime-diagnostic" }
+          : { name: relPath, size: content.length, preview: content.slice(0, 200) };
         return entry;
       } catch {
         return null;
@@ -4208,10 +4186,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
 
     try {
-      // Flat story/ files (legacy + runtime logs)
-      const flatFiles = (await listDir(".")).filter((f) => !f.startsWith("outline") && !f.startsWith("roles"));
-      // Phase 5 outline/ files
-      const outlineFiles = (await listDir("outline")).map((f) => `outline/${f}`);
+      const flatFiles = (await listDir(".")).filter((file) => TRUTH_FLAT_FILES.includes(file));
+      const outlineFiles = (await listDir("outline"))
+        .map((file) => `outline/${file}`)
+        .filter((file) => TRUTH_OUTLINE_FILES.includes(file));
       // Phase 5 roles/主要角色 + roles/次要角色, plus Phase hotfix 3
       // English-locale equivalents so en-language books are visible.
       const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`);
@@ -4264,8 +4242,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         retryDelayMs: currentConfig.daemon.retryDelayMs,
         cooldownAfterChapterMs: currentConfig.daemon.cooldownAfterChapterMs,
         maxChaptersPerDay: currentConfig.daemon.maxChaptersPerDay,
-        onChapterComplete: (bookId, chapter, status) => {
-          broadcast("daemon:chapter", { bookId, chapter, status });
+        onChapterComplete: (bookId, chapter) => {
+          broadcast("daemon:chapter", { bookId, chapter });
         },
         onError: (bookId, error) => {
           broadcast("daemon:error", { bookId, error: error.message });
@@ -4316,30 +4294,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // --- Agent chat ---
 
-  app.get("/api/v1/interaction/session", async (c) => {
-    const session = await loadProjectSession(root);
-    const activeBookId = await resolveSessionActiveBook(root, session);
-    return c.json({
-      session: activeBookId && session.activeBookId !== activeBookId
-        ? { ...session, activeBookId }
-        : session,
-      activeBookId,
-    });
-  });
-
-  // Play worlds are created and advanced by the play_start / play_step agent
-  // tools (worldId === sessionId). The HUD only needs to read a run's state,
-  // so just the run-detail endpoint remains; the old save-slot list/create
-  // endpoints were only used by the removed standalone play page.
+  // A world is a Work shared by any number of conversations. Reads never
+  // create a new run from a chat session ID.
   app.get("/api/v1/play/runs/:worldId/:runId", async (c) => {
     const worldId = normalizeApiBookId(c.req.param("worldId"), "worldId") ?? "default-world";
     const runId = normalizeApiBookId(c.req.param("runId"), "runId") ?? "default-run";
     const store = new PlayStore(root);
+    const world = await store.loadWorld(worldId);
+    if (!world) return c.json({ error: { code: "PLAY_WORLD_NOT_FOUND" } }, 404);
+    try { await access(join(store.runDir(worldId, runId), "play.db")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return c.json({ error: { code: "PLAY_RUN_NOT_FOUND" } }, 404);
+      throw error;
+    }
     const db = createPlayDB(store.runDir(worldId, runId));
-    const [transcript, currentState, world] = await Promise.all([
+    const [transcript, currentState] = await Promise.all([
       store.readTranscript(worldId, runId),
       store.loadCurrentState(worldId, runId).catch(() => null),
-      store.loadWorld(worldId).catch(() => null),
     ]);
     const graph = db.snapshot();
     db.close?.();
@@ -4367,19 +4338,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     // Illustration of the current moment, if one was generated for this turn.
     const sceneTurn = (currentState as { turn?: number } | null)?.turn ?? 0;
-    const sceneEntry = manifest[`scene-turn-${sceneTurn}`];
+    const currentPresentation = await store.readPresentation(worldId, runId);
+    const sceneText = currentPresentation?.sceneText ?? await store.readProjection(worldId, runId, "projections/scene.md").catch(() => "");
+    const sceneEntry = manifest[playSceneImageKey(sceneTurn, sceneText, playImageContext(world ?? undefined,graph,currentState))];
     const sceneImageUrl = sceneEntry?.status === "ready" ? imageUrlFor(sceneEntry.file) : undefined;
+    // The current turn may have been replayed. Its old turn-only image cannot
+    // identify which prose variant it illustrates.
+    delete sceneImageUrls[`scene-turn-${sceneTurn}`];
 
     return c.json({
       worldId,
       runId,
       title: world?.title ?? null,
+      mode: world?.mode ?? null,
       transcript,
       currentState,
       graph: { ...graph, entities: entitiesWithImages },
       imageSettings,
       sceneImageUrls,
       ...(sceneImageUrl ? { sceneImageUrl } : {}),
+      currentSceneImage: { turn: sceneTurn, sceneText, url: sceneImageUrl ?? null },
+      currentPresentation,
+      ...(sceneEntry?.error ? { sceneImageError: sceneEntry.error } : {}),
     });
   });
 
@@ -4405,60 +4385,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     type GenerateImageBody = {
       target: "entity" | "scene";
       entityId?: string;
-      sceneText?: string;
-      sceneKey?: string;
     };
     const body = await c.req.json<GenerateImageBody>().catch(() => ({ target: "entity" } as GenerateImageBody));
 
-    const store = new PlayStore(root);
-    const runDir = store.runDir(worldId, runId);
-    const [world, currentState] = await Promise.all([
-      store.loadWorld(worldId).catch(() => null),
-      store.loadCurrentState(worldId, runId).catch(() => null),
-    ]);
-    const worldContext = world
-      ? {
-        premise: world.premise,
-        worldContract: world.worldContract,
-        visualContract: world.visualContract,
-      }
-      : undefined;
-
-    let key: string;
-    let prompt: string;
-    if (body.target === "scene") {
-      // The current moment defaults to the rendered scene projection so the UI
-      // can offer a one-tap "illustrate this moment" without re-sending prose.
-      const sceneText = (
-        (body.sceneText ?? "").trim()
-        || (await store.readProjection(worldId, runId, "projections/scene.md").catch(() => "")).trim()
-      );
-      if (!sceneText) return c.json({ error: "no current scene to illustrate" }, 400);
-      key = body.sceneKey?.trim() || `scene-turn-${(currentState as { turn?: number } | null)?.turn ?? 0}`;
-      prompt = buildPlaySceneImagePrompt(sceneText, worldContext);
-    } else {
-      const entityId = body.entityId?.trim();
-      if (!entityId) return c.json({ error: "entityId is required for an entity image" }, 400);
-      const db = createPlayDB(runDir);
-      const graph = db.snapshot();
-      db.close?.();
-      const entity = (graph.entities ?? []).find((e: { id: string }) => e.id === entityId) as
-        | { id: string; type: string; label: string; summary?: string }
-        | undefined;
-      if (!entity) return c.json({ error: `entity not found: ${entityId}` }, 404);
-      key = entity.id;
-      prompt = buildPlayEntityImagePrompt(entity, worldContext);
-    }
-
     try {
-      const entry = await generatePlayImage({ root, runDir, key, prompt });
-      const url = entry.status === "ready" && entry.file
-        ? `/api/v1/play/runs/${encodeURIComponent(worldId)}/${encodeURIComponent(runId)}/images/${encodeURIComponent(entry.file)}`
-        : undefined;
-      return c.json({ key, ok: entry.status === "ready", ...entry, ...(url ? { url } : {}) });
+      const result = await executeExplicitCapabilityTool({projectRoot:root,workId:worldId,conversationId:worldId,
+        binding:{capabilityId:"interactive-world",actionId:"generate_play_image",profileId:"interactive-world",risk:"recoverable-write"},
+        tool:createPlayImageTool(root,worldId,runId),parameters:body,signal:c.req.raw.signal});
+      return c.json(result.data ?? {});
     } catch (e) {
-      // Resolution failure = cover API not configured.
-      return c.json({ error: e instanceof Error ? e.message : String(e), needsCoverConfig: true }, 400);
+      return c.json({ error: e instanceof Error ? e.message : String(e), code:(e as {code?:string})?.code ?? "PLAY_IMAGE_FAILED" }, 400);
     }
   });
 
@@ -4494,26 +4430,60 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const session = await loadBookSession(root, sessionId);
     if (!session) return c.json({ error: "Session not found" }, 404);
     const task = await loadReconciledTaskSnapshot(sessionId);
-    return c.json({ session, ...(task ? { task } : {}) });
+    return c.json({ session, chatRequest: await loadChatRequest(sessionId), ...(task ? { task } : {}) });
   });
 
   app.post("/api/v1/sessions", async (c) => {
-    const body = await c.req.json<{ bookId?: string | null; sessionId?: string; sessionKind?: string; playMode?: string }>().catch(() => ({}));
+    type CreateSessionBody = {
+      bookId?: string | null;
+      workId?: string | null;
+      profileId?: string;
+      proposalAction?: string;
+      sessionId?: string;
+      sessionKind?: string;
+      playMode?: string;
+      modelOverride?: string;
+      serviceOverride?: string;
+    };
+    const body = await c.req.json<CreateSessionBody>().catch(() => ({} as CreateSessionBody));
     const bookId = normalizeApiBookId((body as { bookId?: unknown }).bookId, "bookId");
     const sessionKind = normalizeStudioSessionKind(
       (body as { sessionKind?: unknown }).sessionKind,
       bookId ? "book" : "chat",
     );
     const playMode = normalizeStudioPlayMode((body as { playMode?: unknown }).playMode);
+    const proposalAction = normalizeStudioProposalAction((body as { proposalAction?: unknown }).proposalAction);
+    const modelOverride = typeof body.modelOverride === "string" && body.modelOverride.trim()
+      ? body.modelOverride.trim()
+      : undefined;
+    const serviceOverride = typeof body.serviceOverride === "string" && body.serviceOverride.trim()
+      ? body.serviceOverride.trim()
+      : undefined;
     const sessionId = (body as { sessionId?: string }).sessionId;
     // sessionId 只允许 timestamp-random 格式；防止注入任意文件名
     const safeSessionId = sessionId && /^[0-9]+-[a-z0-9]+$/.test(sessionId) ? sessionId : undefined;
+    const resolvedSessionId = safeSessionId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const surfaceBinding = resolveSessionHarnessBinding({ sessionKind, bookId, sessionId: resolvedSessionId });
+    const requestedWorkId = (body as { workId?: unknown }).workId;
+    const workId = requestedWorkId === null
+      ? null
+      : typeof requestedWorkId === "string" && requestedWorkId.trim()
+        ? normalizeApiBookId(requestedWorkId, "workId")
+        : surfaceBinding.workId;
+    const boundWork = workId ? await loadWorkIfExists(root, workId) : null;
+    if (typeof requestedWorkId === "string" && requestedWorkId.trim() && !boundWork) {
+      return c.json({ error: `Work not found: ${requestedWorkId.trim()}` }, 404);
+    }
+    const requestedProfileId = (body as { profileId?: unknown }).profileId;
+    const profileId = boundWork?.profileId
+      ?? (typeof requestedProfileId === "string" && requestedProfileId.trim() ? requestedProfileId.trim() : surfaceBinding.profileId);
+    createBuiltInWorkProfileRegistry(root).require(profileId);
     const session = await createAndPersistBookSession(
       root,
       bookId,
-      safeSessionId,
+      resolvedSessionId,
       sessionKind,
-      ...(playMode ? [{ playMode }] as const : []),
+      { ...(playMode ? { playMode } : {}), profileId, workId, ...(proposalAction ? { proposalAction } : {}), ...(modelOverride ? { modelOverride } : {}), ...(serviceOverride ? { serviceOverride } : {}) },
     );
     // 客户端可以用同一个 sessionId 重新创建会话：移除删除标记，
     // 让新会话的生产任务可以正常持久化快照。
@@ -4534,7 +4504,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       existing.bookId,
       existing.sessionId,
       existing.sessionKind,
-      { playMode },
+      { playMode, ...(existing.profileId ? { profileId: existing.profileId } : {}), ...(existing.workId !== undefined ? { workId: existing.workId } : {}) },
     );
     return c.json({ session });
   });
@@ -4559,11 +4529,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     // 先标记删除，再中止任务：任务被中止后的错误持久化会检查这个标记，
     // 不会把已删除会话的快照文件重建出来。
     deletedSessionIds.add(sessionId);
+    chatRequests.get(sessionId)?.controller.abort();
+    abortAgentSession(root, sessionId);
+    chatRequests.delete(sessionId);
     const controller = await findRunningTaskController(sessionId);
     controller?.abort();
     await Promise.all([
       deleteBookSession(root, sessionId),
       deleteStudioTaskSnapshot(root, sessionId),
+      chatRequestStore.delete(sessionId),
     ]);
     return c.json({ ok: true });
   });
@@ -4574,9 +4548,75 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const controller = chatOnly ? undefined : await findRunningTaskController(sessionId);
     controller?.abort();
     const taskAborted = Boolean(controller);
-    const aborted = abortAgentSession(root, sessionId) || taskAborted;
+    const chat = chatRequests.get(sessionId);
+    const chatRunning = chat?.snapshot.status === "running";
+    if (chatRunning) chat.controller.abort();
+    const aborted = abortAgentSession(root, sessionId) || taskAborted || chatRunning;
     broadcast("agent:aborted", { sessionId, aborted, scope: chatOnly ? "chat" : "all" });
     return c.json({ ok: true, aborted });
+  });
+
+  app.use("/api/v1/agent", async (c, next) => {
+    if (c.req.method !== "POST") return next();
+    const body = await c.req.json().catch(() => ({}));
+    const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+    const confirmed = isConfirmedProductionAction(
+      normalizeStudioActionSource(body.actionSource),
+      normalizeStudioRequestedIntent(body.requestedIntent),
+    );
+    if (!sessionId || confirmed) return next();
+    const previous = chatRequests.get(sessionId);
+    if (previous?.snapshot.status === "running") return c.json({
+      error: { code: "CHAT_REQUEST_ALREADY_RUNNING", message: "当前会话仍在运行，请等待完成或先停止。" },
+      chatRequest: previous.snapshot,
+    }, 409);
+    const request: NonNullable<ReturnType<typeof chatRequests.get>> = {
+      snapshot: {
+        sessionId,
+        requestId: typeof body.clientRequestId === "string" && body.clientRequestId.trim()
+          ? body.clientRequestId.trim().slice(0, 128) : randomUUID(),
+        startedAt: Date.now(),
+        status: "running" as "running" | "completed" | "failed" | "cancelled",
+      },
+      controller: new AbortController(),
+    };
+    chatRequests.set(sessionId, request);
+    if (body.retryOfRequestId !== undefined) {
+      try {
+        const saved = previous?.snapshot ?? await chatRequestStore.load(sessionId);
+        const interrupted = !previous && saved?.status === 'running';
+        if (!saved || typeof body.retryOfRequestId !== 'string' || saved.requestId !== body.retryOfRequestId
+          || (saved.status !== 'failed' && !interrupted) || saved.retry?.text !== body.instruction) {
+          throw new ApiError(409, 'CHAT_RETRY_CONFLICT', 'The failed submission no longer matches this retry. Reload the saved request.');
+        }
+        if (saved.baselineWork === undefined) throw new ApiError(409, 'CHAT_RETRY_BASELINE_UNAVAILABLE', 'The original revision inventory is unavailable for this older request. Send a new instruction against the current version.');
+        request.snapshot = { ...request.snapshot, baselineWork: saved.baselineWork };
+      } catch (error) {
+        if (previous) chatRequests.set(sessionId, previous); else chatRequests.delete(sessionId);
+        throw error;
+      }
+    }
+    try {
+      await chatRequestStore.save(request.snapshot);
+      await next();
+    } finally {
+      const response = await c.res.clone().json().catch(() => null) as { error?: string | { code?: string; message?: string }; completionStatus?: StudioCompletionStatus } | null;
+      const failure = response?.error;
+      const error = failure ? {
+        code: typeof failure === "object" ? failure.code ?? "CHAT_REQUEST_FAILED" : "CHAT_REQUEST_FAILED",
+        message: typeof failure === "string" ? failure : failure.message ?? "The request failed.",
+      } : c.res.status >= 400 ? { code: "CHAT_REQUEST_FAILED", message: `Request failed (HTTP ${c.res.status}).` } : undefined;
+      const { toolExecutions: _completedTools, ...identity } = request.snapshot;
+      request.snapshot = { ...identity,
+        status: request.controller.signal.aborted ? "cancelled" : error ? "failed" : "completed",
+        completedAt: Date.now(),
+        error,
+        completionStatus: response?.completionStatus,
+      };
+      if (request.snapshot.status !== "failed") request.snapshot = { ...request.snapshot, retry: undefined };
+      if (!deletedSessionIds.has(sessionId)) await chatRequestStore.save(request.snapshot);
+      broadcast("request:snapshot", request.snapshot);
+    }
   });
 
   app.post("/api/v1/agent", async (c) => {
@@ -4586,6 +4626,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId: reqSessionId,
       clientRequestId: reqClientRequestId,
       sessionKind: reqSessionKind,
+      profileId: reqProfileId,
+      workId: reqWorkId,
       actionSource: reqActionSource,
       requestedIntent: reqRequestedIntent,
       actionPayload: reqActionPayload,
@@ -4601,6 +4643,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId?: string;
       clientRequestId?: unknown;
       sessionKind?: string;
+      profileId?: string;
+      workId?: string | null;
       actionSource?: string;
       requestedIntent?: string;
       actionPayload?: unknown;
@@ -4636,6 +4680,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const playMode = normalizeStudioPlayMode(reqPlayMode);
 
     broadcast("agent:start", { instruction, activeBookId, sessionId, actionSource, requestedIntent, requestedSkills, attachments: attachments.length });
+    const collectedToolExecs: CollectedToolExec[] = [];
+    const chatRequest = requestedIntent && isConfirmedProductionAction(actionSource, requestedIntent)
+      ? undefined : chatRequests.get(sessionId);
+    if (chatRequest?.snapshot.status === "running") {
+      chatRequest.snapshot = { ...chatRequest.snapshot, toolExecutions: collectedToolExecs };
+    }
 
     try {
       // Load config + create LLM client (pipeline created after model resolution)
@@ -4647,6 +4697,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         throw new ApiError(404, "SESSION_NOT_FOUND", `Session not found: ${sessionId}`);
       }
       let bookSession = loadedBookSession;
+      const publishExecutionTarget = (session: typeof bookSession) => {
+        const previousWorkId = bookSession.workId ?? bookSession.bookId;
+        bookSession = session;
+        broadcast("session:target", { ...workSessionResponseMetadata(session), previousWorkId });
+      };
       const requestedActiveBookId = normalizeApiBookId(activeBookId, "activeBookId");
       const persistedBookId = normalizeApiBookId(bookSession.bookId, "session.bookId");
       if (
@@ -4654,33 +4709,96 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         && persistedBookId
         && persistedBookId !== requestedActiveBookId
       ) {
-        throw new ApiError(
-          409,
-          "SESSION_BOOK_MISMATCH",
-          `Session ${bookSession.sessionId} is bound to ${persistedBookId}, not ${requestedActiveBookId}`,
-        );
+        return c.json({ error: { code: "SESSION_BOOK_MISMATCH", message: `Session ${bookSession.sessionId} is bound to ${persistedBookId}, not ${requestedActiveBookId}` },
+          session: workSessionResponseMetadata(bookSession) }, 409);
       }
       const agentBookId = requestedActiveBookId ?? persistedBookId;
       const sessionKind = normalizeStudioSessionKind(
         reqSessionKind,
         bookSession.sessionKind ?? (agentBookId ? "book" : "chat"),
       );
-      if (bookSession.sessionKind !== sessionKind || (playMode && bookSession.playMode !== playMode)) {
+      const surfaceBinding = resolveSessionHarnessBinding({
+        sessionKind,
+        bookId: agentBookId,
+        sessionId: bookSession.sessionId,
+      });
+      const requestedWorkId = reqWorkId === null
+        ? null
+        : typeof reqWorkId === "string" && reqWorkId.trim()
+          ? normalizeApiBookId(reqWorkId, "workId")
+          : undefined;
+      const persistedWorkId = bookSession.workId ?? bookSession.bookId;
+      if (persistedWorkId && ((requestedWorkId !== undefined && requestedWorkId !== persistedWorkId)
+        || (requestedActiveBookId && requestedActiveBookId !== persistedWorkId))) {
+        return c.json({ error: { code: "SESSION_TARGET_CONFLICT", message: "This session has a different saved execution target." },
+          session: workSessionResponseMetadata(bookSession) }, 409);
+      }
+      const candidateWorkId = reqWorkId === null
+        ? null
+        : requestedWorkId ?? bookSession.workId ?? surfaceBinding.workId;
+      const boundWork = candidateWorkId
+        ? await loadWorkIfExists(root, candidateWorkId)
+        : null;
+      if (candidateWorkId && !boundWork && sessionKind !== "play") {
+        throw new ApiError(404, "WORK_NOT_FOUND", `Work not found: ${candidateWorkId}`);
+      }
+      const requestedProfileId = typeof reqProfileId === "string" && reqProfileId.trim()
+        ? reqProfileId.trim()
+        : undefined;
+      if (boundWork && requestedProfileId && boundWork.profileId !== requestedProfileId) {
+        return c.json({ error: { code: "WORK_PROFILE_MISMATCH", message: `Work ${boundWork.id} uses ${boundWork.profileId}, not ${requestedProfileId}` },
+          session: workSessionResponseMetadata(bookSession) }, 409);
+      }
+      const profileId = boundWork?.profileId ?? requestedProfileId ?? bookSession.profileId ?? surfaceBinding.profileId;
+      const workId = boundWork?.id ?? candidateWorkId;
+      if (chatRequest) {
+        // Keep the actual submission, including attachments and selected Skills;
+        // reconstructing it from displayed prose loses these execution inputs.
+        const retryAttachments: ChatAttachmentPayload[] = attachments.map((attachment, index) => ({
+          id: attachment.id, filename: attachment.filename, mediaType: attachment.mimeType,
+          size: attachment.size, dataUrl: (reqAttachments as Array<{ dataUrl: string }>)[index]!.dataUrl,
+        }));
+        chatRequest.snapshot = { ...chatRequest.snapshot,
+          baselineWork: chatRequest.snapshot.baselineWork === undefined ? boundWork : chatRequest.snapshot.baselineWork,
+          retry: { text: instruction, options: {
+          retryOfRequestId: chatRequest.snapshot.requestId,
+          activeBookId: agentBookId ?? undefined, sessionKind, profileId, workId,
+          actionSource, requestedIntent, actionPayload, requestedSkills, disabledSkills,
+          attachments: retryAttachments, playMode,
+        } } };
+        await chatRequestStore.save(chatRequest.snapshot);
+      }
+      const modelOverride = typeof reqModel === "string" && reqModel.trim()
+        ? reqModel.trim()
+        : bookSession.modelOverride;
+      const serviceOverride = typeof reqService === "string" && reqService.trim() ? reqService.trim() : bookSession.serviceOverride;
+      createBuiltInWorkProfileRegistry(root).require(profileId);
+      if (
+        bookSession.sessionKind !== sessionKind
+        || (playMode && bookSession.playMode !== playMode)
+        || bookSession.profileId !== profileId
+        || bookSession.workId !== workId
+        || bookSession.modelOverride !== modelOverride
+        || bookSession.serviceOverride !== serviceOverride
+      ) {
         const updatedSession = await createAndPersistBookSession(
           root,
           bookSession.bookId,
           bookSession.sessionId,
           sessionKind,
-          ...(playMode ? [{ playMode }] as const : []),
+          { ...(playMode ? { playMode } : {}), profileId, workId, ...(modelOverride ? { modelOverride } : {}), ...(serviceOverride ? { serviceOverride } : {}) },
         );
         bookSession = updatedSession;
       }
       let activeBookConfig: { readonly language?: string } | null = null;
-      if (agentBookId && sessionKind !== "interactive-film-authoring") {
+      if (boundWork && boundWork.profileId !== "longform-novel") {
+        activeBookConfig = { language: boundWork.language };
+      } else if (agentBookId && sessionKind !== "interactive-film-authoring") {
         try {
           activeBookConfig = await state.loadBookConfig(agentBookId);
         } catch {
-          throw new ApiError(404, "BOOK_NOT_FOUND", `Book not found: ${agentBookId}`);
+          if (boundWork) activeBookConfig = { language: boundWork.language };
+          else throw new ApiError(404, "BOOK_NOT_FOUND", `Book not found: ${agentBookId}`);
         }
       }
       const configLanguage = config.language === "en" ? "en" : "zh";
@@ -4688,7 +4806,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const requestedLanguage = actionPayload?.shortRun?.language ?? actionPayload?.createBook?.language;
       const surfaceLanguage = agentBookId
         ? (bookLanguage ?? configLanguage)
-        : (requestedLanguage ?? inferLanguage(instruction));
+        : (requestedLanguage ?? configLanguage);
       const streamSessionId = loadedBookSession.sessionId;
       const titleBeforeRun = bookSession.title;
       let sessionTitleBroadcasted = false;
@@ -4722,9 +4840,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           );
           resolvedModel = resolved.model;
           resolvedApiKey = resolved.apiKey;
-        } catch (e: any) {
-          const msg = e?.message ?? String(e);
-          if (/API key/i.test(msg)) {
+        } catch (e: unknown) {
+          if (e instanceof ServiceApiKeyNotFoundError) {
             return c.json({
               error: pick(language, `请先为 ${reqService} 配置 API Key`, `Configure an API Key for ${reqService} first`),
               response: pick(
@@ -4786,7 +4903,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
 
       if (!resolvedModel) {
-        // 4. Legacy fallback: use createLLMClient
+        // 4. Use the already resolved effective project client.
         resolvedModel = client._piModel
           ? client._piModel
           : { provider: config.llm.provider ?? "anthropic", modelId: config.llm.model } as any;
@@ -4797,7 +4914,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const agentApiKey = resolvedApiKey;
       const configuredEntry = reqService ? await resolveConfiguredServiceEntry(root, reqService) : undefined;
 
-      // Create pipeline with resolved model (so sub_agent tools use the frontend-selected model)
+      // Create pipeline with the frontend-selected model for capability workers.
       // Don't spread config.llm — its baseUrl/provider belong to the old service.
       // Let createLLMClient resolve baseUrl from the service preset.
       const pipelineClient = (reqService && reqModel && resolvedModel)
@@ -4884,13 +5001,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           // 刷新页面时，用户气泡能从 transcript 恢复；并行聊天随后写入的消息
           // 也会按真实时间排在指令之后。完成/失败路径只追加助手工具消息
           //（instruction 传空字符串），指令不会写第二遍。
+          const originalInstruction = confirmedRequestInstruction(
+            await readTranscriptEvents(root, bookSession.sessionId), confirmedIntent, instruction,
+          );
           await appendSessionMessagesUnlessDeleted(root, bookSession.sessionId, [{
             role: "user",
             content: instruction,
             timestamp: Date.now(),
           }], instruction, { sessionKind });
 
-          const exec = await executeConfirmedProductionAction({
+          const confirmedOutcome = await executeConfirmedProductionAction({
             pipeline,
             root,
             sessionId: bookSession.sessionId,
@@ -4913,28 +5033,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             ),
             ...(playMode ? { playMode } : {}),
           });
+          const exec = confirmedOutcome.execution;
 
           let createdBookId: string | null = null;
           if (exec.status === "completed") {
             createdBookId = resolveCreatedBookIdFromToolExecs([exec]);
             if (createdBookId) {
-              if (!await completeBookExists(join(root, "books", createdBookId))) {
+              if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
                 const message = pick(surfaceLanguage, "创作工具返回了建书结果，但磁盘上的书籍工件不完整。", "The creation tool returned a book result, but the on-disk book artifact is incomplete.");
                 bookCreateStatus.set(createdBookId, { status: "error", error: message });
                 broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error: message });
                 throw new ApiError(500, "BOOK_CREATION_INCOMPLETE", message);
               }
-              try {
-                const migratedSession = await migrateBookSession(root, bookSession.sessionId, createdBookId);
-                if (migratedSession) {
-                  bookSession = migratedSession;
-                }
-              } catch (e) {
-                if (!(e instanceof SessionAlreadyMigratedError)) {
-                  throw e;
-                }
-              }
-              const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
+              publishExecutionTarget(await transitionSessionToWork(root, bookSession.sessionId, bookSession.workId ?? bookSession.bookId, createdBookId));
+              const book = await loadStudioBookListSummary(state, createdBookId);
               bookCreateStatus.delete(createdBookId);
               broadcast("book:created", {
                 bookId: createdBookId,
@@ -4942,33 +5054,139 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 ...(book ? { book } : {}),
               });
             }
+
+            if (!createdBookId) {
+              const createdWorkId = resolveCreatedWorkIdFromToolExec(exec);
+              if (createdWorkId) publishExecutionTarget(await transitionSessionToWork(root, bookSession.sessionId, bookSession.workId ?? bookSession.bookId, createdWorkId));
+            }
           }
 
-          const responseText = exec.result ?? pick(surfaceLanguage, "已完成。", "Done.");
-          const responseForUser = suppressManualTextForTool(exec) ? "" : responseText;
-          // 指令已在任务开始时写入 transcript，这里只补助手工具消息。
-          await appendSessionMessagesUnlessDeleted(root, bookSession.sessionId, [
-            manualToolAssistantMessage(
-              responseText,
-              exec,
-              configuredEntry?.service ?? reqService ?? config.llm.provider,
-              reqModel ?? config.llm.model,
-            ),
-          ], "", manualToolAppendOptions(sessionKind, exec));
+          const continuedToolExecs: CollectedToolExec[] = [];
+          taskController.signal.throwIfAborted();
+          exec.status = "running";
+          exec.completedAt = undefined;
+          exec.logs = [...(exec.logs ?? []), pick(surfaceLanguage, "继续完成确认请求中的剩余动作…", "Continuing the remaining confirmed request...")].slice(-80);
+          await persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId);
+          const continuation = await runAgentSession({
+            onWorkTransition: publishExecutionTarget,
+            signal: taskController.signal,
+            model,
+            apiKey: agentApiKey,
+            stream: pipelineClient.stream,
+            proxyUrl: pipelineClient.proxyUrl,
+            pipeline,
+            projectRoot: root,
+            bookId: bookSession.bookId,
+            sessionKind: bookSession.sessionKind,
+            profileId: bookSession.profileId ?? confirmedOutcome.binding.profileId,
+            workId: bookSession.workId,
+            playMode: bookSession.playMode,
+            actionSource: "free-text",
+            requestedSkills,
+            disabledSkills,
+            attachments: [],
+            sessionId: bookSession.sessionId,
+            language: surfaceLanguage,
+            resumeAction: {
+              toolCallId: exec.id,
+              capabilityId: confirmedOutcome.binding.capabilityId,
+              actionId: confirmedOutcome.binding.actionId,
+              parameters: exec.args ?? {},
+              result: confirmedOutcome.actionResult,
+            },
+            onContextCompression: (event) => {
+              broadcast("context:compression", { sessionId: streamSessionId, ...event });
+            },
+            onEvent: (event) => {
+              if (event.type === "message_update") {
+                const update = event.assistantMessageEvent;
+                if (update.type === "text_delta") {
+                  broadcast("draft:delta", { sessionId: streamSessionId, text: update.delta });
+                } else if (update.type === "thinking_delta") {
+                  broadcast("thinking:delta", { sessionId: streamSessionId, text: (update as { delta?: string }).delta ?? "" });
+                } else if (update.type === "thinking_start") {
+                  broadcast("thinking:start", { sessionId: streamSessionId });
+                } else if (update.type === "thinking_end") {
+                  broadcast("thinking:end", { sessionId: streamSessionId });
+                }
+              }
+              if (event.type === "tool_execution_start") {
+                const actionId = capabilityActionId(event.toolName);
+                const toolExec: CollectedToolExec = {
+                  id: event.toolCallId,
+                  tool: actionId,
+                  label: resolveToolLabel(actionId, undefined, surfaceLanguage),
+                  status: "running",
+                  args: event.args as Record<string, unknown> | undefined,
+                  startedAt: Date.now(),
+                };
+                continuedToolExecs.push(toolExec);
+                exec.logs = [...(exec.logs ?? []), `${toolExec.label}…`].slice(-80);
+                void persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId).catch(() => undefined);
+                broadcast("tool:start", {
+                  sessionId: streamSessionId,
+                  id: event.toolCallId,
+                  tool: event.toolName,
+                  args: event.args,
+                  stages: [],
+                  background: true,
+                  ...(sourceRequestId ? { sourceRequestId } : {}),
+                });
+              }
+              if (event.type === "tool_execution_end") {
+                const toolExec = continuedToolExecs.find((candidate) => candidate.id === event.toolCallId);
+                if (toolExec) {
+                  toolExec.status = event.isError ? "error" : "completed";
+                  toolExec.completedAt = Date.now();
+                  if (event.isError) toolExec.error = extractToolError(event.result);
+                  else toolExec.result = summarizeToolResult(event.result);
+                  toolExec.details = (event.result as { details?: unknown } | undefined)?.details;
+                  exec.logs = [...(exec.logs ?? []), `${toolExec.label}: ${toolExec.status}`].slice(-80);
+                  void persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId).catch(() => undefined);
+                }
+                broadcast("tool:end", {
+                  sessionId: streamSessionId,
+                  id: event.toolCallId,
+                  tool: event.toolName,
+                  result: event.result,
+                  details: toolExec?.details,
+                  isError: event.isError,
+                });
+              }
+            },
+          }, originalInstruction === instruction ? instruction : `${originalInstruction}\n\nConfirmed action instruction:\n${instruction}`);
+          exec.status = "completed";
+          exec.completedAt = Date.now();
+          if (continuation.errorMessage) {
+            exec.logs = [
+              ...(exec.logs ?? []),
+              pick(surfaceLanguage, `后续对话不可用：${continuation.errorMessage}`, `Follow-up response unavailable: ${continuation.errorMessage}`),
+            ].slice(-80);
+            exec.details = {
+              ...(exec.details && typeof exec.details === "object" ? exec.details as Record<string, unknown> : {}),
+              continuationError: continuation.errorMessage,
+            };
+          }
+          await persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId);
+          const responseText = continuation.responseText
+            || exec.result
+            || pick(surfaceLanguage, "已完成。", "Done.");
+          const responseForUser = continuation.responseText
+            ? continuation.responseText
+            : hasDomainOwnedResult(exec.details) ? "" : responseText;
           await refreshBookSessionFromTranscript();
-          broadcast("agent:complete", { instruction, activeBookId: createdBookId ?? agentBookId, sessionId: bookSession.sessionId, sessionKind });
+          broadcast("agent:complete", { instruction, activeBookId: bookSession.bookId, sessionId: bookSession.sessionId, sessionKind: bookSession.sessionKind });
           return c.json({
             response: responseForUser,
-            details: { toolExecutions: [exec] },
+            details: { toolExecutions: [exec, ...continuedToolExecs] },
             session: {
-              sessionId: bookSession.sessionId,
-              sessionKind,
-              ...(createdBookId ?? agentBookId ? { activeBookId: createdBookId ?? agentBookId } : {}),
+              ...workSessionResponseMetadata(bookSession),
+              ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
             },
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          const failure = formatAgentActionFailure(message, surfaceLanguage);
+          const failure = formatAgentActionFailure(error, surfaceLanguage);
           if (pendingBookId) {
             bookCreateStatus.set(pendingBookId, { status: "error", error: message });
             broadcast("book:error", { bookId: pendingBookId, sessionId: streamSessionId, error: message });
@@ -5014,11 +5232,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       // 同时传 suppressProductionTools 在 host 层剔除会修改书籍/产物的
       // 生产工具（提示词只是软约束）。
       const backgroundTask = await findActiveRunningTask(bookSession.sessionId);
-      const collectedToolExecs: CollectedToolExec[] = [];
       const result = await runAgentSession(
         {
+          signal: chatRequest?.controller.signal,
+          baselineWork: chatRequest?.snapshot.baselineWork,
+          onWorkTransition: publishExecutionTarget,
           model,
           apiKey: agentApiKey,
+          stream: pipelineClient.stream,
+          proxyUrl: pipelineClient.proxyUrl,
           pipeline,
           ...(backgroundTask
             ? {
@@ -5029,9 +5251,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           projectRoot: root,
           bookId: agentBookId,
           sessionKind,
+          profileId,
+          workId,
           playMode,
           actionSource,
           requestedIntent,
+          proposalAction: normalizeStudioProposalAction(bookSession.proposalAction),
           actionPayload,
           requestedSkills,
           disabledSkills,
@@ -5058,25 +5283,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               }
             }
             if (event.type === "tool_execution_start") {
+              const toolName = capabilityActionId(event.toolName);
               const args = event.args as Record<string, unknown> | undefined;
-              const agent = event.toolName === "sub_agent" ? (args?.agent as string | undefined) : undefined;
-              const stages = agent ? (pipelineStages(agent, language) ?? []) : [];
 
               collectedToolExecs.push({
                 id: event.toolCallId,
-                tool: event.toolName,
-                agent,
-                label: resolveToolLabel(event.toolName, agent, language),
+                tool: toolName,
+                label: resolveToolLabel(toolName, undefined, language),
                 status: "running",
                 args,
-                stages: stages.length > 0
-                  ? stages.map(l => ({ label: l, status: "pending" as const }))
-                  : undefined,
                 startedAt: Date.now(),
               });
 
-              if (!agentBookId && event.toolName === "sub_agent" && agent === "architect") {
-                const bookId = resolveArchitectBookIdFromArgs(args);
+              if (!agentBookId && toolName === "create_book") {
+                const bookId = resolveCreatedBookIdFromArgs(args);
                 if (bookId) {
                   const title = typeof args?.title === "string" && args.title.trim()
                     ? args.title.trim()
@@ -5089,9 +5309,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               broadcast("tool:start", {
                 sessionId: streamSessionId,
                 id: event.toolCallId,
-                tool: event.toolName,
+                tool: toolName,
                 args,
-                stages,
+                stages: [],
               });
             }
             if (event.type === "tool_execution_end") {
@@ -5106,10 +5326,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 if (
                   event.isError &&
                   !agentBookId &&
-                  exec.tool === "sub_agent" &&
-                  exec.agent === "architect"
+                  exec.tool === "create_book"
                 ) {
-                  const bookId = resolveArchitectBookIdFromArgs(exec.args);
+                  const bookId = resolveCreatedBookIdFromArgs(exec.args);
                   if (bookId) {
                     const error = exec.error ?? "Book creation failed";
                     bookCreateStatus.set(bookId, { status: "error", error });
@@ -5131,7 +5350,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         instruction,
       );
 
-      if (result.responseText) {
+      bookSession = await loadBookSession(root, bookSession.sessionId) ?? bookSession;
+
+      if (result.responseText && result.completion?.status !== "blocked") {
         const actionExecutionError = validateAgentActionExecution({
           instruction,
           agentBookId,
@@ -5143,35 +5364,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           return c.json({
             error: { code: "AGENT_ACTION_NOT_EXECUTED", message: actionExecutionError },
             response: actionExecutionError,
+            session: workSessionResponseMetadata(bookSession),
           }, 502);
         }
       }
 
       let broadcastedCreatedBookId: string | null = null;
       const finalizeCreatedBook = async (): Promise<string | null> => {
-        if (agentBookId) return null;
         const createdBookId = resolveCreatedBookIdFromToolExecs(collectedToolExecs);
-        if (!createdBookId) return null;
+        if (!createdBookId || bookSession.workId !== createdBookId) return null;
         if (broadcastedCreatedBookId === createdBookId) return createdBookId;
-        if (!await completeBookExists(join(root, "books", createdBookId))) {
+        if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
           const error = "Book creation artifact is incomplete on disk.";
           bookCreateStatus.set(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error });
-          return null;
+          throw new Error(error);
         }
 
-        try {
-          const migratedSession = await migrateBookSession(root, bookSession.sessionId, createdBookId);
-          if (migratedSession) {
-            bookSession = migratedSession;
-          }
-        } catch (e) {
-          if (!(e instanceof SessionAlreadyMigratedError)) {
-            throw e;
-          }
-        }
-
-        const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
+        const book = await loadStudioBookListSummary(state, createdBookId);
         bookCreateStatus.delete(createdBookId);
         broadcast("book:created", {
           bookId: createdBookId,
@@ -5182,6 +5392,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         return createdBookId;
       };
 
+      if (result.completion?.status === "blocked") {
+        if (resolveCreatedBookIdFromToolExecs(collectedToolExecs)) await finalizeCreatedBook();
+        await refreshBookSessionFromTranscript();
+        return c.json({
+          error: { code: "AGENT_TASK_INCOMPLETE", message: result.completion.message },
+          completionStatus: result.completion.status,
+          response: result.completion.message,
+          session: workSessionResponseMetadata(bookSession),
+          details: { toolExecutions: collectedToolExecs },
+        }, 422);
+      }
+
       if (!result.responseText) {
         if (hasSuccessfulToolExec(collectedToolExecs, "propose_action")) {
           await refreshBookSessionFromTranscript();
@@ -5189,8 +5411,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           return c.json({
             response: "",
             session: {
-              sessionId: bookSession.sessionId,
-              sessionKind,
+              ...workSessionResponseMetadata(bookSession),
               ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
             },
             details: { toolExecutions: collectedToolExecs },
@@ -5201,10 +5422,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           if (resolveCreatedBookIdFromToolExecs(collectedToolExecs)) {
             await finalizeCreatedBook();
           }
-          const failure = formatAgentFailure(result.errorMessage, language);
+          const failure = formatAgentFailure(result.errorMessage, language, "model");
           return c.json({
             error: { code: failure.code, message: failure.message },
             response: failure.message,
+            session: workSessionResponseMetadata(bookSession),
+            details: { toolExecutions: collectedToolExecs },
           }, failure.status);
         }
 
@@ -5224,14 +5447,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
         await refreshBookSessionFromTranscript();
         const createdBookId = await finalizeCreatedBook();
-        if (requestedIntent || createdBookId || hasSuccessfulToolResult(collectedToolExecs)) {
+        if (requestedIntent || createdBookId || hasSuccessfulToolOwnedResponse(collectedToolExecs)) {
           const responseSessionKind = bookSession.sessionKind ?? sessionKind;
           broadcast("agent:complete", { instruction, activeBookId, sessionId: bookSession.sessionId, sessionKind: responseSessionKind });
           return c.json({
             response: "",
             session: {
-              sessionId: bookSession.sessionId,
-              sessionKind: responseSessionKind,
+              ...workSessionResponseMetadata(bookSession),
               ...(createdBookId ?? bookSession.bookId ? { activeBookId: createdBookId ?? bookSession.bookId } : {}),
             },
             details: { toolExecutions: collectedToolExecs },
@@ -5259,9 +5481,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
       return c.json({
         response: hasSuccessfulToolOwnedResponse(collectedToolExecs) ? "" : result.responseText,
+        completionStatus: result.completion?.status,
+        details: { toolExecutions: collectedToolExecs },
         session: {
-          sessionId: bookSession.sessionId,
-          sessionKind: responseSessionKind,
+          ...workSessionResponseMetadata(bookSession),
           ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
         },
       });
@@ -5269,31 +5492,33 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       if (e instanceof ApiError) {
         throw e;
       }
-      if (e instanceof SessionAlreadyMigratedError) {
-        const migratedMessage = e instanceof Error ? e.message : String(e);
-        throw new ApiError(409, "SESSION_ALREADY_MIGRATED", migratedMessage);
+      if (e instanceof SessionAlreadyBoundError) {
+        const boundMessage = e instanceof Error ? e.message : String(e);
+        throw new ApiError(409, "SESSION_ALREADY_BOUND", boundMessage);
       }
       const msg = e instanceof Error ? e.message : String(e);
       broadcast("agent:error", { instruction, activeBookId, sessionId, sessionKind: reqSessionKind, error: msg });
 
-      // Agent busy — return 429 with user-friendly message
-      if (/already processing|prompt.*queue/i.test(msg)) {
-        return c.json({
-          error: {
-            code: "AGENT_BUSY",
-            message: pick(language, "正在处理中，请等待当前操作完成", "Still processing. Wait for the current operation to finish"),
-          },
-          response: pick(
-            language,
-            "正在处理中，请等待当前操作完成后再发送。",
-            "Still processing. Wait for the current operation to finish before sending again.",
-          ),
-        }, 429);
+      const failure = formatAgentFailure(e, language, "host");
+      let recoveredSession: Awaited<ReturnType<typeof loadBookSession>> = null;
+      try {
+        recoveredSession = await recoverSessionAfterAgentFailure(root, sessionId);
+      } catch {
+        // Keep the original failure authoritative when best-effort session
+        // recovery cannot be completed.
       }
-
-      const failure = formatAgentFailure(msg, language);
       return c.json(
-        { error: { code: failure.code, message: failure.message } },
+        {
+          error: { code: failure.code, message: failure.message },
+          response: failure.message,
+          ...(recoveredSession ? {
+            session: {
+              ...workSessionResponseMetadata(recoveredSession),
+              ...(recoveredSession.bookId ? { activeBookId: recoveredSession.bookId } : {}),
+            },
+          } : {}),
+          ...(collectedToolExecs.length > 0 ? { details: { toolExecutions: collectedToolExecs } } : {}),
+        },
         failure.status,
       );
     }
@@ -5321,29 +5546,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/books/:id/audit/:chapter", async (c) => {
     const id = c.req.param("id");
     const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-
     broadcast("audit:start", { bookId: id, chapter: chapterNum });
     try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      const currentConfig = await loadCurrentProjectConfig();
-      const { ContinuityAuditor } = await import("@actalk/inkos-core");
-      const auditor = new ContinuityAuditor({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
+      const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        bookId: id,
+        binding: { capabilityId: "longform", actionId: "review_chapter", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createReviewChapterTool(pipeline, id, { workerSkills: () => skills }),
+        parameters: { bookId: id, chapterNumber: chapterNum },
+        workId: id,
       });
-      const result = await auditor.auditChapter(bookDir, content, chapterNum, book.genre);
-      broadcast("audit:complete", { bookId: id, chapter: chapterNum, passed: result.passed });
-      return c.json(result);
+      const result = action.data as { summary?: string; observations?: unknown[] } | undefined;
+      broadcast("review:complete", { bookId: id, chapter: chapterNum, observationCount: result?.observations?.length ?? 0 });
+      return c.json({ summary: result?.summary ?? action.summary, observations: result?.observations ?? [] });
     } catch (e) {
       broadcast("audit:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5355,32 +5571,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/books/:id/revise/:chapter", async (c) => {
     const id = c.req.param("id");
     const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-    const body = await c.req
-      .json<{ mode?: string; brief?: string }>()
-      .catch(() => ({ mode: "spot-fix", brief: undefined }));
+    const body = await c.req.json<{ mode?: string; brief?: string }>();
 
     broadcast("revise:start", { bookId: id, chapter: chapterNum });
     try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
         bookIdForSettings: id,
       }));
-      const normalizedMode = body.mode ?? "spot-fix";
-      const result = await pipeline.reviseDraft(
-        id,
-        chapterNum,
-        normalizedMode as "polish" | "rewrite" | "rework" | "spot-fix" | "anti-detect",
-      );
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const normalizedMode = body.mode ?? DEFAULT_REVISE_MODE;
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createReviseChapterTool(pipeline, id, { workerSkills: () => skills }),
+        parameters: {
+          instruction: body.brief?.trim() || "Revise the chapter using its current review observations.",
+          bookId: id,
+          chapterNumber: chapterNum,
+          mode: normalizedMode,
+        },
+        workId: id,
+      });
       broadcast("revise:complete", { bookId: id, chapter: chapterNum });
-      return c.json(result);
+      return c.json(action.data ?? action);
     } catch (e) {
       broadcast("revise:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5392,12 +5606,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/books/:id/export", async (c) => {
     const id = c.req.param("id");
     const format = (c.req.query("format") ?? "txt") as string;
-    const approvedOnly = c.req.query("approvedOnly") === "true";
 
     try {
       const artifact = await buildExportArtifact(state, id, {
         format: format as "txt" | "md" | "epub",
-        approvedOnly,
       });
       const responseBody = typeof artifact.payload === "string"
         ? artifact.payload
@@ -5408,7 +5620,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           "Content-Disposition": `attachment; filename="${artifact.fileName}"`,
         },
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof ChapterExportSourceError) return c.json({error:error.message,code:error.code,details:error.details},409);
       return c.json({ error: "Export failed" }, 500);
     }
   });
@@ -5417,64 +5630,36 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/export-save", async (c) => {
     const id = c.req.param("id");
-    const { format, approvedOnly } = await c.req.json<{ format?: string; approvedOnly?: boolean }>().catch(() => ({ format: "txt", approvedOnly: false }));
+    const { format } = await c.req.json<{ format?: string }>().catch(() => ({ format: "txt" }));
     const fmt = format ?? "txt";
 
     try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const tools = createInteractionToolsFromDeps(pipeline, state);
       const bookDir = state.bookDir(id);
       const outputPath = join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
-      const result = await processProjectInteractionRequest({
+      const tool = createExportBookTool(state, id, { outputPath });
+      const result = await executeExplicitCapabilityTool({
         projectRoot: root,
-        request: {
-          intent: "export_book",
-          bookId: id,
-          format: fmt as "txt" | "md" | "epub",
-          approvedOnly,
-          outputPath,
+        binding: {
+          capabilityId: "longform",
+          actionId: "export_book",
+          profileId: "longform-novel",
+          risk: "recoverable-write",
         },
-        tools,
-        activeBookId: id,
+        tool,
+        workId: id,
+        parameters: {
+          format: fmt,
+        },
       });
+      const details = result.data as Readonly<Record<string, unknown>> | undefined;
       return c.json({
         ok: true,
-        path: (result.details?.outputPath as string | undefined) ?? outputPath,
+        path: (details?.outputPath as string | undefined) ?? outputPath,
         format: fmt,
-        chapters: (result.details?.chaptersExported as number | undefined) ?? 0,
+        chapters: (details?.chaptersExported as number | undefined) ?? 0,
       });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Genre detail + copy ---
-
-  app.get("/api/v1/genres/:id", async (c) => {
-    const genreId = c.req.param("id");
-    try {
-      const { readGenreProfile } = await import("@actalk/inkos-core");
-      const { profile, body } = await readGenreProfile(root, genreId);
-      return c.json({ profile, body });
-    } catch (e) {
-      return c.json({ error: String(e) }, 404);
-    }
-  });
-
-  app.post("/api/v1/genres/:id/copy", async (c) => {
-    const genreId = c.req.param("id");
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-    try {
-      const { getBuiltinGenresDir } = await import("@actalk/inkos-core");
-      const { mkdir: mkdirFs, copyFile } = await import("node:fs/promises");
-      const builtinDir = getBuiltinGenresDir();
-      const projectGenresDir = join(root, "genres");
-      await mkdirFs(projectGenresDir, { recursive: true });
-      await copyFile(join(builtinDir, `${genreId}.md`), join(projectGenresDir, `${genreId}.md`));
-      return c.json({ ok: true, path: `genres/${genreId}.md` });
-    } catch (e) {
+      if (e instanceof ChapterExportSourceError) return c.json({error:e.message,code:e.code,details:e.details},409);
       return c.json({ error: String(e) }, 500);
     }
   });
@@ -5524,6 +5709,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (typeof body.service === "string" && body.service.trim()) {
       llm.service = body.service.trim();
     }
+    appendModelToServiceCatalog(
+      llm,
+      typeof llm.service === "string" ? llm.service : undefined,
+      defaultModel,
+    );
     syncTopLevelLlmMirror(llm);
     await saveRawConfig(root, raw);
     return c.json({
@@ -5549,78 +5739,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true, researchSearch });
   });
 
-  // --- Chapter review mode (C4a: auto pipeline vs manual checkpoint) ---
-
-  app.get("/api/v1/project/chapter-review-mode", async (c) => {
-    const raw = await loadRawConfig(root);
-    return c.json({ mode: readProjectChapterReviewMode(raw) });
-  });
-
-  app.put("/api/v1/project/chapter-review-mode", async (c) => {
-    const { mode } = await c.req.json<{ mode?: string }>();
-    const next = normalizeChapterReviewMode(mode);
-    const raw = await loadRawConfig(root);
-    raw.writing = { ...(raw.writing ?? {}), reviewMode: next };
-    await saveRawConfig(root, raw);
-    return c.json({ ok: true, mode: next });
-  });
-
-  app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {
-    const bookId = c.req.param("id");
-    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
-    try {
-      const [projectConfig, rawBook] = await Promise.all([
-        loadRawConfig(root),
-        loadRawBookConfig(root, bookId),
-      ]);
-      const projectMode = readProjectChapterReviewMode(projectConfig);
-      const bookMode = readBookChapterReviewMode(rawBook);
-      return c.json({
-        mode: bookMode ?? projectMode,
-        bookMode: bookMode ?? null,
-        projectMode,
-      });
-    } catch {
-      return c.json({ error: `Book "${bookId}" not found` }, 404);
-    }
-  });
-
-  app.put("/api/v1/books/:id/chapter-review-mode", async (c) => {
-    const bookId = c.req.param("id");
-    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
-    const { mode } = await c.req.json<{ mode?: string }>();
-    const rawBookPath = join(root, "books", bookId, "book.json");
-    try {
-      const [projectConfig, rawBook] = await Promise.all([
-        loadRawConfig(root),
-        loadRawBookConfig(root, bookId),
-      ]);
-      const projectMode = readProjectChapterReviewMode(projectConfig);
-      if (mode === "inherit") {
-        const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-          ? { ...(rawBook.writing as Record<string, unknown>) }
-          : {};
-        delete writing.reviewMode;
-        rawBook.writing = Object.keys(writing).length > 0 ? writing : undefined;
-      } else {
-        rawBook.writing = {
-          ...(rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing) ? rawBook.writing as Record<string, unknown> : {}),
-          reviewMode: normalizeChapterReviewMode(mode),
-        };
-      }
-      await writeFile(rawBookPath, JSON.stringify(rawBook, null, 2), "utf-8");
-      const bookMode = readBookChapterReviewMode(rawBook);
-      return c.json({
-        ok: true,
-        mode: bookMode ?? projectMode,
-        bookMode: bookMode ?? null,
-        projectMode,
-      });
-    } catch {
-      return c.json({ error: `Book "${bookId}" not found` }, 404);
-    }
-  });
-
   // --- Notify channels ---
 
   app.get("/api/v1/project/notify", async (c) => {
@@ -5638,29 +5756,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
-  // --- AIGC Detection ---
-
-  app.post("/api/v1/books/:id/detect/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-
-    try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      const { analyzeAITells } = await import("@actalk/inkos-core");
-      const result = analyzeAITells(content);
-      return c.json({ chapterNumber: chapterNum, ...result });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   // --- Truth file edit ---
 
   app.put("/api/v1/books/:id/truth/:file{.+}", async (c) => {
@@ -5671,18 +5766,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!resolved) {
       return c.json({ error: "Invalid truth file" }, 400);
     }
-    // Legacy pointer shims are read-only in new-layout books: writing
-    // story_bible.md or book_rules.md does nothing at runtime (the pipeline
-    // reads outline/ instead). For pre-Phase-5 books these ARE authoritative.
-    if (LEGACY_SHIM_FILES.has(file)) {
-      const { isNewLayoutBook } = await import("@actalk/inkos-core");
-      if (await isNewLayoutBook(bookDir)) {
-        return c.json(
-          { error: "Legacy compat shim; edit outline/story_frame.md instead" },
-          400,
-        );
-      }
-    }
     if (RUNTIME_DIAGNOSTIC_FILE_RE.test(file)) {
       return c.json({ error: "Runtime diagnostic files are read-only" }, 400);
     }
@@ -5691,6 +5774,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const { dirname: dirnameFs } = await import("node:path");
     await mkdirFs(dirnameFs(resolved), { recursive: true });
     await writeFileFs(resolved, content, "utf-8");
+    if (file === "book_rules.md") {
+      const { rm } = await import("node:fs/promises");
+      await rm(join(bookDir, "story", "book_rules.json"), { force: true });
+    }
     return c.json({ ok: true });
   });
 
@@ -5756,17 +5843,29 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
-        revisionGate: "always",
         bookIdForSettings: id,
       }));
-      const result = await pipeline.reviseDraft(id, chapterNum, "rework");
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createReviseChapterTool(pipeline, id, { workerSkills: () => skills }),
+        parameters: {
+          instruction: body.brief?.trim() || "Rework this chapter while preserving current Work authority.",
+          bookId: id,
+          chapterNumber: chapterNum,
+          mode: "rework",
+        },
+        workId: id,
+      });
+      const result = action.data as { chapterNumber?: number; wordCount?: number; changed?: boolean } | undefined;
       broadcast("rewrite:complete", {
         bookId: id,
-        chapterNumber: result.chapterNumber,
-        wordCount: result.wordCount,
-        status: result.status,
+        chapterNumber: result?.chapterNumber ?? chapterNum,
+        wordCount: result?.wordCount,
+        changed: result?.changed,
       });
-      return c.json({ status: "complete", bookId: id, chapter: chapterNum, result });
+      return c.json({ status: "complete", bookId: id, chapter: chapterNum, result: action.data ?? action });
     } catch (e) {
       broadcast("rewrite:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5783,35 +5882,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
+        bookIdForSettings: id,
       }));
-      const result = await pipeline.resyncChapterArtifacts(id, chapterNum);
-      return c.json(result);
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Detect All chapters ---
-
-  app.post("/api/v1/books/:id/detect-all", async (c) => {
-    const id = c.req.param("id");
-    const bookDir = state.bookDir(id);
-
-    try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const mdFiles = files.filter((f) => f.endsWith(".md") && /^\d{4}/.test(f)).sort();
-      const { analyzeAITells } = await import("@actalk/inkos-core");
-
-      const results = await Promise.all(
-        mdFiles.map(async (f) => {
-          const num = parseInt(f.slice(0, 4), 10);
-          const content = await readFile(join(chaptersDir, f), "utf-8");
-          const result = analyzeAITells(content);
-          return { chapterNumber: num, filename: f, ...result };
-        }),
-      );
-      return c.json({ bookId: id, results });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "resync_chapter_state", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createResyncChapterStateTool(pipeline, id),
+        parameters: { bookId: id, chapterNumber: chapterNum },
+        workId: id,
+      });
+      return c.json(action.data ?? action);
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -5832,114 +5912,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
-  // --- Genre Create ---
-
-  app.post("/api/v1/genres/create", async (c) => {
-    const body = await c.req.json<{
-      id: string; name: string; language?: string;
-      chapterTypes?: string[]; fatigueWords?: string[];
-      numericalSystem?: boolean; powerScaling?: boolean; eraResearch?: boolean;
-      pacingRule?: string; satisfactionTypes?: string[]; auditDimensions?: number[];
-      body?: string;
-    }>();
-
-    if (!body.id || !body.name) {
-      return c.json({ error: "id and name are required" }, 400);
-    }
-    if (/[/\\\0]/.test(body.id) || body.id.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${body.id}"`);
-    }
-
-    const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
-    const genresDir = join(root, "genres");
-    await mkdirFs(genresDir, { recursive: true });
-
-    const frontmatter = [
-      "---",
-      `name: ${yamlScalar(body.name)}`,
-      `id: ${yamlScalar(body.id)}`,
-      `language: ${yamlScalar(body.language ?? "zh")}`,
-      `chapterTypes: ${JSON.stringify(body.chapterTypes ?? [])}`,
-      `fatigueWords: ${JSON.stringify(body.fatigueWords ?? [])}`,
-      `numericalSystem: ${body.numericalSystem ?? false}`,
-      `powerScaling: ${body.powerScaling ?? false}`,
-      `eraResearch: ${body.eraResearch ?? false}`,
-      `pacingRule: ${yamlScalar(body.pacingRule ?? "")}`,
-      `satisfactionTypes: ${JSON.stringify(body.satisfactionTypes ?? [])}`,
-      `auditDimensions: ${JSON.stringify(body.auditDimensions ?? [])}`,
-      "---",
-      "",
-      body.body ?? "",
-    ].join("\n");
-
-    await writeFileFs(join(genresDir, `${body.id}.md`), frontmatter, "utf-8");
-    return c.json({ ok: true, id: body.id });
-  });
-
-  // --- Genre Edit ---
-
-  app.put("/api/v1/genres/:id", async (c) => {
-    const genreId = c.req.param("id");
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-
-    const body = await c.req.json<{ profile: Record<string, unknown>; body: string }>();
-    const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
-    const genresDir = join(root, "genres");
-    await mkdirFs(genresDir, { recursive: true });
-
-    const p = body.profile;
-    const frontmatter = [
-      "---",
-      `name: ${yamlScalar(p.name ?? genreId)}`,
-      `id: ${yamlScalar(p.id ?? genreId)}`,
-      `language: ${yamlScalar(p.language ?? "zh")}`,
-      `chapterTypes: ${JSON.stringify(p.chapterTypes ?? [])}`,
-      `fatigueWords: ${JSON.stringify(p.fatigueWords ?? [])}`,
-      `numericalSystem: ${p.numericalSystem ?? false}`,
-      `powerScaling: ${p.powerScaling ?? false}`,
-      `eraResearch: ${p.eraResearch ?? false}`,
-      `pacingRule: ${yamlScalar(p.pacingRule ?? "")}`,
-      `satisfactionTypes: ${JSON.stringify(p.satisfactionTypes ?? [])}`,
-      `auditDimensions: ${JSON.stringify(p.auditDimensions ?? [])}`,
-      "---",
-      "",
-      body.body ?? "",
-    ].join("\n");
-
-    await writeFileFs(join(genresDir, `${genreId}.md`), frontmatter, "utf-8");
-    return c.json({ ok: true, id: genreId });
-  });
-
-  // --- Genre Delete (project-level only) ---
-
-  app.delete("/api/v1/genres/:id", async (c) => {
-    const genreId = c.req.param("id");
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-
-    const filePath = join(root, "genres", `${genreId}.md`);
-    try {
-      const { rm } = await import("node:fs/promises");
-      await rm(filePath);
-      return c.json({ ok: true, id: genreId });
-    } catch (e) {
-      return c.json({ error: `Genre "${genreId}" not found in project` }, 404);
-    }
-  });
-
   // --- Style Analyze ---
 
   app.post("/api/v1/style/analyze", async (c) => {
-    const { text, sourceName } = await c.req.json<{ text: string; sourceName: string }>();
+    const { text, sourceName, language } = await c.req.json<{ text: string; sourceName: string; language?: "zh" | "en" }>();
     if (!text?.trim()) return c.json({ error: "text is required" }, 400);
 
     try {
-      const { analyzeStyle } = await import("@actalk/inkos-core");
-      const profile = analyzeStyle(text, sourceName ?? "unknown");
-      return c.json(profile);
+      const { compileStyleGuide } = await import("@actalk/inkos-core");
+      const config = await loadCurrentProjectConfig();
+      const guide = await compileStyleGuide({
+        client: createLLMClient(config.llm),
+        model: config.llm.model,
+        projectRoot: root,
+        referenceText: text,
+        sourceName: sourceName ?? "unknown",
+        language: language ?? (config.language === "en" ? "en" : "zh"),
+      });
+      return c.json({ guide });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -5954,10 +5944,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("style:start", { bookId: id });
     try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.generateStyleGuide(id, text, sourceName ?? "unknown");
+      const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-long-story-analysis", "inkos-imitation-writing"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "generate_style_guide", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createGenerateStyleGuideTool(pipeline, id, { activeSkills: () => skills }),
+        workId: id,
+        parameters: { referenceText: text, sourceName: sourceName ?? "unknown" },
+        signal: c.req.raw.signal,
+      });
       broadcast("style:complete", { bookId: id });
-      return c.json({ ok: true, result });
+      return c.json({ ok: true, result: action.data });
     } catch (e) {
       broadcast("style:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -5973,11 +5973,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("import:start", { bookId: id, type: "chapters" });
     try {
-      const { splitChapters } = await import("@actalk/inkos-core");
-      const chapters = [...splitChapters(text, splitRegex)];
-
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.importChapters({ bookId: id, chapters });
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "import_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createImportChaptersTool(pipeline, id, root, { defaultSkills: skills }),
+        workId: id,
+        parameters: { bookId: id, sourceText: text, sourceName: "Studio import", splitPattern: splitRegex },
+        signal: c.req.raw.signal,
+      });
+      const result = action.data as { readonly importedCount: number };
       broadcast("import:complete", { bookId: id, type: "chapters", count: result.importedCount });
       return c.json(result);
     } catch (e) {
@@ -5996,9 +6004,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("import:start", { bookId: id, type: "canon" });
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importCanon(id, fromBookId);
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "import_canon", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createImportCanonTool(pipeline, id),
+        workId: id,
+        parameters: { parentBookId: fromBookId },
+        signal: c.req.raw.signal,
+      });
       broadcast("import:complete", { bookId: id, type: "canon" });
-      return c.json({ ok: true });
+      return c.json({ ok: true, result: action.data });
     } catch (e) {
       broadcast("import:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -6033,9 +6048,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       });
       const sourceText = await readFile(join(root, material.markdownPath), "utf-8");
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importFanficCanon(id, sourceText, material.title, "canon");
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import", "inkos-fanfic-writing"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "refresh_fanfic_canon", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createRefreshFanficCanonTool(pipeline, root, id, { defaultSkills: skills }),
+        workId: id,
+        parameters: { sourceText, sourceName: material.title, mode: "canon" },
+        signal: c.req.raw.signal,
+      });
       broadcast("import:complete", { bookId: id, type: "canon-file", materialId: material.id });
-      return c.json({ ok: true, material });
+      return c.json({ ok: true, material, result: action.data });
     } catch (error) {
       broadcast("import:error", { bookId: id, type: "canon-file", error: String(error) });
       return c.json({ error: String(error) }, 500);
@@ -6065,7 +6090,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       status: "outlining" as const,
       targetChapters: body.targetChapters ?? 100,
       chapterWordCount: body.chapterWordCount ?? 3000,
-      fanficMode: (body.mode ?? "canon") as "canon",
+      fanficMode: body.mode?.trim() || "canon",
       ...(body.language ? { language: body.language as "zh" | "en" } : {}),
       createdAt: now,
       updatedAt: now,
@@ -6074,9 +6099,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("fanfic:start", { bookId, title: body.title });
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.initFanficBook(bookConfig, body.sourceText, body.sourceName ?? "source", (body.mode ?? "canon") as "canon");
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import", "inkos-fanfic-writing"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default", risk: "recoverable-write" },
+        tool: createFanficBookTool(pipeline, root, { defaultSkills: skills }),
+        parameters: {
+          title: bookConfig.title,
+          sourceText: body.sourceText,
+          sourceName: body.sourceName ?? "source",
+          mode: body.mode ?? "canon",
+          genre: bookConfig.genre,
+          platform: bookConfig.platform,
+          language: bookConfig.language,
+          targetChapters: bookConfig.targetChapters,
+          chapterWordCount: bookConfig.chapterWordCount,
+        },
+      });
+      const createdBookId = (action.data as { bookId?: string } | undefined)?.bookId ?? bookId;
       broadcast("fanfic:complete", { bookId });
-      return c.json({ ok: true, bookId });
+      return c.json({ ok: true, bookId: createdBookId });
     } catch (e) {
       broadcast("fanfic:error", { bookId, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -6093,26 +6137,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ bookId: id, content });
     } catch {
       return c.json({ bookId: id, content: null });
-    }
-  });
-
-  // --- Fanfic Refresh ---
-
-  app.post("/api/v1/books/:id/fanfic/refresh", async (c) => {
-    const id = c.req.param("id");
-    const { sourceText, sourceName } = await c.req.json<{ sourceText: string; sourceName?: string }>();
-    if (!sourceText?.trim()) return c.json({ error: "sourceText is required" }, 400);
-
-    broadcast("fanfic:refresh:start", { bookId: id });
-    try {
-      const book = await state.loadBookConfig(id);
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importFanficCanon(id, sourceText, sourceName ?? "source", (book.fanficMode ?? "canon") as "canon");
-      broadcast("fanfic:refresh:complete", { bookId: id });
-      return c.json({ ok: true });
-    } catch (e) {
-      broadcast("fanfic:refresh:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6155,8 +6179,25 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
-        await pipeline.initSpinoffBook(bookConfig, body.parentBookId, body.direction);
-        const book = await loadStudioBookListSummary(state, bookId).catch(() => undefined);
+        const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+          extraSkillIds: ["inkos-spinoff-writing"],
+        });
+        await executeExplicitCapabilityTool({
+          projectRoot: root,
+          binding: { capabilityId: "adaptation", actionId: "spinoff_create", profileId: "workspace-default", risk: "recoverable-write" },
+          tool: createSpinoffBookTool(pipeline, root, { defaultSkills: skills }),
+          parameters: {
+            title: bookConfig.title,
+            parentBookId: body.parentBookId,
+            direction: body.direction,
+            genre: bookConfig.genre,
+            platform: bookConfig.platform,
+            language: bookConfig.language,
+            targetChapters: bookConfig.targetChapters,
+            chapterWordCount: bookConfig.chapterWordCount,
+          },
+        });
+        const book = await loadStudioBookListSummary(state, bookId);
         bookCreateStatus.delete(bookId);
         broadcast("spinoff:complete", { bookId });
         broadcast("book:created", { bookId, ...(book ? { book } : {}) });
@@ -6202,8 +6243,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
-        await pipeline.initImitationBook(bookConfig, body.referenceText, body.storyIdea, body.sourceName);
-        const book = await loadStudioBookListSummary(state, bookId).catch(() => undefined);
+        const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+          extraSkillIds: ["inkos-imitation-writing"],
+        });
+        await executeExplicitCapabilityTool({
+          projectRoot: root,
+          binding: { capabilityId: "adaptation", actionId: "imitation_create", profileId: "workspace-default", risk: "recoverable-write" },
+          tool: createImitationBookTool(pipeline, root, { defaultSkills: skills }),
+          parameters: {
+            title: bookConfig.title,
+            referenceText: body.referenceText,
+            storyIdea: body.storyIdea,
+            sourceName: body.sourceName,
+            genre: bookConfig.genre,
+            platform: bookConfig.platform,
+            language: bookConfig.language,
+            targetChapters: bookConfig.targetChapters,
+            chapterWordCount: bookConfig.chapterWordCount,
+          },
+        });
+        const book = await loadStudioBookListSummary(state, bookId);
         bookCreateStatus.delete(bookId);
         broadcast("imitation:complete", { bookId });
         broadcast("book:created", { bookId, ...(book ? { book } : {}) });
@@ -6252,7 +6311,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       inkosJson: existsSync(join(root, "inkos.json")),
       projectEnv: existsSync(join(root, ".env")),
       globalEnv: existsSync(GLOBAL_ENV_PATH),
-      booksDir: existsSync(join(root, "books")),
+      booksDir: existsSync(join(root, "works")),
       llmConnected: false,
       bookCount: 0,
     };
@@ -6290,20 +6349,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.get("/api/v1/interactive-films", async (c) => {
-    const filmsDir = join(root, "interactive-films");
-    let entries: string[] = [];
-    try {
-      const dirents = await readdir(filmsDir, { withFileTypes: true });
-      entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
     const films: Array<{ projectId: string; title: string }> = [];
-    for (const projectId of entries) {
-      if (!isSafeBookId(projectId)) continue;
+    for (const work of await listWorkManifests(root, "interactive-film")) {
       try {
-        const graph = await loadStoryGraph(root, projectId);
-        if (graph) films.push({ projectId, title: graph.title || projectId });
+        const graph = await loadStoryGraph(root, work.id);
+        if (graph) films.push({ projectId: work.id, title: graph.title || work.title });
       } catch { /* skip dirs without valid story-graph */ }
     }
     films.sort((a, b) => a.title.localeCompare(b.title, "zh"));
@@ -6311,21 +6361,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.get("/api/v1/translations", async (c) => {
-    const translationsDir = join(root, "translations");
-    let entries: string[] = [];
-    try {
-      const dirents = await readdir(translationsDir, { withFileTypes: true });
-      entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
     const translations: Array<{ projectId: string; title: string; sourceLanguage: string; targetLanguage: string; chapters: number }> = [];
-    for (const projectId of entries) {
-      if (!isSafeBookId(projectId)) continue;
+    for (const work of await listWorkManifests(root, "translation")) {
       try {
-        const manifest = await loadTranslationManifest(root, projectId);
+        const manifest = await loadTranslationManifest(root, work.id);
         translations.push({
-          projectId,
+          projectId: work.id,
           title: manifest.title,
           sourceLanguage: manifest.sourceLanguage,
           targetLanguage: manifest.targetLanguage,
@@ -6359,17 +6400,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!body.sourceLanguage?.trim() || !body.targetLanguage?.trim()) {
       return c.json({ error: { code: "MISSING_LANGUAGES", message: "sourceLanguage and targetLanguage are required" } }, 400);
     }
-    const result = await createTranslationProjectFromFile(root, {
-      filePath: body.filePath,
-      sourceLanguage: body.sourceLanguage,
-      targetLanguage: body.targetLanguage,
-      title: body.title,
-      segmentMaxChars: body.segmentMaxChars,
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation", risk: "recoverable-write" },
+      tool: createTranslationCreateTool(root),
+      parameters: {
+        filePath: body.filePath,
+        sourceLanguage: body.sourceLanguage,
+        targetLanguage: body.targetLanguage,
+        title: body.title,
+        segmentMaxChars: body.segmentMaxChars,
+      },
     });
+    const details = result.data as {
+      manifest: { id: string; title: string };
+      manifestPath: string;
+      sourcePath: string;
+    };
     return c.json({
-      ...result,
-      projectId: result.manifest.id,
-      title: result.manifest.title,
+      ...details,
+      projectId: details.manifest.id,
+      title: details.manifest.title,
     });
   });
 
@@ -6380,7 +6431,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     try {
       const manifest = await loadTranslationManifest(root, id);
-      const reportPath = join(root, "translations", id, "review-report.md");
+      const reportPath = join(translationProjectDir(root, id), "review-report.md");
       const report = await readFile(reportPath, "utf-8").catch(() => "");
       const chapters = await Promise.all(manifest.chapters.map(async (chapter) => {
         const source = await loadTranslationChapter(root, chapter.sourcePath);
@@ -6392,7 +6443,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         return {
           number: chapter.number,
           title: chapter.title,
-          status: chapter.status,
+          translatedSegments: chapter.translatedSegments,
+          reviewSummary: chapter.reviewSummary,
+          observations: chapter.observations,
           segments: source.segments.map((segment) => ({
             index: segment.index,
             source: segment.source,
@@ -6417,28 +6470,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     const body: { batchSize?: number; maxTokens?: number } = await c.req.json().catch(() => ({}));
     try {
-      const currentConfig = await loadCurrentProjectConfig();
       const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
-      const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "translation");
-      const model = createLLMTranslationModel({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
-        maxTokens: body.maxTokens,
-        activatedSkills,
+      const activatedSkills = resolveProfileSkillActivations(
+        configuredSkills.skills,
+        createBuiltInWorkProfileRegistry(root).require("translation"),
+      );
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      const result = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation", risk: "recoverable-write" },
+        tool: createTranslationRunTool(pipeline, root, id, { defaultSkills: activatedSkills }),
+        workId: id,
+        parameters: { batchSize: body.batchSize, maxTokens: body.maxTokens },
         signal: c.req.raw.signal,
       });
-      const result = await runTranslationProject(root, id, {
-        model,
-        batchSize: body.batchSize,
-      });
-      return c.json({ ...result, skillIds: activatedSkillIds(activatedSkills) });
+      return c.json(result.data);
     } catch (error) {
       if (error instanceof ApiError) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      const isUpstream = /API|LLM|provider|upstream|temporarily unavailable|rate limit|quota|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|503|502|504/i.test(message);
       throw new ApiError(
-        isUpstream ? 502 : 500,
-        "TRANSLATION_RUN_FAILED",
+        500,
+        "INKOS_TRANSLATION_ACTION_FAILED",
         message || "Translation run failed.",
       );
     }
@@ -6450,11 +6502,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
     }
     const body: { format?: "txt" | "md" | "epub"; outputPath?: string } = await c.req.json().catch(() => ({}));
-    const result = await writeTranslationExport(root, id, {
-      format: body.format ?? "md",
-      outputPath: body.outputPath,
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation", risk: "recoverable-write" },
+      tool: createTranslationExportTool(root, id),
+      workId: id,
+      parameters: { format: body.format ?? "md", outputPath: body.outputPath },
     });
-    return c.json(result);
+    return c.json(result.data);
   });
 
   app.post("/api/v1/projects/:id/story-graph/delta", async (c) => {
@@ -6472,7 +6527,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `invalid project id: ${id}` } }, 400);
     }
-    const graphPath = join(root, "interactive-films", id, "story-graph.json");
+    const graphPath = storyGraphPath(root, id);
     try {
       const raw = await readFile(graphPath, "utf-8");
       return c.json(JSON.parse(raw));
@@ -6489,7 +6544,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `invalid project id: ${id}` } }, 400);
     }
-    const projectDir = join(root, "interactive-films", id);
+    const projectDir = join(workDirectory(root, id), "source");
     try {
       await access(projectDir);
       const archive = gzipSync(await buildTarArchive(projectDir, id));
@@ -6524,7 +6579,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) return c.json({ error: { code: "INVALID_ID", message: `invalid project id: ${id}` } }, 400);
     const graph = await loadStoryGraph(root, id);
     if (!graph) return c.json({ error: { code: "NOT_FOUND", message: `story graph not found for ${id}` } }, 404);
-    return c.json({ report: reviewStoryGraph(graph), arcs: analyzeEmotionalArcs(graph), distribution: analyzePathDistribution(graph) });
+    return c.json({ report: reviewStoryGraph(graph), distribution: analyzePathDistribution(graph) });
   });
 
   app.get("/api/v1/projects/:id/export/json", async (c) => {
@@ -6578,6 +6633,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     });
   });
 
+  app.get("/api/v1/projects/:id/preview/html",async(c)=>{
+    const response=await app.request(`/api/v1/projects/${encodeURIComponent(c.req.param('id'))}/export/html`);
+    const headers=new Headers(response.headers);headers.delete('Content-Disposition');
+    return new Response(response.body,{status:response.status,headers});
+  });
+
   app.post("/api/v1/projects/:id/nodes/:nodeId/image", async (c) => {
     const id = c.req.param("id");
     const nodeId = c.req.param("nodeId");
@@ -6603,11 +6664,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 export async function startStudioServer(
   root: string,
   port = 4567,
-  options?: { readonly staticDir?: string },
+  options?: { readonly staticDir?: string; readonly hostname?: string; readonly allowedOrigins?: readonly string[] },
 ): Promise<void> {
+  await recoverAtomicFileSets(root, true);
   const config = await loadProjectConfig(root, { consumer: "studio", requireApiKey: false });
 
-  const app = createStudioServer(config, root);
+  const app = createStudioServer(config, root, { hostname: options?.hostname, allowedOrigins: options?.allowedOrigins });
 
   // Serve frontend static files — single process for API + frontend
   if (options?.staticDir) {
@@ -6648,6 +6710,7 @@ export async function startStudioServer(
     }
   }
 
-  console.log(`InkOS Studio running on http://localhost:${port}`);
-  serve({ fetch: app.fetch, port });
+  const hostname = options?.hostname?.trim() || "127.0.0.1";
+  console.log(`InkOS Studio running on http://${hostname}:${port}`);
+  serve({ fetch: app.fetch, port, hostname });
 }

@@ -1,10 +1,12 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { basename, extname, join, relative } from "node:path";
 import { extractText, getDocumentProxy } from "unpdf";
+import { z } from "zod";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath } from "../utils/posix-path.js";
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 
-export type MaterialPurpose = "reference" | "worldbuilding" | "script" | "storyboard" | "research" | "general";
+export type MaterialPurpose = string;
 export type MaterialSourceKind = "url" | "file";
 export type MaterialKind = "webpage" | "pdf" | "text";
 
@@ -18,19 +20,20 @@ export interface IngestMaterialInput {
   readonly purpose?: MaterialPurpose;
 }
 
-export interface MaterialAsset {
-  readonly id: string;
-  readonly title: string;
-  readonly kind: MaterialKind;
-  readonly purpose: MaterialPurpose;
-  readonly source: string;
-  readonly mimeType: string;
-  readonly markdownPath: string;
-  readonly manifestPath: string;
-  readonly charCount: number;
-  readonly excerpt: string;
-  readonly totalPages?: number;
-}
+export const MaterialAssetSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  kind: z.enum(["webpage", "pdf", "text"]),
+  purpose: z.string().trim().min(1),
+  source: z.string().min(1),
+  mimeType: z.string().min(1),
+  markdownPath: z.string().min(1),
+  manifestPath: z.string().min(1),
+  charCount: z.number().int().nonnegative(),
+  totalPages: z.number().int().positive().optional(),
+}).strict();
+
+export type MaterialAsset = z.infer<typeof MaterialAssetSchema>;
 
 export interface IngestMaterialDeps {
   readonly fetch?: typeof fetch;
@@ -38,7 +41,6 @@ export interface IngestMaterialDeps {
 }
 
 const MAX_SOURCE_BYTES = 18 * 1024 * 1024;
-const EXCERPT_CHARS = 1600;
 
 export async function ingestMaterial(
   projectRoot: string,
@@ -48,10 +50,9 @@ export async function ingestMaterial(
   const now = deps.now?.() ?? new Date();
   const purpose = input.purpose ?? "reference";
   const source = await readMaterialSource(projectRoot, input, deps);
-  const title = (input.title?.trim() || source.title || titleFromSource(input) || "material").slice(0, 120);
+  const title = input.title?.trim() || source.title || titleFromSource(input) || "material";
   const id = `${now.toISOString().replace(/[:.]/g, "-")}-${slug(title)}`;
   const materialsDir = join(projectRoot, ".inkos", "materials");
-  await mkdir(materialsDir, { recursive: true });
 
   const markdown = renderMaterialMarkdown({
     title,
@@ -64,8 +65,7 @@ export async function ingestMaterial(
   });
   const markdownPathAbs = join(materialsDir, `${id}.md`);
   const manifestPathAbs = join(materialsDir, `${id}.json`);
-  await writeFile(markdownPathAbs, markdown, "utf-8");
-  const asset: MaterialAsset = {
+  const asset = MaterialAssetSchema.parse({
     id,
     title,
     kind: source.kind,
@@ -75,10 +75,15 @@ export async function ingestMaterial(
     markdownPath: toPosixPath(relative(projectRoot, markdownPathAbs)),
     manifestPath: toPosixPath(relative(projectRoot, manifestPathAbs)),
     charCount: source.text.length,
-    excerpt: source.text.slice(0, EXCERPT_CHARS),
     ...(source.totalPages !== undefined ? { totalPages: source.totalPages } : {}),
-  };
-  await writeFile(manifestPathAbs, JSON.stringify(asset, null, 2), "utf-8");
+  });
+  await commitAtomicFileSet({
+    rootDir: projectRoot,
+    writes: [
+      { relativePath: asset.markdownPath, content: markdown },
+      { relativePath: asset.manifestPath, content: `${JSON.stringify(asset, null, 2)}\n` },
+    ],
+  });
   return asset;
 }
 
@@ -244,7 +249,7 @@ function htmlToText(html: string): string {
 
 function extractHtmlTitle(html: string): string | undefined {
   const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  return match ? decodeHtml(match[1]).trim().slice(0, 120) : undefined;
+  return match ? decodeHtml(match[1]).trim() : undefined;
 }
 
 function decodeHtml(value: string): string {

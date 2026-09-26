@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 
 export const MIN_NODE_MAJOR = 22;
+export const MIN_NODE_VERSION = "22.16.0";
 export const NODE_PIN_VERSION = String(MIN_NODE_MAJOR);
 export const NODE_PIN_FILES = [".nvmrc", ".node-version"] as const;
 
@@ -85,8 +86,7 @@ export function parseNodeMajor(version: string): number {
 
 function hasNodeSqliteBuiltin(): boolean {
   try {
-    require("node:sqlite");
-    return true;
+    return typeof require("node:sqlite").backup === "function";
   } catch {
     return false;
   }
@@ -98,11 +98,12 @@ export function evaluateNodeRuntimeSupport(options?: {
 }): NodeRuntimeSupportResult {
   const nodeVersion = options?.nodeVersion ?? process.version;
   const major = parseNodeMajor(nodeVersion);
+  const minor = Number(nodeVersion.replace(/^v/i, "").split(".")[1] ?? 0);
 
-  if (major < MIN_NODE_MAJOR) {
+  if (major < MIN_NODE_MAJOR || (major === MIN_NODE_MAJOR && minor < 16)) {
     return {
       ok: false,
-      detail: `Unsupported runtime ${nodeVersion}. InkOS requires Node ${MIN_NODE_MAJOR}+.`,
+      detail: `Unsupported runtime ${nodeVersion}. InkOS requires Node ${MIN_NODE_VERSION}+.`,
     };
   }
 
@@ -110,7 +111,7 @@ export function evaluateNodeRuntimeSupport(options?: {
   if (!hasNodeSqlite) {
     return {
       ok: false,
-      detail: `${nodeVersion} detected, but the required node:sqlite module is unavailable.`,
+      detail: `${nodeVersion} detected, but the required node:sqlite APIs are unavailable.`,
     };
   }
 

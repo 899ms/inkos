@@ -30,6 +30,6 @@ describe("graph-store", () => {
   });
 
   it("computes the expected path", () => {
-    expect(storyGraphPath(root, "demo")).toBe(join(root, "interactive-films", "demo", "story-graph.json"));
+    expect(storyGraphPath(root, "demo")).toBe(join(root, "works", "demo", "source", "story-graph.json"));
   });
 });

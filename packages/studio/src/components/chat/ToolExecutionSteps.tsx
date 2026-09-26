@@ -88,14 +88,6 @@ function encodeProjectPath(path: string): string {
   return path.split("/").map((part) => encodeURIComponent(part)).join("/");
 }
 
-function extractResultPath(result: string | undefined, label: string): string | null {
-  if (!result) return null;
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = result.match(new RegExp(`^${escaped}:\\s*(.+)$`, "im"));
-  const path = match?.[1]?.trim();
-  return path || null;
-}
-
 export interface GeneratedArtifactDetails {
   readonly kind: "short_fiction_created" | "cover_generated" | "script_created" | "storyboard_created" | "interactive_film_created";
   readonly title?: string;
@@ -267,7 +259,7 @@ function parseChapterContextTrace(value: unknown, chapterNumber?: number): Chapt
 }
 
 export function getChapterContextTraceDetails(exec: ToolExecution): ReadonlyArray<ChapterContextTraceDetails> {
-  if (exec.tool !== "sub_agent" || !exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return [];
+  if (exec.tool !== "write_chapters" || !exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return [];
   const details = exec.details as Record<string, unknown>;
   if (details.kind === "chapter_written") {
     const trace = parseChapterContextTrace(details.contextTrace, numberField(details, "chapterNumber"));
@@ -321,59 +313,48 @@ function ChapterContextTracePreview({ exec }: { exec: ToolExecution }) {
   );
 }
 
-interface ChapterRevisionIssueDetails {
-  readonly severity: string;
-  readonly category: string;
-  readonly description: string;
-  readonly suggestion?: string;
+interface ChapterObservationDetails {
+  readonly code: string;
+  readonly summary: string;
+  readonly evidence: ReadonlyArray<string>;
 }
 
 interface ChapterRevisionDetails {
   readonly chapterNumber?: number;
-  readonly applied: boolean;
-  readonly status?: string;
-  readonly auditPassed?: boolean;
-  readonly fixedIssues: ReadonlyArray<string>;
-  readonly auditIssues: ReadonlyArray<ChapterRevisionIssueDetails>;
-  readonly skippedReason?: string;
+  readonly changed: boolean;
+  readonly observations: ReadonlyArray<ChapterObservationDetails>;
 }
 
 interface ChapterStateResyncDetails {
   readonly chapterNumber?: number;
-  readonly status?: string;
-  readonly auditPassed?: boolean;
-  readonly auditIssues: ReadonlyArray<ChapterRevisionIssueDetails>;
+  readonly observations: ReadonlyArray<ChapterObservationDetails>;
   readonly summary?: string;
 }
 
-function parseChapterAuditIssues(value: unknown): ReadonlyArray<ChapterRevisionIssueDetails> {
+function parseChapterObservations(value: unknown): ReadonlyArray<ChapterObservationDetails> {
   if (!Array.isArray(value)) return [];
   return value.flatMap((issue) => {
     if (!issue || typeof issue !== "object" || Array.isArray(issue)) return [];
     const record = issue as Record<string, unknown>;
-    const description = stringField(record, "description");
-    if (!description) return [];
+    const code = stringField(record, "code");
+    const summary = stringField(record, "summary");
+    if (!code || !summary) return [];
     return [{
-      severity: stringField(record, "severity") ?? "warning",
-      category: stringField(record, "category") ?? "review",
-      description,
-      suggestion: stringField(record, "suggestion"),
+      code,
+      summary,
+      evidence: rawStringArrayField(record, "evidence"),
     }];
   });
 }
 
 export function getChapterRevisionDetails(exec: ToolExecution): ChapterRevisionDetails | null {
-  if (exec.tool !== "sub_agent" || !exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return null;
+  if (exec.tool !== "revise_chapter" || !exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return null;
   const details = exec.details as Record<string, unknown>;
   if (details.kind !== "chapter_revision") return null;
   return {
     chapterNumber: numberField(details, "chapterNumber"),
-    applied: details.applied === true,
-    status: stringField(details, "status"),
-    auditPassed: typeof details.auditPassed === "boolean" ? details.auditPassed : undefined,
-    fixedIssues: rawStringArrayField(details, "fixedIssues"),
-    auditIssues: parseChapterAuditIssues(details.auditIssues),
-    skippedReason: stringField(details, "skippedReason"),
+    changed: details.changed === true,
+    observations: parseChapterObservations(details.observations),
   };
 }
 
@@ -383,29 +364,31 @@ export function getChapterStateResyncDetails(exec: ToolExecution): ChapterStateR
   if (details.kind !== "chapter_state_resynced") return null;
   return {
     chapterNumber: numberField(details, "chapterNumber"),
-    status: stringField(details, "status"),
-    auditPassed: typeof details.auditPassed === "boolean" ? details.auditPassed : undefined,
-    auditIssues: parseChapterAuditIssues(details.auditIssues),
+    observations: parseChapterObservations(details.observations),
     summary: stringField(details, "summary"),
   };
 }
 
-function ChapterAuditIssues({
-  issues,
+function ChapterObservations({
+  observations,
   title,
 }: {
-  readonly issues: ReadonlyArray<ChapterRevisionIssueDetails>;
+  readonly observations: ReadonlyArray<ChapterObservationDetails>;
   readonly title: string;
 }) {
-  if (issues.length === 0) return null;
+  if (observations.length === 0) return null;
   return (
     <div className="mt-2 space-y-1.5">
       <div className="text-[13px] font-medium text-foreground">{title}</div>
-      {issues.map((issue, index) => (
-        <div key={`${issue.category}:${index}`} className="rounded-lg border border-border/40 bg-background/55 px-2.5 py-2 text-[12px] leading-5 text-muted-foreground">
-          <div className="font-medium text-foreground">[{issue.severity}] {issue.category}</div>
-          <div>{issue.description}</div>
-          {issue.suggestion && <div className="mt-0.5">{tr("建议", "Suggestion")}{tr("：", ": ")}{issue.suggestion}</div>}
+      {observations.map((issue, index) => (
+        <div key={`${issue.code}:${index}`} className="rounded-lg border border-border/40 bg-background/55 px-2.5 py-2 text-[12px] leading-5 text-muted-foreground">
+          <div className="font-medium text-foreground">{issue.code}</div>
+          <div>{issue.summary}</div>
+          {issue.evidence.length > 0 && (
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {issue.evidence.map((item, evidenceIndex) => <li key={`${issue.code}:evidence:${evidenceIndex}`}>{item}</li>)}
+            </ul>
+          )}
         </div>
       ))}
     </div>
@@ -415,34 +398,21 @@ function ChapterAuditIssues({
 function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
   const details = getChapterRevisionDetails(exec);
   if (!details) return null;
-  const passed = details.applied && details.auditPassed === true;
+  const changed = details.changed;
   return (
     <div
       data-testid="chapter-revision-preview"
-      className={`mx-3 mb-3 mt-1 rounded-xl border px-3 py-2.5 ${passed ? "border-emerald-500/25 bg-emerald-500/5" : "border-amber-500/25 bg-amber-500/5"}`}
+      className={`mx-3 mb-3 mt-1 rounded-xl border px-3 py-2.5 ${changed ? "border-emerald-500/25 bg-emerald-500/5" : "border-border/50 bg-secondary/20"}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[15px] font-semibold text-foreground">
           {details.chapterNumber ? tr(`第 ${details.chapterNumber} 章修订`, `Chapter ${details.chapterNumber} revision`) : tr("章节修订", "Chapter revision")}
         </div>
-        <div className={`rounded-full px-2 py-0.5 text-[12px] font-semibold ${passed ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600"}`}>
-          {!details.applied
-            ? tr("保留原稿", "Original kept")
-            : details.auditPassed
-              ? tr("审稿通过", "Audit passed")
-              : tr("仍需复核", "Review required")}
+        <div className={`rounded-full px-2 py-0.5 text-[12px] font-semibold ${changed ? "bg-emerald-500/15 text-emerald-600" : "bg-secondary text-muted-foreground"}`}>
+          {changed ? tr("已更新", "Updated") : tr("无变化", "No change")}
         </div>
       </div>
-      {details.skippedReason && (
-        <div className="mt-2 text-[13px] leading-5 text-muted-foreground">{details.skippedReason}</div>
-      )}
-      {details.fixedIssues.length > 0 && (
-        <div className="mt-2 text-[13px] leading-5 text-muted-foreground">
-          <span className="font-medium text-foreground">{tr("已处理", "Fixed")}{tr("：", ": ")}</span>
-          {details.fixedIssues.join("；")}
-        </div>
-      )}
-      <ChapterAuditIssues issues={details.auditIssues} title={tr("剩余审稿问题", "Remaining audit issues")} />
+      <ChapterObservations observations={details.observations} title={tr("审查观察", "Review observations")} />
     </div>
   );
 }
@@ -450,22 +420,21 @@ function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
 function ChapterStateResyncPreview({ exec }: { exec: ToolExecution }) {
   const details = getChapterStateResyncDetails(exec);
   if (!details) return null;
-  const passed = details.auditPassed === true;
   return (
     <div
       data-testid="chapter-state-resync-preview"
-      className={`mx-3 mb-3 mt-1 rounded-xl border px-3 py-2.5 ${passed ? "border-emerald-500/25 bg-emerald-500/5" : "border-amber-500/25 bg-amber-500/5"}`}
+      className="mx-3 mb-3 mt-1 rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-3 py-2.5"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[15px] font-semibold text-foreground">
           {details.chapterNumber ? tr(`第 ${details.chapterNumber} 章状态已同步`, `Chapter ${details.chapterNumber} state resynced`) : tr("章节状态已同步", "Chapter state resynced")}
         </div>
-        <div className={`rounded-full px-2 py-0.5 text-[12px] font-semibold ${passed ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600"}`}>
-          {passed ? tr("审稿通过", "Audit passed") : tr("仍需修订", "Revision required")}
+        <div className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[12px] font-semibold text-emerald-600">
+          {tr("已同步", "Synced")}
         </div>
       </div>
       {details.summary && <div className="mt-2 text-[13px] leading-5 text-muted-foreground">{details.summary}</div>}
-      <ChapterAuditIssues issues={details.auditIssues} title={tr("审稿问题", "Audit issues")} />
+      <ChapterObservations observations={details.observations} title={tr("审查观察", "Review observations")} />
     </div>
   );
 }
@@ -571,8 +540,8 @@ function ScriptStoryboardResultPreview({ exec, onOpenFilmStudio }: { exec: ToolE
 function ShortFictionResultPreview({ exec }: { exec: ToolExecution }) {
   if (!["short_fiction_run", "generate_cover"].includes(exec.tool) || exec.status !== "completed") return null;
   const details = getGeneratedArtifactDetails(exec);
-  const coverPath = details?.coverImagePath ?? extractResultPath(exec.result, "Cover image");
-  const coverError = details?.coverError ?? extractResultPath(exec.result, "Cover image reason");
+  const coverPath = details?.coverImagePath;
+  const coverError = details?.coverError;
   if (!coverPath || !/\.(png|jpe?g|webp)$/iu.test(coverPath)) {
     if (!coverError) return null;
     return (
@@ -633,6 +602,7 @@ export function getPlayToolDetails(exec: ToolExecution): PlayToolDetails | null 
 type PlayRunImageIndex = {
   readonly sceneImageUrls?: Record<string, string>;
   readonly sceneImageUrl?: string;
+  readonly currentSceneImage?: { readonly turn: number; readonly sceneText: string; readonly url: string | null };
 };
 
 function sceneImageKey(details: PlayToolDetails): string | null {
@@ -642,6 +612,11 @@ function sceneImageKey(details: PlayToolDetails): string | null {
 export function buildPlaySceneImageUrl(details: PlayToolDetails, run?: PlayRunImageIndex | null): string | null {
   if (details.sceneImageUrl) {
     return buildApiUrl(details.sceneImageUrl);
+  }
+  const current = run?.currentSceneImage;
+  if (current && current.turn === details.turn) {
+    return current.url && current.sceneText.trim() === details.sceneText?.trim()
+      ? buildApiUrl(current.url) : null;
   }
   const key = sceneImageKey(details);
   const fromIndex = key ? run?.sceneImageUrls?.[key] : undefined;
@@ -814,7 +789,7 @@ function ProposedActionPreview({
       {resolution === "confirmed" ? (
         <div className="mt-3 flex items-center gap-1.5 text-[15px] leading-6 font-medium text-primary">
           <Check size={15} className="shrink-0" />
-          {tr("已执行", "Executed")}
+          {tr("已确认", "Confirmed")}
         </div>
       ) : resolution === "rejected" ? (
         <div className="mt-3 text-[15px] leading-6 font-medium text-muted-foreground">{tr("已取消", "Cancelled")}</div>
@@ -827,7 +802,7 @@ function ProposedActionPreview({
             disabled={!onProposedAction || streaming || locked}
             className="rounded-lg bg-primary px-3.5 py-2 text-[15px] leading-6 font-medium text-primary-foreground disabled:opacity-50"
           >
-            {streaming ? tr("执行中…", "Running…") : tr("继续执行", "Continue")}
+            {streaming ? tr("等待当前操作", "Waiting for current action") : tr("继续执行", "Continue")}
           </button>
           <button
             type="button"
@@ -896,23 +871,18 @@ function hasStructuredResultPreview(exec: ToolExecution): boolean {
 }
 
 function isPipelineTool(tool: string): boolean {
-  return tool === "sub_agent"
-    || tool === "resync_chapter_state"
-    || tool === "context_compression"
-    || tool === "propose_action"
-    || tool === "short_fiction_run"
-    || tool === "script_create"
-    || tool === "storyboard_create"
-    || tool === "interactive_film_create"
-    || tool === "generate_cover"
-    || tool === "play_edit"
-    || tool === "play_start"
-    || tool === "play_revise"
-    || tool === "play_step"
-    || tool === "create_narrative_forecast"
-    || tool === "get_narrative_forecast"
-    || tool === "select_narrative_branch";
+  return !UTILITY_TOOL_NAMES.has(tool);
 }
+
+const UTILITY_TOOL_NAMES = new Set([
+  "read",
+  "grep",
+  "ls",
+  "list_works",
+  "inspect_work",
+  "retrieve_material",
+  "use_skill",
+]);
 
 // -- Live elapsed timer hook --
 
@@ -927,7 +897,7 @@ function useElapsedTimer(startedAt: number, active: boolean): number {
   return elapsed;
 }
 
-// -- Pipeline operation (sub_agent) --
+// -- Capability operation --
 
 /**
  * Uncontrolled <details>: `open` only sets the initial state, so manual
@@ -1051,15 +1021,11 @@ function PipelineExecution({
           {/* Real-time execution logs */}
           {exec.logs && exec.logs.length > 0 && (
             <ul className="space-y-0.5">
-              {exec.logs.map((log, i) => {
-                const isError = log.startsWith("[error]") || /error/i.test(log);
-                const isWarn = log.startsWith("[warning]") || /warning|警告/i.test(log);
-                return (
-                  <li key={i} className={`text-xs font-mono break-words ${isError ? "text-destructive" : isWarn ? "text-yellow-600 dark:text-yellow-400" : "text-muted-foreground"}`}>
-                    {log}
-                  </li>
-                );
-              })}
+              {exec.logs.map((log, i) => (
+                <li key={i} className="text-xs font-mono break-words text-muted-foreground">
+                  {log}
+                </li>
+              ))}
             </ul>
           )}
           {exec.status === "error" && exec.error && (

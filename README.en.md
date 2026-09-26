@@ -44,13 +44,15 @@ Thanks to [ByteDance Volcano Engine](https://www.volcengine.com/activity/ai618?u
 
 > 💡 **One key for global frontier models** — pair InkOS with [**kkaiapi**](https://en.kkaiapi.com/): an OpenAI-compatible gateway for Claude, GPT, Gemini, DeepSeek, Kimi, Qwen, GLM, and image models. Add it as a custom service with base URL `https://api.kkaiapi.com/v1`, then switch models in Studio without juggling multiple provider accounts.
 
-## v1.8.0 Unified Pi Agent Harness and Professional Creation Kernel
+## v2.0.0 Unified Pi Agent Harness and Professional Creation Kernel
 
-InkOS 1.8.0 converges the Chat Agent and every production workflow on one pi-agent-centered harness. Models understand, propose, and invoke capabilities; InkOS owns confirmation, context, state, atomic persistence, and artifact truth. Long fiction, short fiction, scripts, storyboards, interactive films, Play, and translation keep their own craft methods while sharing execution, retrieval, observation, and recovery infrastructure.
+Preview a 1.x upgrade with `inkos work migrate --json`, then apply it with `inkos work migrate --apply`. Migration converts book defaults, rules and state snapshots while retaining the original directories and unspecified historical values. The original files retain retired writing settings; 2.0 uses Profile action policies. Projects missing runtime state enter the library as drafts requiring reconstruction.
+
+InkOS 2.0 converges the Chat Agent and every production workflow on one pi-agent-centered harness. Models understand, propose, and invoke capabilities; InkOS owns confirmation, context, state, atomic persistence, and artifact truth. Long fiction, short fiction, scripts, storyboards, interactive films, Play, and translation keep their own craft methods while sharing execution, retrieval, observation, and recovery infrastructure.
 
 - **Model setup**: Studio includes provider settings, model routing, cover-service settings, [kkaiapi](https://en.kkaiapi.com/) / OpenRouter aggregator entries, and custom OpenAI-compatible endpoints.
 - **One production harness**: Studio Chat, TUI, `inkos interact`, and production workers share the pi-agent tool loop and typed action/result boundary. Existing pipelines are deterministic, interruptible capabilities rather than parallel natural-language decision engines.
-- **15 built-in professional Skills**: dedicated `SKILL.md` packages cover long-form writing/review, commercial shorts, Play, scripts, storyboards, interactive film, translation, analysis, market research, import, covers, and semantic de-slopping. Each medium shares the Skill architecture, not long-form-specific prompts.
+- **19 built-in professional Skills**: dedicated `SKILL.md` packages cover long-form writing/review, commercial shorts, Play, scripts, storyboards, interactive film, translation, analysis, market research, import, covers, and semantic de-slopping. Each medium shares the Skill architecture, not long-form-specific prompts.
 - **Unified local retrieval**: story memory, archived materials, and Skill references use one rebuildable SQLite FTS5 / BM25 projection. Source files remain authoritative and retrieved evidence keeps source locations.
 - **Book-bound references**: imported material can be explicitly bound to a book with intended uses, then retrieved by task instead of injecting every file in full.
 - **Safe chapter workspaces**: prose, state, hooks, and run snapshots are validated in a chapter workspace and committed atomically, preventing state from advancing when prose persistence fails.
@@ -90,13 +92,13 @@ InkOS 1.8.0 converges the Chat Agent and every production workflow on one pi-age
   <img src="assets/play-item-warcraft.png" width="420" alt="InkOS Play item image example">
 </p>
 
-**Native English novel writing now supported！** — 10 built-in English genre profiles with dedicated pacing rules, fatigue word lists, and audit dimensions. Set `--lang en` and go.
+**Native English creation is supported** — set `--lang en`; professional methodology comes from the active Skill rather than hard-coded genre scoring rules.
 
 ## Quick Start
 
 ### Install
 
-Requires **Node.js 22 or later**.
+Requires **Node.js 22.16 or later**.
 
 ```bash
 npm i -g @actalk/inkos
@@ -133,7 +135,7 @@ How to use them:
 - Force one for a turn with `@skill-id`, for example: `@detective-play create an evidence-chain open world`.
 - Without `@skill-id`, the Chat Agent decides from the user's current intent whether to call `use_skill`. Session kinds, trigger phrases, and substring matching no longer activate skills.
 - External skills provide instructions and static references only. InkOS never auto-executes their scripts, and a skill cannot bypass existing tool permissions or confirmation gates.
-- Prompt configuration is not a skill. Built-in prompt packs are edited separately in **Project Settings → Prompt packs**, with project overrides under `prompt/<pack>/<prompt>.md`.
+- Professional creation methods live in Skills. Import a project Skill with the same ID to override a built-in method; Agent code keeps only dynamic tasks, context, and tool contracts.
 
 Minimal `SKILL.md`:
 
@@ -157,7 +159,9 @@ cd my-novel
 inkos
 ```
 
-Open Studio, then go to **Model Settings**:
+Open Studio at the local URL printed at startup. The local server accepts same-origin browser requests by default; custom embeddings or reverse proxies can declare trusted origins through the server's `allowedOrigins` startup option.
+
+Then go to **Model Settings**:
 
 1. Choose a service such as Google Gemini, Moonshot, MiniMax, DeepSeek, kkaiapi, OpenRouter, or a custom endpoint.
 2. Paste the API key and test the connection.
@@ -230,7 +234,7 @@ inkos doctor
 |------|---------|
 | `studio-project` | Studio runtime: only Studio/project settings and secrets are used |
 | `cli-project` | CLI runtime: Studio settings as the base, with env and CLI flags layered on top |
-| `legacy-env` | Legacy env mode: compatibility with old `.env`-only projects |
+| `environment` | CLI / daemon uses the current environment configuration directly |
 
 If a service test fails, first check that the service, model, and protocol match each other. Google Gemini AI Studio API keys work with the Gemini OpenAI-compatible endpoint; InkOS automatically disables the OpenAI `store` parameter that Google does not support. MiniMax defaults to the official OpenAI-compatible `/v1/chat/completions` endpoint and prefers a working non-streaming transport, avoiding streams that return usage but no text; `MiniMax-M3*` disables returned thinking by default, while M2.x thinking cannot be disabled upstream.
 
@@ -241,7 +245,7 @@ If a service test fails, first check that the service, model, and protocol match
 - **Model ownership validation**: mismatches like `--service google --model kimi-k2.5` fail immediately, so requests are never sent to the wrong provider.
 - **Google Gemini compatibility fix**: AI Studio API keys work directly with the Gemini OpenAI-compatible endpoint; InkOS automatically disables the OpenAI `store` parameter Google does not support.
 - **MiniMax transport probing**: MiniMax / MiniMax CodingPlan use the official OpenAI-compatible `/v1` entry and automatically pick a working non-streaming transport, working around streams that report usage but return an empty body.
-- **Legacy env compatibility**: the old `INKOS_LLM_BASE_URL + INKOS_LLM_MODEL + INKOS_LLM_API_KEY` combination still works for the CLI; without `INKOS_LLM_SERVICE`, InkOS tries to infer the service from the baseUrl.
+- **Environment configuration**: CLI accepts `INKOS_LLM_BASE_URL + INKOS_LLM_MODEL + INKOS_LLM_API_KEY`; without `INKOS_LLM_SERVICE`, the current baseUrl identifies the service.
 
 ### Current Interaction Entry Points
 
@@ -251,7 +255,7 @@ If a service test fails, first check that the service, model, and protocol match
 - **Creation entries**: Long-form Novel, Short Fiction, Fan Fiction, Spinoff, Style Imitation, Continuation, Branching Interactive, and Open World are available as first-class Studio entries.
 - **TUI dashboard**: `inkos tui` opens the full-screen terminal interface with `/new`, `/short`, `/play`, `/cover`, `/write`, `/confirm`, `/cancel`, and session-level `/model <name>` commands.
 - **External agent entry**: `inkos interact --json --message "..."` remains the structured entry for OpenClaw and other agents.
-- **Atomic commands remain**: `plan` / `compose` / `draft` / `audit` / `revise` / `write next` still work for scripting and advanced usage.
+- **Explicit commands remain**: `write next`, `revise`, `review`, import, and export stay directly callable; Harness owns internal planning and context stages.
 
 ### Write Your First Book
 
@@ -259,10 +263,9 @@ English is the default for English genre profiles. Pick a genre and go:
 
 ```bash
 inkos book create --title "The Last Delver" --genre litrpg     # LitRPG novel (English by default)
-inkos write next my-book          # Write next chapter (full pipeline: draft → audit → revise)
+inkos write next my-book          # Write and persist the next chapter; review and revision remain explicit actions
 inkos status                      # Check status
-inkos review list my-book         # Review drafts
-inkos review approve-all my-book  # Batch approve
+inkos review my-book              # Inspect persisted review observations
 inkos export my-book --format epub  # Export EPUB (read on phone/Kindle)
 ```
 
@@ -317,9 +320,9 @@ InkOS creates the world, characters, items, evidence, relationships, current sce
 
 ---
 
-## English Genre Profiles
+## English Creation Metadata
 
-InkOS ships with 10 English-native genre profiles. Each includes genre-specific rules, pacing, fatigue word detection, and audit dimensions:
+InkOS ships with lightweight metadata for common English serial-fiction genres. Creative method comes from Skills and the user's Work constraints:
 
 | Genre | Key Mechanics |
 |-------|--------------|
@@ -336,8 +339,6 @@ InkOS ships with 10 English-native genre profiles. Each includes genre-specific 
 
 Also supports 5 Chinese web novel genres (xuanhuan, xianxia, urban, horror, other) for bilingual creators.
 
-Every genre includes a **fatigue word list** (e.g., "delve", "tapestry", "testament", "intricate", "pivotal" for LitRPG) — the auditor flags these automatically so your prose doesn't read like every other AI-generated novel.
-
 ---
 
 ## Key Features
@@ -350,19 +351,17 @@ Studio Chat is not just a Q&A box. It can create long-form books, run Short, gen
 
 Play maintains a durable interactive world state: characters, locations, items, evidence, relationships, time, current scene, HUD, and images. It is not a hard-coded RPG system. A cultivation world may use rarity and realms; a romance story may use emotional stages; a detective story may use evidence lifecycle and credibility. The rules come from the user's world contract and stay in the world state.
 
-### 37-Dimension Audit + De-AI-ification
+### Qualitative Review + Explicit Revision
 
-The Continuity Auditor agent checks every draft across 37 dimensions: character memory, resource continuity, hook payoff, outline adherence, narrative pacing, emotional arcs, and more. Built-in AI-tell detection automatically catches "LLM voice" — overused words, monotonous sentence patterns, excessive summarization. The default long-form write cycle now runs at most one automatic revision pass; unresolved critical findings are kept in the result for human review or later commands.
-
-De-AI-ification rules are baked into the Writer agent's prompts: fatigue word lists, banned patterns, style fingerprint injection — reducing AI traces at the source. `revise --mode anti-detect` runs dedicated anti-detection rewriting on existing chapters.
+The reviewer compares the artifact with user intent, canon, current state, chapter planning, and the activated review Skill. It returns concrete observations with evidence and repair direction. Review never scores, rejects, or automatically rewrites prose; revision is an explicit action with a traceable artifact revision.
 
 ### Style Cloning
 
-`inkos style analyze` examines reference text and extracts a statistical fingerprint (sentence length distribution, word frequency patterns, rhythm profiles) plus an LLM-readable style guide. `inkos style import` injects this fingerprint into a book — all future chapters adopt the style, and the Reviser audits against it.
+`inkos style analyze` uses the activated analysis and imitation Skills to compile an evidence-backed operational style guide. `inkos style import` binds that guide to a Work for writing and revision.
 
 ### Creative Brief
 
-`inkos book create --brief my-ideas.md` — pass your brainstorming notes, worldbuilding doc, or character sheets. The Architect agent builds from your brief (generating `story_bible.md` and `book_rules.md`) instead of inventing from scratch, and persists the brief into `story/author_intent.md` so the book's long-horizon intent does not disappear after initialization.
+`inkos book create --brief my-ideas.md` passes brainstorming notes, worldbuilding, or character sheets. Architect creates `outline/story_frame.md`, `outline/volume_map.md`, role cards, and `book_rules.md/json`, while preserving long-horizon direction in `story/author_intent.md`.
 
 ### Input Governance Control Surface
 
@@ -371,23 +370,16 @@ Every book now has two long-lived Markdown control docs:
 - `story/author_intent.md`: what this book should become over the long horizon
 - `story/current_focus.md`: what the next 1-3 chapters should pull attention back toward
 
-Before writing, you can run:
-
-```bash
-inkos plan chapter my-book --context "Pull attention back to the mentor conflict first"
-inkos compose chapter my-book
-```
-
-This generates `story/runtime/chapter-XXXX.intent.md`, `context.json`, `rule-stack.yaml`, and `trace.json`. `intent.md` is the human-readable contract; the others are execution/debug artifacts. `plan` calls the LLM to produce the chapter intent; `compose` only compiles local documents and state, so it can run before you finish API key setup.
+Adjust direction through Studio Chat, TUI, or `inkos agent`. Planner first selects a task-relevant semantic working set and writes `story/runtime/chapter-XXXX.intent.md`; Composer persists `context.json` and `trace.json` with the actual sources, protection tiers, retrieval results, and compaction evidence.
 
 ### Length Governance
 
-`draft`, `write next`, and `revise` now share the same conservative length governor:
+`write next` and `revise` share deterministic length telemetry:
 
 - `--words` sets a target band, not an exact hard promise
 - Chinese chapters default to `zh_chars`; English chapters default to `en_words`
-- If the chapter drifts outside the soft band, InkOS may run one corrective normalization pass (compress or expand) instead of hard-cutting prose
-- If the chapter still misses the hard range after that one pass, InkOS still saves it, but surfaces a visible length warning and telemetry in the result and chapter index
+- InkOS never truncates prose or marks a chapter failed because of length drift
+- When a chapter is outside the hard range, it is still saved with structured telemetry and an observation
 
 ### Continuation Writing
 
@@ -395,7 +387,7 @@ This generates `story/runtime/chapter-XXXX.intent.md`, `context.json`, `rule-sta
 
 ### Fan Fiction
 
-`inkos fanfic init --from source.txt --mode canon` creates a fanfic book from source material. Four modes: canon (faithful continuation), au (alternate universe), ooc (out of character), cp (ship-focused). Includes a canon importer, fanfic-specific audit dimensions, and information boundary controls to keep lore consistent.
+`inkos fanfic init --from source.txt --mode canon` creates a fanfic book from source material. Four modes: canon, au, ooc, and cp. The typed canon importer and fanfic Skill preserve source facts and information boundaries.
 
 ### Multi-Model Routing
 
@@ -407,11 +399,11 @@ Different agents can use different models and providers. Writer on Claude (stron
 
 ### Local Model Compatibility
 
-Supports any OpenAI-compatible endpoint (`--provider custom`). Stream auto-fallback — when SSE isn't supported, InkOS retries with sync mode automatically. Fallback parser handles non-standard output from smaller models, and partial content recovery kicks in on stream interruption.
+Supports OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and custom compatible endpoints. Missing structured output, interrupted streams, and output-limit stops are surfaced or continued completely rather than accepted as partial success.
 
 ### Reliability
 
-Every chapter creates an automatic state snapshot — `inkos write rewrite` rolls back any chapter to its pre-write state. The Writer outputs a pre-write checklist (context scope, resources, pending hooks, risks) and a post-write settlement table; the Auditor cross-validates both. File locking prevents concurrent writes. Post-write validator includes cross-chapter repetition detection and a dozen hard rules with auto spot-fix.
+Every chapter creates a state snapshot. Prose, index, and structured state are committed as one atomic file set; file locks and Action queues prevent concurrent writes. Review records evidence-backed observations, while revision remains an explicit user or Agent action.
 
 The hook system uses Zod schema validation — `lastAdvancedChapter` must be an integer, `status` can only be open/progressing/deferred/resolved. JSON deltas from the LLM are processed through `applyRuntimeStateDelta` (immutable update) and `validateRuntimeState` (structural check) before persistence. Corrupted data is rejected, not propagated.
 
@@ -442,27 +434,24 @@ Long-form chapters are produced by multiple agents in sequence:
 | **Writer** | Produces prose from the composed context (length-governed, dialogue-driven) |
 | **Observer** | Over-extracts 9 categories of facts from the chapter text (characters, locations, resources, relationships, emotions, information, hooks, time, physical state) |
 | **Reflector** | Outputs a JSON delta (not full markdown); code-layer applies Zod schema validation then immutable write |
-| **Normalizer** | Single-pass compress/expand only when the chapter clearly leaves the hard length range |
 | **Continuity Auditor** | Validates the draft against structured state, control docs, and chapter context |
-| **Reviser** | Fixes critical issues found by the auditor; the default write cycle runs at most one automatic revision pass and flags the rest for human review |
+| **Reviser** | Applies an explicit revision request from the user, Agent, or persisted review observations and atomically records the new version |
 
-If the audit fails, the default pipeline runs one revise → re-audit pass. Remaining issues are preserved in the result and state for human review or later commands.
+Chapter prose and derived story state are committed atomically after hard validation. Continuity and craft findings are persisted as observations, while revision remains an explicit action with its own traceable artifact version.
 
 ### Long-Term Memory
 
-Each book's canonical memory is split into three layers:
+Canonical memory and retrieval projections are separate:
 
 | Layer | Purpose |
 |-------|---------|
 | `story/state/*.json` | Authoritative structured state: current state, hooks, chapter summaries, and related runtime data, validated with Zod schemas |
 | `story/*.md` | Human-readable projections such as `current_state.md`, `pending_hooks.md`, `chapter_summaries.md`, and `character_matrix.md` |
-| `story/memory.db` | SQLite temporal memory on Node 22+, used for relevance-based retrieval of facts, hooks, and summaries |
+| `story/memory.db` | Rebuildable SQLite FTS5/BM25 retrieval projection; never canonical story truth |
 
 The Continuity Auditor checks drafts against this state. If a character "remembers" something they never witnessed, or pulls a weapon they lost two chapters ago, the auditor catches it.
 
-The Settler no longer asks the model to output full markdown files. It produces a JSON delta, and the code layer applies and validates it immutably before persistence. Markdown remains as a readable projection. Existing books migrate from legacy Markdown on first run.
-
-On Node 22+, a SQLite temporal memory database (`story/memory.db`) is automatically enabled, supporting relevance-based retrieval of historical facts, hooks, and chapter summaries — preventing context bloat from full-file injection.
+Settler submits a complete incremental delta through a typed tool. The host applies and validates it immutably; Markdown remains a readable projection. Retrieval indexes are rebuilt from canonical JSON, then LLM semantic selection is applied to BM25 candidates.
 
 <p align="center">
   <img src="assets/arch-memory.svg" width="900" alt="Memory and state">
@@ -476,16 +465,15 @@ Alongside runtime state, InkOS splits guardrails from customization into reviewa
 - `story/current_focus.md`: near-term steering
 - `story/runtime/chapter-XXXX.intent.md`: chapter goal, keep/avoid list, conflict resolution
 - `story/runtime/chapter-XXXX.context.json`: the actual context selected for this chapter
-- `story/runtime/chapter-XXXX.rule-stack.yaml`: priority layers and override relationships
 - `story/runtime/chapter-XXXX.trace.json`: compilation trace for this chapter
 
 That means briefs, outline nodes, book rules, and current requests are no longer mashed into one prompt blob; InkOS compiles them first, then writes.
 
 ### Writing Rule System
 
-The Writer agent has ~25 universal writing rules (character craft, narrative technique, logical consistency, language constraints, de-AI-ification), applicable to all genres.
+Professional creation methods live in Work Profile Skills and can be overridden by a project `SKILL.md` with the same ID. Agent code retains only dynamic tasks, authority context, and typed tool protocols.
 
-On top of that, each genre has dedicated rules (prohibitions, language constraints, pacing, audit dimensions), and each book has its own `book_rules.md` (protagonist personality, numerical caps, custom prohibitions), `story_bible.md` (worldbuilding), `author_intent.md` (long-horizon direction), and `current_focus.md` (near-term steering). `volume_outline.md` still acts as the default plan, but in v2 input governance it no longer automatically overrides the current chapter intent.
+Each Work carries its own readable `book_rules.md`, typed `book_rules.json`, `outline/story_frame.md`, `outline/volume_map.md`, `author_intent.md`, and `current_focus.md`. The current instruction and explicit Work constraints govern each action; the outline is supporting context rather than an automatic override.
 
 ## Usage Modes
 
@@ -494,31 +482,22 @@ InkOS provides four interaction modes, all sharing the same atomic operations:
 ### 1. Full Pipeline (One Command)
 
 ```bash
-inkos write next my-book              # Draft → audit → auto-revise, all in one
+inkos write next my-book              # Plan → compose → write → review observations → atomic commit
 inkos write next my-book --count 5    # Write 5 chapters in sequence
 ```
 
-`write next` now uses the `plan -> compose -> write` governance chain by default. If you need the older prompt-assembly path, set this explicitly in `inkos.json`:
+`write next` uses the single `plan -> compose -> write -> review -> commit` creative path. Review produces observations; technical validation controls atomic persistence, and semantic feedback is never converted into a failed chapter state.
 
-```json
-{
-  "inputGovernanceMode": "legacy"
-}
-```
-
-The default is now `v2`. `legacy` remains available as an explicit fallback.
-
-### 2. Atomic Commands (Composable, External Agent Friendly)
+### 2. Explicit Capability Commands
 
 ```bash
-inkos plan chapter my-book --context "Focus on the mentor conflict first" --json
-inkos compose chapter my-book --json
-inkos draft my-book --context "Focus on the dungeon boss encounter and party dynamics" --json
-inkos audit my-book 31 --json
+inkos write next my-book --count 3
 inkos revise my-book 31 --json
+inkos review my-book --json
+inkos export my-book --format epub
 ```
 
-Each command performs a single operation independently. `--json` outputs structured data. `plan` / `compose` govern inputs; `draft` / `audit` / `revise` handle prose and quality checks. They can be called by external AI agents via `exec`, or used in scripts.
+These commands express already-determined user actions. Natural-language intent still enters the pi-agent Harness and is resolved against the current Work Profile capability surface.
 
 ### 3. Natural Language Agent Mode
 
@@ -528,7 +507,7 @@ inkos agent "Write the next chapter, focus on the boss fight and loot distributi
 inkos agent "Create a progression fantasy about a mage who can only use one spell"
 ```
 
-Agent mode exposes tools according to the current session kind: book creation, control-surface edits, planning, composition, writing, audit, revision, Short, cover, and Play tools are only made available where they make sense. The recommended agent flow is: adjust the control surface first, then `plan` / `compose`, then choose draft-only or full-pipeline writing.
+Agent mode exposes only capabilities allowed by the current Work Profile. It may load Skills by intent, inspect Works, propose creation, write, review, or revise; completion comes only from ActionResult and real artifact revisions.
 
 ### 4. Studio Play Mode
 
@@ -559,23 +538,16 @@ The first image is a local Studio screenshot. The other images are real local ou
 | `inkos book list` | List all books |
 | `inkos book delete <id>` | Delete a book and all its data (`--force` to skip confirmation) |
 | `inkos genre list/show/copy/create` | View, copy, or create genres |
-| `inkos plan chapter [id]` | Generate the next chapter's `intent.md` (`--context` / `--context-file` for current steering) |
-| `inkos compose chapter [id]` | Generate the next chapter's `context.json`, `rule-stack.yaml`, and `trace.json` |
 | `inkos write next [id]` | Full pipeline: write next chapter (`--words` to override, `--count` for batch, `-q` quiet mode) |
 | `inkos write rewrite [id] <n>` | Rewrite chapter N (restores state snapshot, `--force` to skip confirmation) |
-| `inkos draft [id]` | Write draft only (`--words` to override word count, `-q` quiet mode) |
-| `inkos audit [id] [n]` | Audit a specific chapter |
 | `inkos revise [id] [n]` | Revise a specific chapter |
 | `inkos agent <instruction>` | Natural language agent mode |
-| `inkos review list [id]` | Review drafts |
-| `inkos review approve-all [id]` | Batch approve |
+| `inkos review [id]` | Inspect persisted review observations |
 | `inkos status [id]` | Project status |
-| `inkos export [id]` | Export book (`--format txt/md/epub`, `--output <path>`, `--approved-only`) |
+| `inkos export [id]` | Export book (`--format txt/md/epub`, `--output <path>`) |
 | `inkos radar scan` | Scan market / trend inputs for new-book direction |
 | `inkos fanfic init` | Create a fanfic book from source material (`--from`, `--mode canon/au/ooc/cp`) |
 | `inkos short run` | Generate a standalone short-fiction package |
-| `inkos eval [id]` | Generate a quality evaluation report (`--json`, chapter ranges) |
-| `inkos consolidate [id]` | Consolidate chapter summaries for long-book context control |
 | `inkos forecast create/show/select` | Create, re-check, and select non-canonical long-form branches; selection saves a candidate plan only |
 | `inkos interact` | External-agent / CLI natural-language entry (`--json`, `--message`, `--book`) |
 | `inkos config set-global` | Set the global CLI / daemon / deployment LLM env config (`~/.inkos/.env`) |
@@ -590,13 +562,13 @@ The first image is a local Studio screenshot. The other images are real local ou
 | `inkos style import <file> [id]` | Import style fingerprint into a book |
 | `inkos import canon [id] --from <parent>` | Import parent canon into a spinoff book |
 | `inkos import chapters [id] --from <path>` | Import existing chapters for continuation (`--split`, `--resume-from`) |
-| `inkos analytics [id]` / `inkos stats [id]` | Book analytics (audit pass rate, top issues, chapter ranking, token usage) |
+| `inkos analytics [id]` / `inkos stats [id]` | Book analytics (observations, chapter lengths, token usage) |
 | `inkos update` | Update to the latest version |
 | `inkos` / `inkos studio` | Start web workbench (`-p` for port, default 4567) |
 | `inkos tui` | Start terminal full-screen TUI |
 | `inkos up / down` | Start/stop daemon (`-q` quiet mode, auto-writes `inkos.log`) |
 
-`[id]` is auto-detected when the project has only one book. All commands support `--json` for structured output. `draft` / `write next` / `plan chapter` / `compose chapter` accept `--context` for steering, and `--words` overrides the target chapter size. `book create` supports `--brief <file>` to pass a creative brief — the Architect builds from your ideas instead of generating from scratch. `plan chapter` calls the LLM to create chapter intent; `compose chapter` does not require a live LLM, so you can inspect governed inputs before finishing API setup.
+`[id]` is auto-detected when the project has one book. `write next` accepts `--context` for steering and `--words` for target length; `book create` accepts `--brief <file>`. Internal intent, context, and trace artifacts are inspectable in Studio.
 
 The CLI also accepts one-off LLM override flags at runtime: `--service`, `--model`, `--api-key-env`, `--base-url`, `--api-format <chat|responses>`, `--stream`, `--no-stream`. For example:
 

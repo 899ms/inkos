@@ -11,7 +11,7 @@ describe("POST /api/v1/projects/:id/nodes/:nodeId/image", () => {
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "if-imgep-"));
-    await mkdir(join(root, "interactive-films", "p"), { recursive: true });
+    await mkdir(join(root, "works", "p", "source"), { recursive: true });
     await saveStoryGraph(root, "p", StoryGraphSchema.parse({ schemaVersion: 1, projectId: "p", title: "T", variables: [], nodes: [{ id: "s", type: "start", sceneDesc: "宫门前", choices: [] }], endings: [] }));
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
@@ -21,7 +21,7 @@ describe("POST /api/v1/projects/:id/nodes/:nodeId/image", () => {
     const res = await app.request("/api/v1/projects/p/nodes/s/image", { method: "POST" });
     expect(res.status).toBe(200);
     const body = await res.json() as { assetRef: string; rev: number };
-    expect(body.assetRef).toBe("interactive-films/p/assets/nodes/s.png");
+    expect(body.assetRef).toBe("works/p/source/assets/nodes/s.png");
     expect((await loadStoryGraph(root, "p"))?.nodes.find(n => n.id === "s")?.imageSlot?.assetRef).toBe(body.assetRef);
   });
 

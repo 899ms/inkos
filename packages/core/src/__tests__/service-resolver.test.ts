@@ -42,6 +42,7 @@ vi.mock("@mariozechner/pi-ai", () => ({
 }));
 
 import { resolveServiceModel } from "../llm/service-resolver.js";
+import { lookupModel } from "../llm/providers/lookup.js";
 
 describe("resolveServiceModel", () => {
   let root: string;
@@ -109,6 +110,9 @@ describe("resolveServiceModel", () => {
     const result = await resolveServiceModel("deepseek", "deepseek-v4-pro", root);
 
     expect(result.model.compat).toMatchObject({ requiresAssistantAfterToolResult: true });
+    const card = lookupModel("deepseek", "deepseek-v4-pro")!;
+    expect({context:result.model.contextWindow,output:result.model.maxTokens})
+      .toEqual({context:card.contextWindowTokens,output:card.maxOutput});
   });
 
   it("constructs model from preset when getModel returns undefined", async () => {

@@ -2,7 +2,16 @@ import { Command } from "commander";
 import { access, readFile, rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
-import { deriveBookIdFromTitle, normalizePlatformOrOther, PipelineRunner, StateManager, type BookConfig } from "@actalk/inkos-core";
+import {
+  createBookFoundationTool,
+  deriveBookIdFromTitle,
+  executeExplicitCapabilityTool,
+  PlatformSchema,
+  PipelineRunner,
+  StateManager,
+  workDirectory,
+  type BookConfig,
+} from "@actalk/inkos-core";
 import {
   formatBookBackupCreated,
   formatBookBackupListEmpty,
@@ -15,7 +24,7 @@ import {
   resolveCliLanguage,
 } from "../localization.js";
 import { createBookBackup, listBookBackups, restoreBookBackup } from "../book-backup.js";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 
 export const bookCommand = new Command("book")
   .description("Manage books");
@@ -37,17 +46,17 @@ bookCommand
 
       const bookId = deriveBookIdFromTitle(opts.title) || `book-${Date.now().toString(36)}`;
 
-      const bookDir = join(root, "books", bookId);
+      const workDir = workDirectory(root, bookId);
+      const bookDir = join(workDir, "source");
       try {
         await access(bookDir);
         const state = new StateManager(root);
         if (await state.isCompleteBookDirectory(bookDir)) {
-          throw new Error(`Book "${bookId}" already exists at books/${bookId}/. Use a different title or delete the existing book first.`);
+          throw new Error(`Book "${bookId}" already exists as a Work. Use a different title or delete the existing book first.`);
         }
-        await rm(bookDir, { recursive: true, force: true });
+        await rm(workDir, { recursive: true, force: true });
       } catch (e) {
-        if (e instanceof Error && e.message.includes("already exists")) throw e;
-        // Directory doesn't exist, good
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
       }
 
       const config = await loadConfig();
@@ -55,12 +64,12 @@ bookCommand
       const book: BookConfig = {
         id: bookId,
         title: opts.title,
-        platform: normalizePlatformOrOther(opts.platform),
+        platform: PlatformSchema.parse(opts.platform ?? "other"),
         genre: opts.genre,
         status: "outlining",
         targetChapters: parseInt(opts.targetChapters, 10),
         chapterWordCount: parseInt(opts.chapterWords, 10),
-        language: opts.lang ?? config.language,
+        language: resolveCliLanguage(opts.lang ?? config.language),
         createdAt: now,
         updatedAt: now,
       };
@@ -73,8 +82,35 @@ bookCommand
         : undefined;
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { externalContext: brief }));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
-      await pipeline.initBook(book);
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "create_book", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createBookFoundationTool(pipeline, {
+          language: book.language,
+          actionPayload: {
+            createBook: {
+              title: book.title,
+              genre: book.genre,
+              platform: book.platform,
+              language: book.language,
+              targetChapters: book.targetChapters,
+              chapterWordCount: book.chapterWordCount,
+            },
+          },
+          workerSkills: () => activatedSkills,
+        }),
+        parameters: {
+          instruction: brief?.trim() || `Create ${book.title}`,
+          title: book.title,
+          genre: book.genre,
+          platform: book.platform,
+          language: book.language,
+          targetChapters: book.targetChapters,
+          chapterWordCount: book.chapterWordCount,
+        },
+      });
 
       if (opts.json) {
         log(JSON.stringify({
@@ -82,7 +118,7 @@ bookCommand
           title: book.title,
           genre: book.genre,
           platform: book.platform,
-          location: `books/${bookId}/`,
+          location: `works/${bookId}/source/`,
           nextStep: `inkos write next ${bookId}`,
         }, null, 2));
       } else {
@@ -245,8 +281,7 @@ bookCommand
         }
       }
 
-      const bookDir = join(root, "books", bookId);
-      await rm(bookDir, { recursive: true, force: true });
+      await rm(workDirectory(root, bookId), { recursive: true, force: true });
 
       if (opts.json) {
         log(JSON.stringify({ deleted: bookId, chapters: index.length }));

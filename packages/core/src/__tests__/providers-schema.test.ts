@@ -145,14 +145,15 @@ describe("providers structural integrity", () => {
     expect(getAllEndpoints().length).toBe(39);
   });
 
-  it("B6：CodingPlan provider 都走 anthropic-messages", () => {
+  it("B6：CodingPlan provider 使用各自套餐实际支持的协议", () => {
     for (const id of [
       "kimiCodingPlan", "minimaxCodingPlan", "bailianCodingPlan",
-      "glmCodingPlan", "volcengineCodingPlan", "opencodeCodingPlan",
-      "astronCodingPlan", "kimicode",
+      "glmCodingPlan", "opencodeCodingPlan", "astronCodingPlan", "kimicode",
     ]) {
       expect(getEndpoint(id)?.api).toBe("anthropic-messages");
     }
+    expect(getEndpoint("volcengineCodingPlan")?.api).toBe("openai-responses");
+    expect(getEndpoint("volcengineCodingPlan")?.baseUrl).toBe("https://ark.cn-beijing.volces.com/api/coding/v3");
   });
 
   it("R3：endpoint 不再出现 piProvider 字段（已移到 provider-to-pi-ai adapter）", () => {

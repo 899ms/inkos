@@ -34,12 +34,12 @@ export function PendingHooksView({ content }: PendingHooksViewProps) {
       {hooks.map((hook) => (
         <div key={hook.id} className="rounded-lg bg-secondary/30 px-3 py-2.5">
           <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
-            {hook.promoted === false && (
+            {hook.status === "deferred" && (
               <span className="text-[12px] px-1.5 py-0.5 rounded-full bg-zinc-500/10 text-muted-foreground">
                 {tr("种子", "Seed")}
               </span>
             )}
-            {hook.promoted === true && (
+            {(hook.status === "open" || hook.status === "progressing") && (
               <span className="text-[12px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
                 {tr("活跃", "Active")}
               </span>
@@ -47,11 +47,6 @@ export function PendingHooksView({ content }: PendingHooksViewProps) {
             {hook.type && (
               <span className={cn("text-[12px] px-1.5 py-0.5 rounded-full", hookTypeColor(hook.type))}>
                 {hook.type}
-              </span>
-            )}
-            {hook.core && (
-              <span className="text-[12px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
-                {tr("核心", "Core")}
               </span>
             )}
             {hook.payoff && (

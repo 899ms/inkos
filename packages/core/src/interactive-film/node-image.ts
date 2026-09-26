@@ -21,7 +21,7 @@ function escapesBase(rel: string): boolean {
 
 /** posix-style relative path served by GET /api/v1/project/files/<this> */
 export function nodeImageRelPath(projectId: string, nodeId: string, ext: string): string {
-  return `interactive-films/${projectId}/assets/nodes/${safeAssetSegment(nodeId)}.${ext}`;
+  return `works/${projectId}/source/assets/nodes/${safeAssetSegment(nodeId)}.${ext}`;
 }
 
 export function buildSetImageRefDelta(node: StoryNode, prompt: string, assetRef: string): StoryGraphDelta {
@@ -47,7 +47,7 @@ export async function generateNodeImage(params: {
   if (!rel || escapesBase(rel)) {
     throw new Error(`unsafe node id for image path: ${params.node.id}`);
   }
-  const assetDir = join(params.projectRoot, "interactive-films", params.projectId, "assets", "nodes");
+  const assetDir = join(params.projectRoot, "works", params.projectId, "source", "assets", "nodes");
   const relToAssetDir = relative(assetDir, abs);
   if (!relToAssetDir || escapesBase(relToAssetDir)) {
     throw new Error(`unsafe node id for image path: ${params.node.id}`);

@@ -31,7 +31,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
   const { lang } = useI18n();
   const { data: booksData } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
   const [tab, setTab] = useState<Tab>(initialTab ?? "chapters");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<{ readonly tone: "info" | "success" | "error"; readonly message: string } | null>(null);
   const [loading, setLoading] = useState(false);
 
   // Chapters state
@@ -67,23 +67,23 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
   useEffect(() => {
     if (initialTab) {
       setTab(initialTab);
-      setStatus("");
+      setStatus(null);
     }
   }, [initialTab]);
 
   const handleImportChapters = async () => {
     if (!chText.trim() || !chBookId) return;
     setLoading(true);
-    setStatus("");
+    setStatus(null);
     try {
       const data = await fetchJson<{ importedCount?: number }>(`/books/${chBookId}/import/chapters`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: chText, splitRegex: chSplitRegex || undefined }),
       });
-      setStatus(`Imported ${data.importedCount} chapters`);
+      setStatus({ tone: "success", message: `Imported ${data.importedCount} chapters` });
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus({ tone: "error", message: e instanceof Error ? e.message : String(e) });
     }
     setLoading(false);
   };
@@ -91,7 +91,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
   const handleImportCanon = async () => {
     if (!canonTarget || (canonSourceType === "book" ? !canonFrom : !canonFile)) return;
     setLoading(true);
-    setStatus("");
+    setStatus(null);
     try {
       if (canonSourceType === "book") {
         await postApi(`/books/${canonTarget}/import/canon`, { fromBookId: canonFrom });
@@ -106,9 +106,9 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
           filename: canonFile.name,
         });
       }
-      setStatus(tr("母本导入成功", "Canon imported successfully"));
+      setStatus({ tone: "success", message: tr("母本导入成功", "Canon imported successfully") });
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus({ tone: "error", message: e instanceof Error ? e.message : String(e) });
     }
     setLoading(false);
   };
@@ -116,7 +116,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
   const handleFanficInit = async () => {
     if (!ffTitle.trim() || !ffText.trim()) return;
     setLoading(true);
-    setStatus("");
+    setStatus(null);
     try {
       const data = await fetchJson<{ bookId?: string }>("/fanfic/init", {
         method: "POST",
@@ -127,14 +127,14 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         }),
       });
       if (data.bookId) {
-        setStatus(`${t("import.creating")}: ${data.bookId}`);
+        setStatus({ tone: "info", message: `${t("import.creating")}: ${data.bookId}` });
         await waitForStudioBookReady(data.bookId);
-        setStatus(`${t("import.fanficDone")}: ${data.bookId}`);
+        setStatus({ tone: "success", message: `${t("import.fanficDone")}: ${data.bookId}` });
         invalidateApiPaths(["/api/v1/books", `/api/v1/books/${data.bookId}`]);
         nav.toBook(data.bookId);
       }
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus({ tone: "error", message: e instanceof Error ? e.message : String(e) });
     }
     setLoading(false);
   };
@@ -142,18 +142,18 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
   const handleSpinoffInit = async () => {
     if (!spTitle.trim() || !spParent) return;
     setLoading(true);
-    setStatus("");
+    setStatus(null);
     try {
       const data = await postApi<{ bookId?: string }>("/spinoff/init", { title: spTitle, parentBookId: spParent, direction: spDirection || undefined });
       if (data.bookId) {
-        setStatus(`${t("import.creating")}: ${data.bookId}`);
+        setStatus({ tone: "info", message: `${t("import.creating")}: ${data.bookId}` });
         await waitForStudioBookReady(data.bookId);
-        setStatus(`${t("import.spinoffDone")}: ${data.bookId}`);
+        setStatus({ tone: "success", message: `${t("import.spinoffDone")}: ${data.bookId}` });
         invalidateApiPaths(["/api/v1/books", `/api/v1/books/${data.bookId}`]);
         nav.toBook(data.bookId);
       }
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus({ tone: "error", message: e instanceof Error ? e.message : String(e) });
     }
     setLoading(false);
   };
@@ -161,18 +161,18 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
   const handleImitationInit = async () => {
     if (!imTitle.trim() || !imRef.trim() || !imIdea.trim()) return;
     setLoading(true);
-    setStatus("");
+    setStatus(null);
     try {
       const data = await postApi<{ bookId?: string }>("/imitation/init", { title: imTitle, referenceText: imRef, storyIdea: imIdea, genre: imGenre, language: imLang });
       if (data.bookId) {
-        setStatus(`${t("import.creating")}: ${data.bookId}`);
+        setStatus({ tone: "info", message: `${t("import.creating")}: ${data.bookId}` });
         await waitForStudioBookReady(data.bookId);
-        setStatus(`${t("import.imitationDone")}: ${data.bookId}`);
+        setStatus({ tone: "success", message: `${t("import.imitationDone")}: ${data.bookId}` });
         invalidateApiPaths(["/api/v1/books", `/api/v1/books/${data.bookId}`]);
         nav.toBook(data.bookId);
       }
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus({ tone: "error", message: e instanceof Error ? e.message : String(e) });
     }
     setLoading(false);
   };
@@ -203,7 +203,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         {tabs.map((tb) => (
           <button
             key={tb.id}
-            onClick={() => { setTab(tb.id); setStatus(""); }}
+            onClick={() => { setTab(tb.id); setStatus(null); }}
             className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${
               tab === tb.id ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
             }`}
@@ -385,8 +385,8 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         )}
 
         {status && (
-          <div className={`text-sm px-3 py-2 rounded-lg ${status.startsWith("Error") ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10 text-emerald-600"}`}>
-            {status}
+          <div className={`text-sm px-3 py-2 rounded-lg ${status.tone === "error" ? "bg-destructive/10 text-destructive" : status.tone === "info" ? "bg-secondary text-muted-foreground" : "bg-emerald-500/10 text-emerald-600"}`}>
+            {status.message}
           </div>
         )}
       </div>

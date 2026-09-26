@@ -30,7 +30,6 @@ describe("material ingestion", () => {
     expect(asset.kind).toBe("text");
     expect(asset.markdownPath).toMatch(/^\.inkos\/materials\//);
     expect(asset.source).toBe("brief.md");
-    expect(asset.excerpt).toContain("县城冷库旧账");
     const markdown = await readFile(join(root, asset.markdownPath), "utf-8");
     expect(markdown).toContain("## Metadata");
     expect(markdown).toContain("- purpose: worldbuilding");
@@ -57,7 +56,8 @@ describe("material ingestion", () => {
     expect(asset.kind).toBe("webpage");
     expect(asset.title).toBe("旧账资料");
     expect(asset.source).toBe("https://example.com/cold-storage");
-    expect(asset.excerpt).toContain("入库单需要签字");
-    expect(asset.excerpt).not.toContain("bad()");
+    const markdown = await readFile(join(root, asset.markdownPath), "utf-8");
+    expect(markdown).toContain("入库单需要签字");
+    expect(markdown).not.toContain("bad()");
   });
 });

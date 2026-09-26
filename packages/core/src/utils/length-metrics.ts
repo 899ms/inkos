@@ -2,10 +2,6 @@ import type { LengthCountingMode, LengthSpec } from "../models/length-governance
 
 export type LengthLanguage = "zh" | "en";
 
-const REFERENCE_TARGET = 2200;
-const SOFT_RANGE_DELTA = 300;
-const HARD_RANGE_DELTA = 600;
-
 // Per-chapter length default in the book's native unit: Chinese counts characters (3000字),
 // English counts words (~2000 ≈ a 3000-char chapter). One cross-language number would mis-scale —
 // 3000 read as English words runs ~50% long, and the hard-range guard then force-expands correct chapters.
@@ -46,40 +42,35 @@ export function formatLengthCount(
 export function buildLengthSpec(
   target: number,
   language: LengthLanguage = "zh",
+  bounds: { readonly minChapterLength?: number; readonly maxChapterLength?: number } = {},
 ): LengthSpec {
-  const softDelta = scaleRangeDelta(target, SOFT_RANGE_DELTA);
-  const hardDelta = Math.max(softDelta, scaleRangeDelta(target, HARD_RANGE_DELTA));
-  const softMin = Math.max(1, target - softDelta);
-  const softMax = target + softDelta;
-  const hardMin = Math.max(1, target - hardDelta);
-  const hardMax = target + hardDelta;
-
   return {
     target,
-    softMin,
-    softMax,
-    hardMin,
-    hardMax,
     countingMode: resolveLengthCountingMode(language),
+    ...(bounds.minChapterLength!==undefined?{minChapterLength:bounds.minChapterLength}:{}),
+    ...(bounds.maxChapterLength!==undefined?{maxChapterLength:bounds.maxChapterLength}:{}),
   };
 }
 
-function scaleRangeDelta(target: number, referenceDelta: number): number {
-  return Math.max(1, Math.floor((target * referenceDelta) / REFERENCE_TARGET));
+/** Explicit author bounds are hard checks; an approximate target alone is not. */
+export function chapterLengthDelivery(count: number, spec: LengthSpec) {
+  if(spec.minChapterLength===undefined&&spec.maxChapterLength===undefined)return undefined;
+  const issues: Array<{code:string;actual:number;minimum?:number;maximum?:number}>=[];
+  if((spec.minChapterLength!==undefined&&count<spec.minChapterLength)
+    ||(spec.maxChapterLength!==undefined&&count>spec.maxChapterLength))issues.push({
+      code:"CHAPTER_LENGTH_OUT_OF_RANGE",actual:count,minimum:spec.minChapterLength,maximum:spec.maxChapterLength,
+    });
+  return {status:issues.length?"needs_revision" as const:"checks_passed" as const,
+    measurements:{count,countingMode:spec.countingMode},target:spec,issues};
 }
 
-export function isOutsideSoftRange(
-  count: number,
-  spec: Pick<LengthSpec, "softMin" | "softMax">,
-): boolean {
-  return count < spec.softMin || count > spec.softMax;
-}
-
-export function isOutsideHardRange(
-  count: number,
-  spec: Pick<LengthSpec, "hardMin" | "hardMax">,
-): boolean {
-  return count < spec.hardMin || count > spec.hardMax;
+export function assertChapterLength(content: string, spec?: LengthSpec): void {
+  if(!spec)return;
+  const delivery=chapterLengthDelivery(countChapterLength(content,spec.countingMode),spec);
+  if(delivery?.issues.length)throw Object.assign(new Error(JSON.stringify({
+    code:"CHAPTER_LENGTH_OUT_OF_RANGE",...delivery,
+    instruction:"Revise the complete chapter into the explicit length range, preserving core events and causal continuity.",
+  })),{code:"CHAPTER_LENGTH_OUT_OF_RANGE",delivery});
 }
 
 function stripMarkdownMetadata(content: string): string {

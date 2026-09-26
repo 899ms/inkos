@@ -14,10 +14,7 @@ const baseConfig: DetectionConfig = {
   provider: "custom",
   apiUrl: "https://api.detect.test/v1/detect",
   apiKeyEnv: "TEST_API_KEY",
-  threshold: 0.5,
   enabled: true,
-  autoRewrite: false,
-  maxRetries: 3,
 };
 
 describe("detectAIContent", () => {

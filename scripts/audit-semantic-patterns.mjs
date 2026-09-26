@@ -11,6 +11,97 @@ const SCAN_DIRS = [
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
 
+const FORBIDDEN_SOURCE_PATHS = [
+  "packages/core/src/models/state.ts",
+  "packages/core/src/models/genre-profile.ts",
+  "packages/core/src/state/memory-db.ts",
+  "packages/core/src/interactive-film/memory-link.ts",
+  "packages/core/src/agent/llm-stub.ts",
+  "packages/cli/src/commands/genre.ts",
+];
+
+const FORBIDDEN_ARCHITECTURE_TOKENS = [
+  ["audit-failed", "hidden content rejection state"],
+  ["review-failed", "hidden content rejection state"],
+  ["qualityScore", "host-owned prose score"],
+  ["isOutsideHardRange", "host-derived hard length gate"],
+  ["isOutsideSoftRange", "host-derived soft length gate"],
+  ["lengthWarning", "host-derived length verdict"],
+  ["softMin", "host-derived length range"],
+  ["hardMin", "host-derived length range"],
+  ["SHORT_FICTION_MIN_CHAPTERS", "host-owned creative range"],
+  ["SHORT_FICTION_MAX_CHAPTERS", "host-owned creative range"],
+  ["INKOS_AGENT_LLM_STUB", "production test-model branch"],
+  ["contextRecipes", "unused parallel context abstraction"],
+  ["createEditTool", "unregistered generic write surface"],
+  ["createWriteFileTool", "unregistered generic write surface"],
+  ["plainToAgentMessages", "second conversation-history source"],
+  ["InteractionEventSchema", "parallel interaction event ledger"],
+  ["AuditIssue", "legacy review issue protocol"],
+  ["repairScope", "legacy review issue protocol"],
+  ["reviewIssuesAsObservations", "legacy review conversion layer"],
+  ["reviewObservations", "legacy review conversion layer"],
+  ["reviewIssues", "parallel translation review protocol"],
+  ["ValidationWarning", "parallel state-review protocol"],
+  ["buildStateReconciliationIssues", "state-review conversion layer"],
+  ["loadAllSkillResources", "eager Skill reference loading"],
+  ["MAX_SKILL_ACTIVATION_BYTES", "eager Skill reference loading"],
+  ["nextActions", "unused speculative ActionResult field"],
+  ["fixedIssues", "model-authored revision success claim"],
+  ["removeFailedWork", "destructive cleanup of recoverable creation state"],
+  ["normalizeStageLabel", "UI stage inferred from human-facing prose"],
+  ["stripTrailingLicense", "semantic source text removed by a host heuristic"],
+  ["warning.startsWith(\"packaging\")", "observation code inferred from human-facing prose"],
+  ["log.startsWith(\"[error]\")", "tool log severity inferred from human-facing prose"],
+  ["kind: z.enum([\"hard\", \"soft\"])", "unused host-owned observation severity"],
+  ["Type.Literal(\"hard\"), Type.Literal(\"soft\")", "unused host-owned observation severity"],
+  ["powerSystem: Type.String({ minLength: 1 })", "genre-specific fanfic canon requirement"],
+  ["status.startsWith(\"Error", "UI status inferred from prose"],
+  ["content.startsWith(\"\\u2717\")", "UI error state inferred from prose"],
+  ["chapterWordCount: z.number().int().min(1000)", "host-owned chapter length floor"],
+  ["maximum: 20", "host-owned multi-chapter action ceiling"],
+  [".max(20)", "host-owned multi-chapter action ceiling"],
+  ["isTerminalProductionToolName", "host-owned production action stop list"],
+  ["hasUnansweredTerminalToolResult", "host-owned production action stop list"],
+  ["localAssistantStopStream", "host-forced Pi termination after a production action"],
+  ["pushToolResultsAsUser", "structured tool results rewritten as user prose"],
+  ["appendRestoredHistoryBoundary", "historical control message appended to the user-message stream"],
+  ["function suppressManualTextForTool", "tool presentation inferred from an action-name list"],
+  ["runWithCliProfileSkills", "legacy CLI-only production wrapper"],
+  ["async resyncChapterArtifacts(", "legacy parallel chapter-state repair entry"],
+  ["const READ_TOOLS", "capability risk inferred from a parallel tool-name list"],
+  ["const DESTRUCTIVE_TOOLS", "capability risk inferred from a parallel tool-name list"],
+  ["const CONFIRMED_CREATION_TOOLS", "capability confirmation inferred from a parallel tool-name list"],
+  ["function toolRisk(", "capability risk inferred from tool names"],
+];
+
+const FORBIDDEN_ENTRY_CALLS = [
+  "pipeline.initBook(",
+  "pipeline.writeNextChapter(",
+  "pipeline.writeChapters(",
+  "pipeline.reviseDraft(",
+  "pipeline.reviseFoundation(",
+  "pipeline.resyncChapter",
+  "pipeline.importChapters(",
+  "pipeline.importCanon(",
+  "pipeline.importFanficCanon(",
+  "pipeline.generateStyleGuide(",
+  "runShortFictionProduction(",
+  "runScriptCreation(",
+  "runStoryboardCreation(",
+  "runInteractiveFilmCreation(",
+];
+
+const HARNESS_ENTRY_PATHS = [
+  "packages/cli/src/commands/",
+  "packages/studio/src/api/server.ts",
+];
+
+const AGENT_CONSTRUCTION_PATHS = new Set([
+  "packages/core/src/agent/agent-session.ts",
+  "packages/core/src/agent/worker-agent.ts",
+]);
+
 const ACTION_SURFACE_PATHS = [
   "packages/core/src/agent/",
   "packages/core/src/interaction/",
@@ -95,6 +186,11 @@ function isLikelySemanticDecision(path, line, windowText) {
   if (line.includes("trimmed.startsWith(\"#\")")) return false;
   if (line.includes("actionSource") && line.includes("startsWith(\"/\")")) return false;
   if (line.includes("startsWith(\"/\")")) return false;
+  // Explicit slash-command grammar and Pi tool namespaces are protocols, not
+  // natural-language intent inference.
+  if (path.endsWith("agent-input.ts") && line.includes("/^\\/")) return false;
+  if ((path.endsWith("agent-session.ts") || path.endsWith("session-transcript-restore.ts"))
+    && line.includes("includes(\"__\")")) return false;
   if (line.includes("endsWith(") && !hasAny(windowText, ["instruction", "intent"])) return false;
   return true;
 }
@@ -119,17 +215,52 @@ for (const dir of SCAN_DIRS) {
 }
 
 const findings = [];
+for (const path of FORBIDDEN_SOURCE_PATHS) {
+  try {
+    await readFile(join(ROOT, path), "utf-8");
+    findings.push({ file: path, line: 1, text: "forbidden 1.x source remains" });
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
 for (const file of files) {
   const content = await readFile(file, "utf-8");
   const lines = content.split(/\r?\n/);
+  const relativeFile = relative(ROOT, file);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const windowText = lines.slice(Math.max(0, index - 4), Math.min(lines.length, index + 5)).join("\n");
+    for (const [token, reason] of FORBIDDEN_ARCHITECTURE_TOKENS) {
+      if (line.includes(token)) {
+        findings.push({
+          file: relative(ROOT, file),
+          line: index + 1,
+          text: `${reason}: ${line.trim()}`,
+        });
+      }
+    }
     if (isLikelySemanticDecision(file, line, windowText)) {
       findings.push({
         file: relative(ROOT, file),
         line: index + 1,
         text: line.trim(),
+      });
+    }
+    if (
+      HARNESS_ENTRY_PATHS.some((prefix) => relativeFile.startsWith(prefix))
+      && FORBIDDEN_ENTRY_CALLS.some((token) => line.includes(token))
+    ) {
+      findings.push({
+        file: relativeFile,
+        line: index + 1,
+        text: `production entry bypasses Harness capability: ${line.trim()}`,
+      });
+    }
+    if (line.includes("new Agent(") && !AGENT_CONSTRUCTION_PATHS.has(relativeFile)) {
+      findings.push({
+        file: relativeFile,
+        line: index + 1,
+        text: `parallel Agent construction outside the shared main/worker kernels: ${line.trim()}`,
       });
     }
   }

@@ -7,7 +7,7 @@ import { StoryGraphDeltaSchema } from "../interactive-film/delta.js";
 
 describe("authoring-state phaseRevs (additive)", () => {
   let root: string;
-  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-pr-")); await mkdir(join(root, "interactive-films", "p"), { recursive: true }); });
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-pr-")); await mkdir(join(root, "works", "p", "source"), { recursive: true }); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
   it("old state without phaseRevs still loads", async () => {

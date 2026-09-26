@@ -63,10 +63,10 @@ export async function searchWeb(
 }
 
 /**
- * Fetch a URL and return its text content.
- * HTML is stripped to plain text. Output is truncated to maxChars.
+ * Fetch a URL and return its complete text content.
+ * HTML is stripped to plain text. Context budgeting happens at the consumer.
  */
-export async function fetchUrl(url: string, maxChars = 8000): Promise<string> {
+export async function fetchUrl(url: string): Promise<string> {
   const res = await fetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -88,9 +88,8 @@ export async function fetchUrl(url: string, maxChars = 8000): Promise<string> {
       .replace(/<style[\s\S]*?<\/style>/gi, "")
       .replace(/<[^>]*>/g, " ")
       .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, maxChars);
+      .trim();
   }
 
-  return text.slice(0, maxChars);
+  return text;
 }

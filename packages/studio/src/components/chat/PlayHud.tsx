@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Gamepad2, X, ChevronDown, ChevronLeft } from "lucide-react";
-import { fetchJson } from "../../hooks/use-api";
+import { fetchJson, buildApiUrl } from "../../hooks/use-api";
 import {
   HOLDING_TYPES, HOLDING_GLYPH, SLOT_GLYPH, EVIDENCE_LADDER,
   type HudDetail, type HudRow, type HoldingRow, type HoldingRelation, type HoldingLifecycle,
@@ -70,6 +70,7 @@ interface PlayRunResponse {
   readonly graph?: PlayGraph;
   readonly imageSettings?: PlayImageSettings;
   readonly sceneImageUrl?: string;
+  readonly sceneImageError?: string;
 }
 interface CoverConfigResponse {
   readonly service?: string | null;
@@ -332,6 +333,7 @@ export function PlayHud(props: {
   const [run, setRun] = useState<PlayRunResponse | null>(null);
   const [settings, setSettings] = useState<PlayImageSettings>({ actors: false, moments: false, inventory: false });
   const [coverReady, setCoverReady] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
   const [generating, setGenerating] = useState<ReadonlySet<string>>(new Set());
   const inFlight = useRef<Set<string>>(new Set());
   const prevStreaming = useRef(isStreaming);
@@ -340,6 +342,7 @@ export function PlayHud(props: {
     try {
       const data = await fetchJson<PlayRunResponse>(base);
       setRun(data);
+      setImageError(data.sceneImageError ?? null);
       if (data.imageSettings) setSettings(data.imageSettings);
     } catch {
       // A play session may not have a persisted world yet (no first action).
@@ -348,6 +351,9 @@ export function PlayHud(props: {
   }, [base]);
 
   useEffect(() => { void load(); }, [load]);
+  // Author edits can finish without changing the turn number or streaming flag.
+  // Opening the inspector must read current persisted state, not its old cache.
+  useEffect(() => { if (open) void load(); }, [open, load]);
 
   // Refetch when a turn finishes (streaming true -> false).
   useEffect(() => {
@@ -375,16 +381,18 @@ export function PlayHud(props: {
   ) => {
     if (inFlight.current.has(key)) return;
     inFlight.current.add(key);
+    setImageError(null);
     setGenerating((s) => new Set(s).add(key));
     try {
-      await fetchJson(`${base}/generate-image`, {
+      const result=await fetchJson<{status?:string;error?:string}>(`${base}/generate-image`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      if(result.status==="failed")throw new Error(result.error??"Image generation failed");
       await load();
-    } catch {
-      // Generation blip — the row simply stays image-less; user can retry.
+    } catch (error) {
+      setImageError(error instanceof Error ? error.message : String(error));
     } finally {
       inFlight.current.delete(key);
       setGenerating((s) => { const n = new Set(s); n.delete(key); return n; });
@@ -415,6 +423,7 @@ export function PlayHud(props: {
 
   return (
     <aside className="absolute bottom-28 right-0 top-0 z-20 flex w-[380px] max-w-[calc(100vw-1rem)] flex-col border-l border-border/40 bg-card/95 backdrop-blur shadow-xl">
+      {imageError ? <div role="alert" className="border-b border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{imageError}</div> : null}
       <header className="relative flex min-w-0 items-center gap-2.5 overflow-hidden border-b border-border/40 px-4 py-3">
         <span aria-hidden className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
         {view?.turn != null ? (
@@ -446,6 +455,7 @@ export function PlayHud(props: {
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 text-[15px]">
+        {run?.sceneImageUrl ? <img src={buildApiUrl(run.sceneImageUrl) ?? undefined} alt={isZh ? "当前场景插画" : "Current scene illustration"} className="w-full rounded-lg" /> : null}
         {!view ? (
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border/50 bg-secondary/10 px-4 py-8 text-center">
             <span className="text-3xl opacity-80">🎲</span>

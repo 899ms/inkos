@@ -28,17 +28,16 @@ describe("ResearcherAgent", () => {
       },
     );
 
-    expect(report.summary).toContain("宋代县衙巡检职责");
-    expect(report.sources).toEqual([
-      expect.objectContaining({ id: "S1", url: "https://example.com/song-policing" }),
-    ]);
-    expect(report.claims[0]).toMatchObject({
+    expect({
+      sourceIds: report.sources.map((source) => source.id),
+      sourceUrls: report.sources.map((source) => source.url),
+      queries: report.queryLog,
+      failures: report.partialFailures,
+    }).toEqual({
       sourceIds: ["S1"],
-      confidence: "medium",
+      sourceUrls: ["https://example.com/song-policing"],
+      queries: ["宋代县衙巡检职责"],
+      failures: [],
     });
-    expect(report.queryLog[0]).toContain("宋代县衙巡检职责");
-    expect(report.markdown).toContain("## Claims");
-    expect(report.markdown).toContain("[S1]");
-    expect(report.markdown).toContain("## Creative implications");
   });
 });

@@ -27,4 +27,26 @@ describe("loadChaptersFromPath", () => {
     expect(chapters.map((chapter) => chapter.title)).toEqual(["开端", "转折", "终局"]);
     expect(chapters.map((chapter) => chapter.content)).toEqual(["one", "two", "ten"]);
   });
+
+  it("treats a non-empty headingless file as one chapter", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-single-chapter-import-"));
+    roots.push(root);
+    const source = join(root, "harbor-letter.md");
+    await writeFile(source, "# The Harbor Letter\n\nAt midnight, the bell rang once.\n", "utf-8");
+
+    await expect(loadChaptersFromPath(source)).resolves.toEqual([{
+      title: "The Harbor Letter",
+      content: "At midnight, the bell rang once.",
+    }]);
+  });
+
+  it("keeps a failed explicit split pattern as an error", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-custom-split-import-"));
+    roots.push(root);
+    const source = join(root, "novel.txt");
+    await writeFile(source, "Only body text.", "utf-8");
+
+    await expect(loadChaptersFromPath(source, "^Part\\s+(.+)$"))
+      .rejects.toThrow(/No chapters found/);
+  });
 });

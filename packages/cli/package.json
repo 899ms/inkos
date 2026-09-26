@@ -1,6 +1,6 @@
 {
   "name": "@actalk/inkos",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "description": "InkOS Story Creation AI Agent CLI and TUI for fiction, scripts, interactive worlds, and translation.",
   "keywords": [
     "story-creation-ai-agent",
@@ -37,14 +37,16 @@
   },
   "scripts": {
     "prepare:workspace-core": "pnpm --filter @actalk/inkos-core build",
-    "prepack": "node ../../scripts/prepare-package-for-publish.mjs",
+    "prepack": "npm run build && node ../../scripts/prepare-package-for-publish.mjs",
     "postpack": "node ../../scripts/restore-package-json.mjs",
     "prepublishOnly": "node ../../scripts/verify-no-workspace-protocol.mjs .",
     "prebuild": "pnpm run prepare:workspace-core",
-    "build": "tsc",
+    "build": "node ../../scripts/clean-package-dist.mjs && tsc",
     "dev": "tsc --watch",
     "pretest": "pnpm run build",
     "test": "vitest run --passWithNoTests",
+    "pretest:flows": "pnpm run build",
+    "test:flows": "vitest run src/__tests__/cli.flow.test.ts src/__tests__/tui-agent-session.test.ts",
     "pretypecheck": "pnpm run prepare:workspace-core",
     "typecheck": "tsc --noEmit"
   },
@@ -71,5 +73,8 @@
   "overrides": {
     "@mariozechner/pi-ai": "0.67.1",
     "@mariozechner/pi-agent-core": "0.67.1"
+  },
+  "engines": {
+    "node": ">=22.16.0"
   }
 }

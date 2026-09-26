@@ -2,13 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { buildStudioBookConfig, normalizeStudioPlatform, waitForStudioBookReady } from "./book-create";
 
 describe("normalizeStudioPlatform", () => {
-  it("keeps supported chinese platform ids and folds unsupported values to other", () => {
+  it("preserves user platform metadata and defaults an omitted value", () => {
     expect(normalizeStudioPlatform("tomato")).toBe("tomato");
-    expect(normalizeStudioPlatform("番茄小说")).toBe("tomato");
     expect(normalizeStudioPlatform("qidian")).toBe("qidian");
     expect(normalizeStudioPlatform("feilu")).toBe("feilu");
-    expect(normalizeStudioPlatform("royal-road")).toBe("other");
     expect(normalizeStudioPlatform(undefined)).toBe("other");
+    expect(normalizeStudioPlatform("番茄小说")).toBe("番茄小说");
+    expect(normalizeStudioPlatform("royal-road")).toBe("royal-road");
   });
 });
 
@@ -36,7 +36,7 @@ describe("buildStudioBookConfig", () => {
     });
   });
 
-  it("normalizes unsupported platform ids to other for storage", () => {
+  it("preserves user-defined platform metadata", () => {
     const config = buildStudioBookConfig(
       {
         title: "English Book",
@@ -47,7 +47,7 @@ describe("buildStudioBookConfig", () => {
       "2026-03-30T00:00:00.000Z",
     );
 
-    expect(config.platform).toBe("other");
+    expect(config.platform).toBe("royal-road");
     expect(config.language).toBe("en");
     expect(config.id).toBe("english-book");
   });

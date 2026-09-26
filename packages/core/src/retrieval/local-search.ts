@@ -37,7 +37,7 @@ export class LocalSearchIndex {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
-    this.migrate();
+    this.initializeSchema();
   }
 
   replaceScope(scope: string, documents: ReadonlyArray<SearchDocument>): void {
@@ -150,7 +150,7 @@ export class LocalSearchIndex {
     this.db.close();
   }
 
-  private migrate(): void {
+  private initializeSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS retrieval_documents (
         rowid INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,7 +251,7 @@ export function tokenizeSearchText(text: string): string[] {
 }
 
 function buildMatchQuery(query: string): string {
-  const tokens = [...new Set(tokenizeSearchText(query))].slice(0, 64);
+  const tokens = [...new Set(tokenizeSearchText(query))];
   return tokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR ");
 }
 
@@ -273,12 +273,9 @@ function normalizeDocument(document: SearchDocument, scope: string) {
 }
 
 function parseMetadata(value: string): Readonly<Record<string, unknown>> {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Readonly<Record<string, unknown>>
-      : {};
-  } catch {
-    return {};
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Retrieval metadata must be a JSON object.");
   }
+  return parsed as Readonly<Record<string, unknown>>;
 }

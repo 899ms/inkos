@@ -24,7 +24,7 @@ describe("tui command", () => {
 
   it("launches Studio when no subcommand is provided", async () => {
     const launchStudio = vi.fn(async () => {});
-    const program = createProgram({ launchStudio });
+    const program = createProgram({ launchStudio, studioRecentProjectPath: join(tempDir, "recent.json") });
 
     await program.parseAsync([], { from: "user" });
 
@@ -34,7 +34,7 @@ describe("tui command", () => {
 
   it("auto-initializes a minimal project before launching Studio by default", async () => {
     const launchStudio = vi.fn(async () => {});
-    const program = createProgram({ launchStudio });
+    const program = createProgram({ launchStudio, studioRecentProjectPath: join(tempDir, "recent.json") });
 
     await program.parseAsync([], { from: "user" });
 
@@ -52,7 +52,7 @@ describe("tui command", () => {
   it("does not overwrite an existing .env during automatic Studio init", async () => {
     await writeFile(join(tempDir, ".env"), "EXISTING_ENV=1\n", "utf-8");
     const launchStudio = vi.fn(async () => {});
-    const program = createProgram({ launchStudio });
+    const program = createProgram({ launchStudio, studioRecentProjectPath: join(tempDir, "recent.json") });
 
     await program.parseAsync([], { from: "user" });
 
@@ -62,7 +62,7 @@ describe("tui command", () => {
   it("launches the TUI when the explicit tui command is used", async () => {
     const launchTui = vi.fn(async () => {});
     const launchStudio = vi.fn(async () => {});
-    const program = createProgram({ launchTui, launchStudio });
+    const program = createProgram({ launchTui, launchStudio, studioRecentProjectPath: join(tempDir, "recent.json") });
 
     await program.parseAsync(["tui"], { from: "user" });
 
@@ -72,7 +72,7 @@ describe("tui command", () => {
 
   it("auto-initializes a minimal project before launching the explicit studio command", async () => {
     const launchStudio = vi.fn(async () => {});
-    const program = createProgram({ launchStudio });
+    const program = createProgram({ launchStudio, studioRecentProjectPath: join(tempDir, "recent.json") });
 
     await program.parseAsync(["studio"], { from: "user" });
 
@@ -82,5 +82,29 @@ describe("tui command", () => {
     const [calledRoot, calledPort] = launchStudio.mock.calls[0] as unknown as [string, string];
     expect(realpathSync(calledRoot)).toBe(realpathSync(tempDir));
     expect(calledPort).toBe("4567");
+  });
+
+  it("reopens the last valid Studio project instead of silently initializing the wrong cwd", async () => {
+    const previous = await mkdtemp(join(tmpdir(), "inkos-previous-studio-"));
+    try {
+      await writeFile(join(previous, "inkos.json"), JSON.stringify({ name: "previous" }), "utf-8");
+      const recentProjectPath = join(tempDir, "recent.json");
+      await writeFile(recentProjectPath, JSON.stringify({ projectRoot: previous }), "utf-8");
+      const { resolveStudioProjectRoot } = await import("../commands/studio.js");
+
+      await expect(resolveStudioProjectRoot(tempDir, { recentProjectPath })).resolves.toEqual({
+        root: previous,
+        source: "recent",
+      });
+      await expect(resolveStudioProjectRoot(tempDir, {
+        recentProjectPath,
+        explicitProject: true,
+      })).resolves.toEqual({
+        root: tempDir,
+        source: "new",
+      });
+    } finally {
+      await rm(previous, { recursive: true, force: true });
+    }
   });
 });

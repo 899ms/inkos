@@ -12,15 +12,20 @@ import {
 } from "../skills/index.js";
 
 const BUILTIN_SKILL_IDS = [
+  "inkos-continuation-writing",
+  "inkos-fanfic-writing",
+  "inkos-imitation-writing",
   "inkos-interactive-film",
   "inkos-long-market-research",
   "inkos-long-story-analysis",
   "inkos-long-writing",
+  "inkos-play-illustration",
   "inkos-play-world",
   "inkos-script-writing",
   "inkos-short-market-research",
   "inkos-short-story-analysis",
   "inkos-short-writing",
+  "inkos-spinoff-writing",
   "inkos-story-cover",
   "inkos-story-deslop",
   "inkos-story-import",

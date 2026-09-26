@@ -97,6 +97,7 @@ export function agentTrajectoryHeaders(
   return {
     "X-InkOS-Trace-Version": "1",
     "X-InkOS-Scaffold": "pi-inkos",
+    "X-Conversation-ID": trace.conversationId,
     "X-InkOS-Conversation-ID": trace.conversationId,
     "X-InkOS-Run-ID": trace.runId,
     "X-InkOS-Model-Call-ID": trace.modelCallId,

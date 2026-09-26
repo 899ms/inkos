@@ -17,14 +17,15 @@ import {
   formatDoctorHintStreamRequirement,
   resolveCliLanguage,
 } from "../localization.js";
+import type { LLMApiFormat } from "@actalk/inkos-core";
 
 function buildDoctorProbePlans(
-  preferredApiFormat: "chat" | "responses" | undefined,
+  preferredApiFormat: LLMApiFormat | undefined,
   preferredStream: boolean | undefined,
-): Array<{ apiFormat: "chat" | "responses"; stream: boolean }> {
-  const plans: Array<{ apiFormat: "chat" | "responses"; stream: boolean }> = [];
+): Array<{ apiFormat: LLMApiFormat; stream: boolean }> {
+  const plans: Array<{ apiFormat: LLMApiFormat; stream: boolean }> = [];
   const seen = new Set<string>();
-  const push = (apiFormat: "chat" | "responses", stream: boolean) => {
+  const push = (apiFormat: LLMApiFormat, stream: boolean) => {
     const key = `${apiFormat}:${stream ? "1" : "0"}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -35,7 +36,11 @@ function buildDoctorProbePlans(
     push(preferredApiFormat, preferredStream ?? false);
     push(preferredApiFormat, !(preferredStream ?? false));
   }
-  const alternate = preferredApiFormat === "responses" ? "chat" : "responses";
+  const alternate = preferredApiFormat === "responses"
+    ? "chat"
+    : preferredApiFormat === "anthropic"
+      ? "chat"
+      : "responses";
   push(alternate, false);
   push(alternate, true);
   push("chat", false);
@@ -124,7 +129,7 @@ export const doctorCommand = new Command("doctor")
     // 1. Check Node.js version
     const nodeVersion = process.version;
     checks.push({
-      name: "Node.js >= 22",
+      name: "Node.js >= 22.16",
       ...evaluateNodeRuntimeSupport({ nodeVersion }),
     });
     checks.push({
@@ -206,38 +211,8 @@ export const doctorCommand = new Command("doctor")
         ok: true,
         detail: `${books.length} book(s) found`,
       });
-    } catch {
-      checks.push({ name: "Books", ok: true, detail: "0 books" });
-    }
-
-    // 5b. Check version migration status
-    {
-      const { existsSync } = await import("node:fs");
-      const hasStructuredState = existsSync(join(root, "books"));
-      if (hasStructuredState) {
-        const { StateManager } = await import("@actalk/inkos-core");
-        const sm = new StateManager(root);
-        const bookIds = await sm.listBooks();
-        let legacyCount = 0;
-        for (const bid of bookIds) {
-          const stateDir = join(sm.bookDir(bid), "story", "state");
-          const hasNewState = existsSync(stateDir);
-          if (!hasNewState) legacyCount++;
-        }
-        if (legacyCount > 0) {
-          checks.push({
-            name: "Version Migration",
-            ok: false,
-            detail: `${legacyCount} book(s) using legacy format (pre-v0.6). Run 'inkos write next' on each to auto-migrate, or re-init with 'inkos init'.`,
-          });
-        } else if (bookIds.length > 0) {
-          checks.push({
-            name: "Version Migration",
-            ok: true,
-            detail: "All books use current format",
-          });
-        }
-      }
+    } catch (error) {
+      checks.push({ name: "Books", ok: false, detail: String(error) });
     }
 
     // 6. API connectivity test
@@ -304,7 +279,7 @@ export const doctorCommand = new Command("doctor")
           : [llmConfig.model];
         const plans = llmConfig.provider === "openai"
           ? buildDoctorProbePlans(llmConfig.apiFormat, llmConfig.stream)
-          : [{ apiFormat: (llmConfig.apiFormat ?? "chat") as "chat" | "responses", stream: llmConfig.stream ?? true }];
+          : [{ apiFormat: (llmConfig.apiFormat ?? "chat") as LLMApiFormat, stream: llmConfig.stream ?? true }];
 
         for (const model of modelCandidates) {
           for (const plan of plans) {

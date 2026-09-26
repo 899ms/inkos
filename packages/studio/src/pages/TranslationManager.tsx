@@ -24,7 +24,12 @@ interface TranslationManifest {
   readonly title: string;
   readonly sourceLanguage: string;
   readonly targetLanguage: string;
-  readonly chapters: ReadonlyArray<{ readonly number: number; readonly title: string; readonly status: string }>;
+  readonly chapters: ReadonlyArray<{
+    readonly number: number;
+    readonly title: string;
+    readonly translatedSegments: number;
+    readonly observations?: ReadonlyArray<unknown>;
+  }>;
 }
 
 interface TranslationDetailResponse {
@@ -33,7 +38,8 @@ interface TranslationDetailResponse {
   readonly chapters?: ReadonlyArray<{
     readonly number: number;
     readonly title: string;
-    readonly status: string;
+    readonly translatedSegments: number;
+    readonly observations?: ReadonlyArray<unknown>;
     readonly segments: ReadonlyArray<{
       readonly index: number;
       readonly source: string;
@@ -129,7 +135,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<TranslationDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<{ readonly tone: "success" | "error"; readonly message: string } | null>(null);
   const [busy, setBusy] = useState<"upload" | "create" | "run" | "export" | "">("");
   const [file, setFile] = useState<File | null>(null);
   const [uploaded, setUploaded] = useState<TranslationUploadResponse | null>(null);
@@ -157,7 +163,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
         setDetail(nextDetail);
         setPreviewChapterNumber(nextDetail.chapters?.[0]?.number ?? nextDetail.manifest.chapters[0]?.number ?? null);
       })
-      .catch((err) => setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`))
+      .catch((err) => setStatus({ tone: "error", message: err instanceof Error ? err.message : String(err) }))
       .finally(() => setDetailLoading(false));
   }, [selected?.projectId]);
 
@@ -169,7 +175,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
   const uploadFile = async () => {
     if (!file) return;
     setBusy("upload");
-    setStatus("");
+    setStatus(null);
     try {
       const dataUrl = await fileToDataUrl(file);
       const res = await fetchJson<TranslationUploadResponse>("/translations/upload", {
@@ -179,9 +185,9 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       });
       setUploaded(res);
       if (!title.trim()) setTitle(file.name.replace(/\.[^.]+$/u, ""));
-      setStatus(isZh ? `已上传：${res.storedPath}` : `Uploaded: ${res.storedPath}`);
+      setStatus({ tone: "success", message: isZh ? `已上传：${res.storedPath}` : `Uploaded: ${res.storedPath}` });
     } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus({ tone: "error", message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy("");
     }
@@ -190,7 +196,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
   const createProject = async () => {
     if (!uploaded?.storedPath) return;
     setBusy("create");
-    setStatus("");
+    setStatus(null);
     try {
       const res = await fetchJson<TranslationCreateResponse>("/translations/create", {
         method: "POST",
@@ -204,10 +210,10 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
         }),
       });
       setSelectedId(res.projectId);
-      setStatus(isZh ? `已创建翻译项目：${res.title}` : `Created translation project: ${res.title}`);
+      setStatus({ tone: "success", message: isZh ? `已创建翻译项目：${res.title}` : `Created translation project: ${res.title}` });
       await refetch();
     } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus({ tone: "error", message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy("");
     }
@@ -216,22 +222,25 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
   const runProject = async () => {
     if (!selected?.projectId) return;
     setBusy("run");
-    setStatus("");
+    setStatus(null);
     try {
       const res = await fetchJson<TranslationRunResponse>(`/translations/${encodeURIComponent(selected.projectId)}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ batchSize: 8 }),
       });
-      setStatus(isZh
-        ? `翻译 ${res.translatedSegments} 段，审校 ${res.reviewedChapters} 章。${res.skillIds?.length ? `Skill：${res.skillIds.join(" · ")}。` : ""}报告：${res.reportPath}`
-        : `Translated ${res.translatedSegments} segments, reviewed ${res.reviewedChapters} chapters. ${res.skillIds?.length ? `Skills: ${res.skillIds.join(" · ")}. ` : ""}Report: ${res.reportPath}`);
+      setStatus({
+        tone: "success",
+        message: isZh
+          ? `翻译 ${res.translatedSegments} 段，审校 ${res.reviewedChapters} 章。${res.skillIds?.length ? `Skill：${res.skillIds.join(" · ")}。` : ""}报告：${res.reportPath}`
+          : `Translated ${res.translatedSegments} segments, reviewed ${res.reviewedChapters} chapters. ${res.skillIds?.length ? `Skills: ${res.skillIds.join(" · ")}. ` : ""}Report: ${res.reportPath}`,
+      });
       await refetch();
       const updated = await fetchJson<TranslationDetailResponse>(`/translations/${encodeURIComponent(selected.projectId)}`);
       setDetail(updated);
       setPreviewChapterNumber(updated.chapters?.[0]?.number ?? updated.manifest.chapters[0]?.number ?? null);
     } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus({ tone: "error", message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy("");
     }
@@ -240,16 +249,16 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
   const exportProject = async (format: "md" | "txt" | "epub") => {
     if (!selected?.projectId) return;
     setBusy("export");
-    setStatus("");
+    setStatus(null);
     try {
       const res = await fetchJson<TranslationExportResponse>(`/translations/${encodeURIComponent(selected.projectId)}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ format }),
       });
-      setStatus(isZh ? `已导出 ${format}: ${res.outputPath}` : `Exported ${format}: ${res.outputPath}`);
+      setStatus({ tone: "success", message: isZh ? `已导出 ${format}: ${res.outputPath}` : `Exported ${format}: ${res.outputPath}` });
     } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus({ tone: "error", message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy("");
     }
@@ -419,7 +428,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
                       className={`rounded-lg px-3 py-2 text-left text-sm transition-colors ${previewChapter?.number === chapter.number ? "bg-primary/10 ring-1 ring-primary/50" : "bg-secondary/30 hover:bg-secondary/50"}`}
                     >
                       <div className="font-medium">{chapter.title}</div>
-                      <div className="text-xs text-muted-foreground">{chapter.status}</div>
+                      <div className="text-xs text-muted-foreground">{chapter.translatedSegments} segments · {chapter.observations?.length ?? 0} observations</div>
                     </button>
                   ))}
                 </div>
@@ -431,7 +440,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
                       <div className="text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("translation.preview")}</div>
                       <div className="font-semibold">{previewChapter.title}</div>
                     </div>
-                    <div className="text-xs text-muted-foreground">{previewChapter.status}</div>
+                    <div className="text-xs text-muted-foreground">{previewChapter.translatedSegments} segments · {previewChapter.observations?.length ?? 0} observations</div>
                   </div>
                   <div className="max-h-[560px] overflow-auto rounded-xl border border-border bg-background/50">
                     {previewChapter.segments.map((segment) => (
@@ -464,8 +473,8 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       </div>
 
       {status && (
-        <div className={`rounded-xl px-4 py-3 text-sm ${status.startsWith("Error:") ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10 text-emerald-600"}`}>
-          {status}
+        <div className={`rounded-xl px-4 py-3 text-sm ${status.tone === "error" ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10 text-emerald-600"}`}>
+          {status.message}
         </div>
       )}
     </div>

@@ -2,7 +2,7 @@ import { Type, type Static } from "@sinclair/typebox";
 
 const VarValueToolSchema = Type.Union([Type.Number(), Type.String(), Type.Boolean()]);
 
-const ConditionToolSchema = Type.Object({
+export const ConditionToolSchema = Type.Object({
   var: Type.String({ minLength: 1 }),
   op: Type.Union([
     Type.Literal(">="),
@@ -21,27 +21,24 @@ const EffectToolSchema = Type.Object({
   value: VarValueToolSchema,
 }, { additionalProperties: false });
 
-const ChoiceToolSchema = Type.Object({
+export const ChoiceToolSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
   text: Type.String(),
   targetNodeId: Type.String({ minLength: 1 }),
   condition: Type.Optional(ConditionToolSchema),
-  effects: Type.Optional(Type.Array(EffectToolSchema)),
-  weight: Type.Optional(Type.Union([
-    Type.Literal("light"),
-    Type.Literal("heavy"),
-    Type.Literal("critical"),
-  ])),
+  effects: Type.Array(EffectToolSchema),
+  weight: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
 const DialogueLineToolSchema = Type.Object({
   speaker: Type.String(),
   text: Type.String(),
-  emotion: Type.Optional(Type.String()),
+  emotion: Type.String(),
+  condition: Type.Optional(ConditionToolSchema),
 }, { additionalProperties: false });
 
 const ImageSlotToolSchema = Type.Object({
-  prompt: Type.Optional(Type.String()),
+  prompt: Type.String(),
   assetRef: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
@@ -52,16 +49,18 @@ const NodeTypeToolSchema = Type.Union([
   Type.Literal("merge"),
   Type.Literal("ending"),
   Type.Literal("explore"),
-]);
+], {
+  description: "Exactly one node is start. A start node may present the opening choices. Use branch for a dedicated later decision scene, ending for terminal outcomes, and normal/explore/merge for other scenes.",
+});
 
 const StoryNodeFields = {
-  title: Type.Optional(Type.String()),
+  title: Type.String(),
   type: NodeTypeToolSchema,
-  sceneDesc: Type.Optional(Type.String()),
-  dialogue: Type.Optional(Type.Array(DialogueLineToolSchema)),
-  choices: Type.Optional(Type.Array(ChoiceToolSchema)),
+  sceneDesc: Type.String({description:"Always-visible scene description. At shared nodes it must be true for every incoming state. Put state-specific spoken facts in dialogue entries with an explicit condition."}),
+  dialogue: Type.Array(DialogueLineToolSchema),
+  choices: Type.Array(ChoiceToolSchema),
   imageSlot: Type.Optional(ImageSlotToolSchema),
-  act: Type.Optional(Type.String()),
+  act: Type.String(),
   position: Type.Optional(Type.Object({
     x: Type.Number(),
     y: Type.Number(),
@@ -72,67 +71,57 @@ export const StoryNodeContentToolSchema = Type.Object(StoryNodeFields, {
   additionalProperties: false,
 });
 
+export const StoryNodeRevisionToolSchema = Type.Object({
+  sceneDesc: StoryNodeFields.sceneDesc,
+  dialogue: StoryNodeFields.dialogue,
+}, {additionalProperties: false});
+
 export const StoryNodeToolSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
   ...StoryNodeFields,
 }, { additionalProperties: false });
 
 const WorldAnchorToolSchema = Type.Object({
-  storyCore: Type.Optional(Type.String()),
-  theme: Type.Optional(Type.String()),
-  genre: Type.Optional(Type.String()),
-  worldRules: Type.Optional(Type.String()),
-  durationMinutes: Type.Optional(Type.Number({ minimum: 0 })),
+  storyCore: Type.String(),
+  theme: Type.String(),
+  genre: Type.String(),
+  worldRules: Type.String(),
+  durationMinutes: Type.Number({ minimum: 0 }),
 }, { additionalProperties: false });
 
 const CharacterToolSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
   name: Type.String(),
-  role: Type.Optional(Type.Union([
-    Type.Literal("protagonist"),
-    Type.Literal("antagonist"),
-    Type.Literal("support"),
-    Type.Literal("other"),
-  ])),
-  motivation: Type.Optional(Type.String()),
+  role: Type.String(),
+  motivation: Type.String(),
   voiceProfile: Type.Optional(Type.Object({
-    speakingRhythm: Type.Optional(Type.String()),
-    vocabulary: Type.Optional(Type.String()),
-    sampleLines: Type.Optional(Type.Array(Type.String())),
+    speakingRhythm: Type.String(),
+    vocabulary: Type.String(),
+    sampleLines: Type.Array(Type.String()),
   }, { additionalProperties: false })),
 }, { additionalProperties: false });
 
 const VariableToolSchema = Type.Object({
   name: Type.String({ minLength: 1 }),
-  type: Type.Union([
-    Type.Literal("flag"),
-    Type.Literal("counter"),
-    Type.Literal("relationship"),
-    Type.Literal("item"),
-  ]),
+  type: Type.String(),
   default: VarValueToolSchema,
-  desc: Type.Optional(Type.String()),
+  desc: Type.String(),
 }, { additionalProperties: false });
 
 const EndingToolSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
   nodeId: Type.String({ minLength: 1 }),
   title: Type.String(),
-  type: Type.Union([
-    Type.Literal("good"),
-    Type.Literal("bad"),
-    Type.Literal("neutral"),
-    Type.Literal("secret"),
-  ]),
-  description: Type.Optional(Type.String()),
+  type: Type.String(),
+  description: Type.String(),
 }, { additionalProperties: false });
 
 export const StoryGraphContentToolSchema = Type.Object({
-  worldAnchor: Type.Optional(WorldAnchorToolSchema),
-  characters: Type.Optional(Type.Array(CharacterToolSchema)),
-  variables: Type.Optional(Type.Array(VariableToolSchema)),
-  nodes: Type.Array(StoryNodeToolSchema, { minItems: 5 }),
-  endings: Type.Array(EndingToolSchema, { minItems: 2 }),
+  worldAnchor: WorldAnchorToolSchema,
+  characters: Type.Array(CharacterToolSchema),
+  variables: Type.Array(VariableToolSchema),
+  nodes: Type.Array(StoryNodeToolSchema, { minItems: 3 }),
+  endings: Type.Array(EndingToolSchema, { minItems: 1 }),
 }, { additionalProperties: false });
 
 export const StoryStructureToolSchema = Type.Object({
@@ -141,3 +130,4 @@ export const StoryStructureToolSchema = Type.Object({
 
 export type StoryNodeContentSubmission = Static<typeof StoryNodeContentToolSchema>;
 export type StoryStructureSubmission = Static<typeof StoryStructureToolSchema>;
+export type StoryGraphContentSubmission = Static<typeof StoryGraphContentToolSchema>;

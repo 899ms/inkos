@@ -11,8 +11,6 @@ import {
   type RuntimeStateDelta,
   type StateManifest,
 } from "../models/runtime-state.js";
-import { evaluateHookAdmission } from "../utils/hook-governance.js";
-import { resolveHookPayoffTiming } from "../utils/hook-lifecycle.js";
 import { validateRuntimeState } from "./state-validator.js";
 
 export interface RuntimeStateSnapshot {
@@ -53,11 +51,7 @@ export function applyRuntimeStateDelta(params: {
   }
 
   const hooks = applyHookOps(snapshot.hooks, delta);
-  const currentState = applyCurrentStatePatch(
-    snapshot.currentState,
-    snapshot.manifest.language,
-    delta,
-  );
+  const currentState = applyFactOps(snapshot.currentState, delta);
   const chapterSummaries = applySummaryDelta(snapshot.chapterSummaries, delta, allowReapply);
 
   const next: RuntimeStateSnapshot = {
@@ -88,27 +82,15 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
       continue;
     }
 
-    const admission = evaluateHookAdmission({
-      candidate: {
-        type: hook.type,
-        expectedPayoff: hook.expectedPayoff,
-        notes: hook.notes,
-      },
-    });
-
-    if (!admission.admit) {
-      throw new Error(`invalid hook ${hook.hookId}: ${admission.reason}`);
-    }
-
     hooksById.set(hook.hookId, { ...hook });
   }
 
   for (const hookId of delta.hookOps.resolve) {
     const existing = hooksById.get(hookId);
     if (!existing) {
-      // Hook may have been cleared by a previous settlement or not yet created — skip gracefully
-      continue;
+      throw new Error(`cannot resolve unknown hook ${hookId}`);
     }
+    if (existing.status === "superseded") throw Object.assign(new Error(`Cannot resolve superseded hook ${hookId}`), { code: "HOOK_SUPERSEDED" });
     hooksById.set(hookId, {
       ...existing,
       status: "resolved",
@@ -119,12 +101,14 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
   for (const hookId of delta.hookOps.defer) {
     const existing = hooksById.get(hookId);
     if (!existing) {
-      continue;
+      throw new Error(`cannot defer unknown hook ${hookId}`);
     }
+    if (existing.status === "superseded") throw Object.assign(new Error(`Cannot defer superseded hook ${hookId}`), { code: "HOOK_SUPERSEDED" });
     hooksById.set(hookId, {
       ...existing,
       status: "deferred",
-      lastAdvancedChapter: Math.max(existing.lastAdvancedChapter, delta.chapter),
+      // Postponing a promise is not evidence that its narrative advanced.
+      // Keep the last supported advancement rather than inventing one here.
     });
   }
 
@@ -138,96 +122,61 @@ function applyHookOps(hooksState: HooksState, delta: RuntimeStateDelta): HooksSt
 }
 
 function mergeHookRecord(existing: HookRecord, incoming: HookRecord): HookRecord {
-  const expectedPayoff = preferRicherText(existing.expectedPayoff, incoming.expectedPayoff);
-  const notes = preferRicherText(existing.notes, incoming.notes);
+  if (existing.status === "superseded") return existing;
+  if (incoming.status === "superseded") {
+    if (existing.status === "resolved") throw Object.assign(new Error(`Cannot withdraw resolved history ${existing.hookId}`), { code: "HOOK_RESOLVED_HISTORY" });
+    if (!incoming.notes.trim()) throw Object.assign(new Error(`Withdrawal authority is required for ${existing.hookId}`), { code: "HOOK_WITHDRAWAL_REASON_REQUIRED" });
+    return { ...existing, status: "superseded", notes: `${existing.notes}\n${incoming.notes.trim()}`.trim() };
+  }
   const advanced = Math.max(existing.lastAdvancedChapter, incoming.lastAdvancedChapter);
-  const progressed = advanced > existing.lastAdvancedChapter;
 
   return {
     ...existing,
     startChapter: Math.min(existing.startChapter, incoming.startChapter),
-    type: preferRicherText(existing.type, incoming.type),
-    status: mergeHookStatus(existing.status, incoming.status, progressed),
+    type: incoming.type.trim() || existing.type,
+    status: existing.status === "resolved" ? "resolved" : incoming.status,
     lastAdvancedChapter: advanced,
-    expectedPayoff,
-    payoffTiming: resolveHookPayoffTiming({
-      payoffTiming: incoming.payoffTiming ?? existing.payoffTiming,
-      expectedPayoff,
-      notes,
-    }),
-    notes,
+    expectedPayoff: incoming.expectedPayoff.trim() || existing.expectedPayoff,
+    notes: incoming.notes.trim() || existing.notes,
   };
 }
 
-function mergeHookStatus(
-  existing: HookRecord["status"],
-  incoming: HookRecord["status"],
-  progressed: boolean,
-): HookRecord["status"] {
-  if (existing === "resolved" || incoming === "resolved") return "resolved";
-  if (progressed || existing === "progressing" || incoming === "progressing") return "progressing";
-  return existing;
-}
-
-function preferRicherText(primary: string, fallback: string): string {
-  const left = primary.trim();
-  const right = fallback.trim();
-
-  if (!left) return right;
-  if (!right) return left;
-  if (left === right) return left;
-  return right.length > left.length ? right : left;
-}
-
-function applyCurrentStatePatch(
+function applyFactOps(
   currentState: CurrentStateState,
-  language: "zh" | "en",
   delta: RuntimeStateDelta,
 ): CurrentStateState {
-  if (!delta.currentStatePatch) {
-    return {
-      chapter: delta.chapter,
-      facts: [...currentState.facts],
-    };
+  const nextFacts = currentState.facts.map((fact) => ({ ...fact }));
+  const active = (fact: CurrentStateState["facts"][number]) => (
+    fact.validUntilChapter === null || fact.validUntilChapter >= delta.chapter
+  );
+  const sameKey = (
+    fact: CurrentStateState["facts"][number],
+    selector: { readonly subject: string; readonly predicate: string; readonly object?: string },
+  ) => fact.subject === selector.subject.trim()
+    && fact.predicate === selector.predicate.trim()
+    && (selector.object === undefined || fact.object === selector.object.trim());
+
+  for (const selector of delta.factOps.expire) {
+    for (const fact of nextFacts) {
+      if (active(fact) && sameKey(fact, selector)) fact.validUntilChapter = Math.max(0, delta.chapter - 1);
+    }
   }
 
-  const nextFacts = [...currentState.facts];
-  const labels = language === "en"
-    ? {
-      currentLocation: ["Current Location", "当前位置"],
-      protagonistState: ["Protagonist State", "主角状态"],
-      currentGoal: ["Current Goal", "当前目标"],
-      currentConstraint: ["Current Constraint", "当前限制"],
-      currentAlliances: ["Current Alliances", "Current Relationships", "当前敌我"],
-      currentConflict: ["Current Conflict", "当前冲突"],
-    }
-    : {
-      currentLocation: ["当前位置", "Current Location"],
-      protagonistState: ["主角状态", "Protagonist State"],
-      currentGoal: ["当前目标", "Current Goal"],
-      currentConstraint: ["当前限制", "Current Constraint"],
-      currentAlliances: ["当前敌我", "Current Alliances", "Current Relationships"],
-      currentConflict: ["当前冲突", "Current Conflict"],
+  for (const input of delta.factOps.upsert) {
+    const fact = {
+      subject: input.subject.trim(),
+      predicate: input.predicate.trim(),
+      object: input.object.trim(),
     };
-
-  for (const [patchKey, aliases] of Object.entries(labels) as Array<[
-    keyof typeof labels,
-    string[],
-  ]>) {
-    const value = delta.currentStatePatch[patchKey];
-    if (value === undefined) continue;
-
-    for (let index = nextFacts.length - 1; index >= 0; index -= 1) {
-      const predicate = nextFacts[index]?.predicate ?? "";
-      if (aliases.some((alias) => alias.toLowerCase() === predicate.toLowerCase())) {
-        nextFacts.splice(index, 1);
+    const exact = nextFacts.some((candidate) => active(candidate) && sameKey(candidate, fact));
+    if (exact) continue;
+    for (const candidate of nextFacts) {
+      if (active(candidate) && candidate.subject === fact.subject && candidate.predicate === fact.predicate) {
+        candidate.validUntilChapter = Math.max(0, delta.chapter - 1);
       }
     }
-
     nextFacts.push({
-      subject: "protagonist",
-      predicate: aliases[0]!,
-      object: value,
+      ...fact,
       validFromChapter: delta.chapter,
       validUntilChapter: null,
       sourceChapter: delta.chapter,

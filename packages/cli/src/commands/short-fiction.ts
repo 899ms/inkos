@@ -5,51 +5,66 @@ import {
   SHORT_FICTION_DEFAULT_CHAPTERS,
   SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
   SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER,
-  SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER,
-  SHORT_FICTION_EN_MIN_WORDS_PER_CHAPTER,
-  SHORT_FICTION_MAX_CHAPTERS,
-  SHORT_FICTION_MAX_CHARS_PER_CHAPTER,
-  SHORT_FICTION_MIN_CHAPTERS,
-  SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
   activatedSkillIds,
-  createLLMClient,
+  createBuiltInWorkProfileRegistry,
+  createShortFictionRunTool,
+  createShortFictionReviseTool,
+  executeExplicitCapabilityTool,
   loadAvailableAgentSkills,
-  resolveProductionSkillActivations,
-  runShortFictionProduction,
-  type LLMConfig,
-  type Logger,
-  type OnStreamProgress,
+  PipelineRunner,
+  resolveProfileSkillActivations,
   type ShortFictionReference,
   type ShortFictionLanguage,
 } from "@actalk/inkos-core";
-import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError } from "../utils.js";
+import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError, resolveCliProfileSkills } from "../utils.js";
 
 export { extractResponsesImageBase64, resolveCoverApiKey } from "@actalk/inkos-core";
 
 export const shortCommand = new Command("short")
   .description("Short fiction production workflow");
 
+shortCommand.command("revise")
+  .description("Revise a complete short-fiction Work using its review and update its sales package")
+  .argument("<story-id>")
+  .requiredOption("--instruction <text>","Revision direction")
+  .option("--chars <n>","Target native length per chapter","1000")
+  .option("--model <model>","Whole-story revision model","deepseek-v4-pro")
+  .option("--chapters <numbers>","Limit revision to comma-separated chapter numbers")
+  .option("--json","Output JSON")
+  .action(async(storyId:string,opts)=>{
+    try {
+      const root=findProjectRoot();const config=await loadConfig({projectRoot:root});
+      config.modelOverrides={...config.modelOverrides,"short-reviser":opts.model};
+      const pipeline=new PipelineRunner(buildPipelineConfig(config,root,{quiet:opts.json}));
+      const skills=await resolveCliProfileSkills(root,"short-fiction");
+      const result=await executeExplicitCapabilityTool({projectRoot:root,
+        binding:{capabilityId:"short-fiction",actionId:"revise_short_fiction",profileId:"short-fiction",risk:"recoverable-write"},
+        tool:createShortFictionReviseTool(pipeline,root,storyId,{activeSkills:()=>skills}),workId:storyId,
+        parameters:{instruction:opts.instruction,charsPerChapter:parsePositiveInteger(opts.chars,1000,"chars"),...(opts.chapters?{chapterNumbers:opts.chapters.split(",").map((number:string)=>parsePositiveInteger(number.trim(),1,"chapter"))}:{})},
+      });
+      log(opts.json?JSON.stringify(result,null,2):result.content??result.summary);
+    } catch(error) {logCommandError("Short revision failed",error,opts.json);process.exitCode=1;}
+  });
+
 shortCommand
   .command("run")
   .description("Run a short fiction chain from a direction")
   .requiredOption("--direction <text>", "Story direction, e.g. \"女频短篇 婚姻背叛 证据反杀\" or \"female-lead short: marriage betrayal, evidence payback\"")
   .option("--reference <path>", "Optional reference notes/text")
-  .option("--story-id <id>", "Output story id under shorts/")
-  .option("--out-dir <path>", "Output directory", "shorts")
+  .option("--story-id <id>", "Work id for the generated short fiction")
   .option("--lang <language>", "Writing language: zh or en", "zh")
-  .option("--chapters <n>", "Complete short chapter count (12-18)", String(SHORT_FICTION_DEFAULT_CHAPTERS))
-  .option("--chars <n>", "Per-chapter length: zh characters (900-1200) or en words (600-800)")
+  .option("--chapters <n>", "Complete short chapter count", String(SHORT_FICTION_DEFAULT_CHAPTERS))
+  .option("--chars <n>", "Per-chapter length: zh characters or en words")
+  .option("--min-chapter-length-ratio <ratio>", "Minimum complete chapter length relative to target (0 < ratio <= 1)", "0.5")
   .option("--llm-base-url <url>", "Override LLM base URL")
   .option("--model <model>", "Fallback model for all short stages")
-  .option("--planner-model <model>", "Model for outline creation/revision")
-  .option("--outline-review-model <model>", "Model for outline review")
+  .option("--planner-model <model>", "Model for outline creation")
   .option("--writer-model <model>", "Model for first full draft")
   .option("--draft-review-model <model>", "Model for draft review")
-  .option("--revise-model <model>", "Model for second full draft")
   .option("--package-model <model>", "Model for synopsis and cover prompt packaging")
-  .option("--cover-base-url <url>", "OpenAI-compatible Responses API base URL for cover generation, e.g. https://api.openai.com/v1")
-  .option("--cover-endpoint <url>", "Exact Responses endpoint for cover generation; overrides --cover-base-url")
-  .option("--cover-model <model>", "Image-capable Responses model for cover generation", "gpt-5.5")
+  .option("--cover-base-url <url>", "Image API base URL; defaults to the project cover service")
+  .option("--cover-endpoint <url>", "Exact image endpoint; overrides --cover-base-url")
+  .option("--cover-model <model>", "Image model; defaults to the project cover model")
   .option("--cover-size <size>", "Cover image size", "1024x1360")
   .option("--cover-api-key-env <name>", "Env var containing cover API key", "INKOS_COVER_API_KEY")
   .option("--no-cover", "Skip cover image generation")
@@ -58,83 +73,76 @@ shortCommand
     try {
       const root = findProjectRoot();
       const language = parseShortFictionLanguage(opts.lang);
-      const chapterCount = parseBoundedInteger(
+      const chapterCount = parsePositiveInteger(
         opts.chapters,
         SHORT_FICTION_DEFAULT_CHAPTERS,
         "chapters",
-        SHORT_FICTION_MIN_CHAPTERS,
-        SHORT_FICTION_MAX_CHAPTERS,
       );
       const charsPerChapter = opts.chars === undefined
         ? undefined
-        : parseBoundedInteger(
+        : parsePositiveInteger(
             opts.chars,
             language === "en" ? SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER : SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
             "chars",
-            language === "en" ? SHORT_FICTION_EN_MIN_WORDS_PER_CHAPTER : SHORT_FICTION_MIN_CHARS_PER_CHAPTER,
-            language === "en" ? SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER : SHORT_FICTION_MAX_CHARS_PER_CHAPTER,
           );
       const reference = opts.reference ? await readReference(root, opts.reference) : undefined;
       const models = resolveShortRunModels(opts);
       const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
-      const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "shortWriting");
+      const activatedSkills = resolveProfileSkillActivations(
+        configuredSkills.skills,
+        createBuiltInWorkProfileRegistry().require("short-fiction"),
+      );
 
-      const plannerRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.planner,
-        quiet: Boolean(opts.json),
-      });
-      const outlineReviewRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.outlineReview,
-        quiet: Boolean(opts.json),
-      });
-      const writerRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.writer,
-        quiet: Boolean(opts.json),
-      });
-      const draftReviewRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.draftReview,
-        quiet: Boolean(opts.json),
-      });
-      const reviseRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.revise,
-        quiet: Boolean(opts.json),
-      });
-      const packageRuntime = await createShortRuntime(root, {
-        llmBaseUrl: opts.llmBaseUrl,
-        model: models.package,
-        quiet: Boolean(opts.json),
-      });
-
-      const result = await runShortFictionProduction({
+      const config = await loadConfig({ projectRoot: root });
+      if (opts.llmBaseUrl) config.llm.baseUrl = opts.llmBaseUrl;
+      if (opts.model) config.llm.model = opts.model;
+      const modelOverrides = { ...(config.modelOverrides ?? {}) };
+      const stageModels = {
+        "short-outline": models.planner,
+        "short-writer": models.writer,
+        "short-draft-review": models.draftReview,
+        "short-package": models.package,
+      };
+      for (const [stage, model] of Object.entries(stageModels)) {
+        if (model) modelOverrides[stage] = model;
+      }
+      config.modelOverrides = modelOverrides;
+      const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { quiet: Boolean(opts.json) }));
+      const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        direction: opts.direction,
-        runtimes: {
-          planner: { ...plannerRuntime, projectRoot: root, activatedSkills },
-          outlineReview: { ...outlineReviewRuntime, projectRoot: root, activatedSkills },
-          writer: { ...writerRuntime, projectRoot: root, activatedSkills },
-          draftReview: { ...draftReviewRuntime, projectRoot: root, activatedSkills },
-          revise: { ...reviseRuntime, projectRoot: root, activatedSkills },
-          package: { ...packageRuntime, projectRoot: root, activatedSkills },
+        binding: { capabilityId: "short-fiction", actionId: "short_fiction_run", profileId: "short-fiction", risk: "recoverable-write" },
+        tool: createShortFictionRunTool(pipeline, root, { language, defaultSkills: activatedSkills }),
+        parameters: {
+          direction: opts.direction,
+          reference: reference?.text,
+          storyId: opts.storyId,
+          chapters: chapterCount,
+          charsPerChapter,
+          minChapterLengthRatio: Number(opts.minChapterLengthRatio),
+          language,
+          cover: opts.cover,
+          coverBaseUrl: opts.coverBaseUrl,
+          coverEndpoint: opts.coverEndpoint,
+          coverModel: opts.coverModel,
+          coverSize: opts.coverSize,
+          coverApiKeyEnv: opts.coverApiKeyEnv,
         },
-        reference,
-        storyId: opts.storyId,
-        outDir: opts.outDir,
-        chapterCount,
-        charsPerChapter,
-        language,
-        cover: opts.cover,
-        coverBaseUrl: opts.coverBaseUrl,
-        coverEndpoint: opts.coverEndpoint,
-        coverModel: opts.coverModel,
-        coverSize: opts.coverSize,
-        coverApiKeyEnv: opts.coverApiKeyEnv,
-        onProgress: opts.json ? undefined : (message) => log(message),
+        onUpdate: opts.json ? undefined : (update) => {
+          const text = (update as { content?: Array<{ type?: string; text?: string }> }).content
+            ?.filter((item) => item.type === "text")
+            .map((item) => item.text ?? "")
+            .join("\n")
+            .trim();
+          if (text) log(text);
+        },
       });
+      const result = action.data as {
+        storyId: string;
+        finalMarkdownPath: string;
+        salesPackagePath: string;
+        coverImagePath?: string;
+        coverError?: string;
+      };
 
       const payload = {
         ...result,
@@ -159,17 +167,15 @@ interface ShortRunOptions {
   readonly direction: string;
   readonly reference?: string;
   readonly storyId?: string;
-  readonly outDir: string;
   readonly lang: string;
   readonly chapters?: string;
   readonly chars?: string;
+  readonly minChapterLengthRatio?: string;
   readonly llmBaseUrl?: string;
   readonly model?: string;
   readonly plannerModel?: string;
-  readonly outlineReviewModel?: string;
   readonly writerModel?: string;
   readonly draftReviewModel?: string;
-  readonly reviseModel?: string;
   readonly packageModel?: string;
   readonly coverBaseUrl?: string;
   readonly coverEndpoint?: string;
@@ -185,81 +191,19 @@ function parseShortFictionLanguage(value: string): ShortFictionLanguage {
   throw new Error("lang must be zh or en.");
 }
 
-interface ShortRuntime {
-  readonly client: ReturnType<typeof createLLMClient>;
-  readonly model: string;
-  readonly logger?: Logger;
-  readonly onStreamProgress?: OnStreamProgress;
-}
-
 interface ShortRunModels {
   readonly planner?: string;
-  readonly outlineReview?: string;
   readonly writer?: string;
   readonly draftReview?: string;
-  readonly revise?: string;
   readonly package?: string;
 }
 
 function resolveShortRunModels(options: ShortRunOptions): ShortRunModels {
   return {
     planner: options.plannerModel || options.model,
-    outlineReview: options.outlineReviewModel || options.model,
     writer: options.writerModel || options.model,
     draftReview: options.draftReviewModel || options.model,
-    revise: options.reviseModel || options.model,
     package: options.packageModel || options.model,
-  };
-}
-
-async function createShortRuntime(
-  root: string,
-  options: {
-    readonly llmBaseUrl?: string;
-    readonly model?: string;
-    readonly quiet?: boolean;
-  },
-): Promise<ShortRuntime> {
-  try {
-    const config = await loadConfig({ projectRoot: root });
-    if (options.llmBaseUrl) config.llm.baseUrl = options.llmBaseUrl;
-    if (options.model) config.llm.model = options.model;
-    const pipelineConfig = buildPipelineConfig(config, root, { quiet: options.quiet });
-    return {
-      client: pipelineConfig.client,
-      model: pipelineConfig.model,
-      logger: pipelineConfig.logger,
-      onStreamProgress: pipelineConfig.onStreamProgress,
-    };
-  } catch (e) {
-    if (!String(e).includes("inkos.json not found")) throw e;
-    const llmConfig = buildEnvLLMConfig(options);
-    return {
-      client: createLLMClient(llmConfig),
-      model: llmConfig.model,
-    };
-  }
-}
-
-function buildEnvLLMConfig(options: {
-  readonly llmBaseUrl?: string;
-  readonly model?: string;
-}): LLMConfig {
-  const baseUrl = options.llmBaseUrl ?? process.env.INKOS_LLM_BASE_URL;
-  const model = options.model ?? process.env.INKOS_LLM_MODEL;
-  if (!baseUrl) throw new Error("LLM base URL is required. Set INKOS_LLM_BASE_URL or pass --llm-base-url.");
-  if (!model) throw new Error("LLM model is required. Set INKOS_LLM_MODEL or pass --model.");
-  return {
-    provider: "openai",
-    service: process.env.INKOS_LLM_SERVICE ?? "custom",
-    configSource: "env",
-    baseUrl,
-    apiKey: process.env.INKOS_LLM_API_KEY ?? "",
-    model,
-    temperature: parseEnvNumber(process.env.INKOS_LLM_TEMPERATURE, 0.1),
-    thinkingBudget: parseEnvInteger(process.env.INKOS_LLM_THINKING_BUDGET, 0),
-    apiFormat: process.env.INKOS_LLM_API_FORMAT === "responses" ? "responses" : "chat",
-    stream: process.env.INKOS_LLM_STREAM === "false" ? false : true,
   };
 }
 
@@ -271,30 +215,16 @@ async function readReference(root: string, path: string): Promise<ShortFictionRe
   };
 }
 
-function parseBoundedInteger(
+function parsePositiveInteger(
   value: string | undefined,
   fallback: number,
   name: string,
-  min: number,
-  max: number,
 ): number {
   const parsed = value ? Number.parseInt(value, 10) : fallback;
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer.`);
   }
   return parsed;
-}
-
-function parseEnvNumber(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function parseEnvInteger(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function formatCoverStatus(coverImagePath?: string, coverError?: string): string {
@@ -305,7 +235,8 @@ function formatCoverStatus(coverImagePath?: string, coverError?: string): string
 
 function logCommandError(prefix: string, error: unknown, json?: boolean): void {
   if (json) {
-    log(JSON.stringify({ error: `${prefix}: ${String(error)}` }, null, 2));
+    const details=error&&typeof error==="object"?error as Record<string,unknown>:{};
+    log(JSON.stringify({ error: `${prefix}: ${String(error)}`,code:details.code,stopReason:details.stopReason,resultTool:details.resultTool,lastToolError:details.lastToolError,lastAssistantText:details.lastAssistantText }, null, 2));
     return;
   }
   logError(`${prefix}: ${String(error)}`);

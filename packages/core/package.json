@@ -1,6 +1,6 @@
 {
   "name": "@actalk/inkos-core",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "description": "InkOS pi-agent production harness for story creation, governed context, retrieval, review, and interactive worlds",
   "keywords": [
     "story-creation-ai-agent",
@@ -25,6 +25,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./llm/api-format": {
+      "types": "./dist/llm/api-format.d.ts",
+      "import": "./dist/llm/api-format.js"
+    },
     "./interactive-film/evaluator": {
       "types": "./dist/interactive-film/evaluator.d.ts",
       "import": "./dist/interactive-film/evaluator.js"
@@ -41,7 +45,6 @@
   "files": [
     "dist",
     "!dist/__tests__",
-    "genres",
     "skills"
   ],
   "license": "AGPL-3.0-only",
@@ -51,12 +54,13 @@
     "directory": "packages/core"
   },
   "scripts": {
-    "prepack": "node ../../scripts/prepare-package-for-publish.mjs",
+    "prepack": "npm run build && node ../../scripts/prepare-package-for-publish.mjs",
     "postpack": "node ../../scripts/restore-package-json.mjs",
     "prepublishOnly": "node ../../scripts/verify-no-workspace-protocol.mjs .",
-    "build": "tsc",
+    "build": "node ../../scripts/clean-package-dist.mjs && tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
+    "test:flows": "vitest run src/__tests__/*.flow.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -75,5 +79,8 @@
     "@types/js-yaml": "^4.0.9",
     "typescript": "^5.8.0",
     "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22.16.0"
   }
 }

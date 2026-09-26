@@ -154,8 +154,9 @@ async function hasSkillManifest(dir: string): Promise<boolean> {
   try {
     const info = await stat(join(dir, "SKILL.md"));
     return info.isFile();
-  } catch {
-    return false;
+  } catch (error) {
+    if (isMissingPathError(error)) return false;
+    throw error;
   }
 }
 

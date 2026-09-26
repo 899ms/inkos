@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { workDirectory } from "../harness/work-store.js";
 import type { MaterialAsset } from "../materials/ingest.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { safeChildPath } from "../utils/path-safety.js";
@@ -42,9 +43,6 @@ export interface BookReferenceList {
 }
 
 const MANIFEST_FILE = "reference_bindings.json";
-const MAX_USES = 12;
-const MAX_USE_LENGTH = 120;
-const MAX_NOTE_LENGTH = 2_000;
 
 export async function bindBookReference(
   projectRoot: string,
@@ -188,14 +186,10 @@ function normalizeUses(values: ReadonlyArray<string>): string[] {
     if (typeof value !== "string") throw new Error("Reference uses must contain only text.");
     const use = value.trim();
     if (!use || seen.has(use)) continue;
-    if (use.length > MAX_USE_LENGTH) {
-      throw new Error(`Reference use is too long (${use.length}/${MAX_USE_LENGTH}).`);
-    }
     seen.add(use);
     uses.push(use);
   }
   if (uses.length === 0) throw new Error("At least one reference use is required.");
-  if (uses.length > MAX_USES) throw new Error(`Too many reference uses (${uses.length}/${MAX_USES}).`);
   return uses;
 }
 
@@ -204,9 +198,6 @@ function normalizeNote(value: string | undefined): string | undefined {
   if (typeof value !== "string") throw new Error("Reference note must be text.");
   const note = value.trim();
   if (!note) return undefined;
-  if (note.length > MAX_NOTE_LENGTH) {
-    throw new Error(`Reference note is too long (${note.length}/${MAX_NOTE_LENGTH}).`);
-  }
   return note;
 }
 
@@ -226,11 +217,11 @@ function assertMaterialId(value: string): string {
 }
 
 function referenceManifestPath(projectRoot: string, bookId: string): string {
-  return join(projectRoot, "books", bookId, "story", MANIFEST_FILE);
+  return join(workDirectory(projectRoot, bookId), "source", "story", MANIFEST_FILE);
 }
 
 async function assertBookExists(projectRoot: string, bookId: string): Promise<void> {
-  const bookDir = join(projectRoot, "books", bookId);
+  const bookDir = join(workDirectory(projectRoot, bookId), "source");
   try {
     if (!(await stat(bookDir)).isDirectory()) throw new Error(`Book not found: ${bookId}`);
   } catch (error) {
@@ -241,7 +232,7 @@ async function assertBookExists(projectRoot: string, bookId: string): Promise<vo
 
 async function writeManifestAtomic(projectRoot: string, manifest: BookReferenceManifest): Promise<void> {
   const path = referenceManifestPath(projectRoot, manifest.bookId);
-  await mkdir(join(projectRoot, "books", manifest.bookId, "story"), { recursive: true });
+  await mkdir(join(workDirectory(projectRoot, manifest.bookId), "source", "story"), { recursive: true });
   const tempPath = `${path}.tmp-${randomUUID()}`;
   try {
     await writeFile(tempPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");

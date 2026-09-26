@@ -8,7 +8,8 @@ describe("interactive-film-authoring tool set", () => {
     expect(names).toContain("fill_node");
     expect(names).toContain("generate_node_image");
     expect(names).toContain("propose_action");
-    expect(names).not.toContain("draft_structure");
+    expect(names).toEqual(expect.arrayContaining(['draft_structure','connect_choice','inspect_story_graph','export_interactive_film']));
+    expect(names).toContain('remove_node');
   });
   it("confirmed draft_structure = the structure tool", () => {
     expect(buildFilmAuthoringToolNames("draft_structure")).toEqual(["draft_structure"]);

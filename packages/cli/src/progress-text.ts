@@ -7,6 +7,7 @@ import {
   formatWriteNextResultLines,
   type CliLanguage,
 } from "./localization.js";
+import type { Observation } from "@actalk/inkos-core";
 
 export { type CliLanguage };
 
@@ -25,14 +26,7 @@ export function formatWriteCompletionLines(
     readonly chapterNumber: number;
     readonly title: string;
     readonly wordCount: number;
-    readonly passedAudit: boolean;
-    readonly revised: boolean;
-    readonly status: string;
-    readonly issues: ReadonlyArray<{
-      readonly severity: string;
-      readonly category: string;
-      readonly description: string;
-    }>;
+    readonly observations: ReadonlyArray<Observation>;
   },
 ): string[] {
   return [...formatWriteNextResultLines(language, result), ""];

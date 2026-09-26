@@ -11,7 +11,7 @@ Use this skill when the user asks what short fiction is working, how platforms d
 - Separate a durable mechanism from a temporary surface trend.
 - Do not turn benchmark research into plagiarism detection or a fixed tag table.
 - Recommend several recombinations with different characters, causes, evidence, and consequences.
-- Research does not authorize generation. If the user wants a short produced, move through the normal confirmation flow.
+- Research alone does not authorize generation. Produce a short only when the user requests it and the host permits the operation.
 - Respond in the user's language.
 
 Load `references/short-market-rubric.md` for a full benchmark report.

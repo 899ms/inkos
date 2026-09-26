@@ -8,8 +8,8 @@ export type TruthAuthority =
 const NORMALIZED_TRUTH_FILES = new Set([
   "author_intent.md",
   "current_focus.md",
-  "story_bible.md",
-  "volume_outline.md",
+  "outline/story_frame.md",
+  "outline/volume_map.md",
   "book_rules.md",
   "current_state.md",
   "pending_hooks.md",
@@ -30,8 +30,8 @@ export function classifyTruthAuthority(fileName: string): TruthAuthority {
     case "author_intent.md":
     case "current_focus.md":
       return "direction";
-    case "story_bible.md":
-    case "volume_outline.md":
+    case "outline/story_frame.md":
+    case "outline/volume_map.md":
       return "foundation";
     case "book_rules.md":
       return "rules";

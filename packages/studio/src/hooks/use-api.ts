@@ -38,14 +38,9 @@ export function deriveInvalidationPaths(path: string): ReadonlyArray<string> {
     return ["/api/v1/project", normalized];
   }
 
-  const bookAction = normalized.match(/^\/api\/v1\/books\/([^/]+)\/(write-next|draft)$/);
+  const bookAction = normalized.match(/^\/api\/v1\/books\/([^/]+)\/write-next$/);
   if (bookAction) {
     return ["/api/v1/books", `/api/v1/books/${bookAction[1]}`];
-  }
-
-  const chapterAction = normalized.match(/^\/api\/v1\/books\/([^/]+)\/chapters\/\d+\/(approve|reject)$/);
-  if (chapterAction) {
-    return ["/api/v1/books", `/api/v1/books/${chapterAction[1]}`];
   }
 
   if (/^\/api\/v1\/daemon\/(start|stop)$/.test(normalized)) {
@@ -89,6 +84,10 @@ async function readErrorMessage(res: Response): Promise<string> {
   return localizeKnownRuntimeMessage(`${res.status} ${res.statusText}`.trim());
 }
 
+export class ApiResponseError extends Error {
+  constructor(message: string, readonly status: number, readonly payload: unknown) { super(message); }
+}
+
 export async function fetchJson<T>(
   path: string,
   init: RequestInit = {},
@@ -103,7 +102,8 @@ export async function fetchJson<T>(
   const res = await fetchImpl(url, init);
 
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res));
+    const payload = await res.clone().json().catch(() => undefined);
+    throw new ApiResponseError(await readErrorMessage(res), res.status, payload);
   }
 
   if (res.status === 204) {

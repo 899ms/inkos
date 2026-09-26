@@ -1,8 +1,29 @@
 import type { LLMClient } from "../llm/provider.js";
-import { runWorkerAgent } from "../agent/worker-agent.js";
-import { appendActivatedSkillGuidance } from "../agents/base.js";
+import { runWorkerAgentTool } from "../agent/worker-agent.js";
+import { Type } from "@sinclair/typebox";
+import { prepareWorkerMessages } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
-import type { TranslationGlossaryTerm, TranslationModelPort, TranslationSegment } from "./types.js";
+import type { TranslationModelPort, TranslationSegment } from "./types.js";
+import { ObservationToolSchema } from "../agents/review-tool.js";
+
+const TranslationResultToolSchema = Type.Object({
+  chapterTitle: Type.Optional(Type.String()),
+  segments: Type.Array(Type.Object({
+    index: Type.Integer({ minimum: 0 }),
+    target: Type.String({ minLength: 1 }),
+    notes: Type.Optional(Type.String()),
+  })),
+  glossary: Type.Optional(Type.Array(Type.Object({
+    source: Type.String({ minLength: 1 }),
+    target: Type.String({ minLength: 1 }),
+    note: Type.Optional(Type.String()),
+  }))),
+});
+
+const TranslationReviewToolSchema = Type.Object({
+  summary: Type.String(),
+  observations: Type.Array(ObservationToolSchema),
+});
 
 export function createLLMTranslationModel(input: {
   readonly client: LLMClient;
@@ -12,16 +33,23 @@ export function createLLMTranslationModel(input: {
   readonly signal?: AbortSignal;
 }): TranslationModelPort {
   return {
+    async reviseSegment(request){
+      return runWorkerAgentTool(input.client,input.model,await prepareWorkerMessages(input,[
+        {role:"system",content:"Revise only the supplied translated paragraph according to the instruction. Preserve all facts, identities, terminology and point of view in its source. Use neighboring paragraphs only for continuity. Return the complete revised target text, without commentary."},
+        {role:"user",content:JSON.stringify(request)},
+      ],input.maxTokens??4096,"translation-revision"),{
+        name:"submit_translation_revision",label:"Revise one translated paragraph",description:"Submit only the revised target paragraph.",
+        parameters:Type.Object({target:Type.String({minLength:1})}),
+        validate:result=>{if(!result.target.trim())throw Object.assign(new Error("A translated paragraph cannot be empty"),{code:"TRANSLATION_TARGET_EMPTY"});return{target:result.target.trim()};},
+      },{temperature:0.2,maxTokens:input.maxTokens??4096,signal:input.signal});
+    },
     async translateSegments(request) {
-      const response = await runWorkerAgent(input.client, input.model, appendActivatedSkillGuidance([
+      const parsed = await runWorkerAgentTool(input.client, input.model, await prepareWorkerMessages(input, [
         {
           role: "system",
           content: [
-            "You are InkOS Translation Agent.",
-            "Translate faithfully between the requested languages.",
-            "Preserve paragraph order, scene meaning, names, tone, and terminology.",
-            "Do not summarize. Do not add commentary outside JSON.",
-            "Return JSON only: {\"segments\":[{\"index\":1,\"target\":\"...\",\"notes\":\"optional\"}],\"glossary\":[{\"source\":\"...\",\"target\":\"...\",\"note\":\"optional\"}]}",
+            "Translate the chapter title and all segments with the activated translation Skill.",
+            "Submit the complete translation through the translation result tool.",
           ].join("\n"),
         },
         {
@@ -37,21 +65,32 @@ export function createLLMTranslationModel(input: {
             })),
           }, null, 2),
         },
-      ], input.activatedSkills), { temperature: 0.2, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
-      const parsed = parseJsonObject(response.content);
-      return {
-        segments: parseTranslatedSegments(parsed.segments, request.segments),
-        glossary: parseGlossary(parsed.glossary),
+      ], input.maxTokens ?? 8192, "translation"), {
+        name: "submit_translation",
+        label: "Submit translation",
+        description: "Submit translated segments and glossary updates.",
+        parameters: TranslationResultToolSchema,
+        validate:result=>{validateTranslatedSegments(result.segments,request.segments);return result;},
+      }, { temperature: 0.2, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
+  return {
+        ...(parsed.chapterTitle?.trim()
+          ? { chapterTitle: parsed.chapterTitle.trim() }
+          : {}),
+        segments: validateTranslatedSegments(parsed.segments, request.segments),
+        glossary: (parsed.glossary ?? []).map((term) => ({
+          source: term.source.trim(),
+          target: term.target.trim(),
+          ...(term.note?.trim() ? { note: term.note.trim() } : {}),
+        })),
       };
     },
     async reviewChapter(request) {
-      const response = await runWorkerAgent(input.client, input.model, appendActivatedSkillGuidance([
+      const parsed = await runWorkerAgentTool(input.client, input.model, await prepareWorkerMessages(input, [
         {
           role: "system",
           content: [
-            "You are InkOS Translation Review Agent.",
-            "Check fidelity, omissions, terminology, pronouns, names, and target-language readability.",
-            "Return JSON only: {\"passed\":true,\"summary\":\"...\",\"issues\":[\"...\"]}.",
+            "Review the translation with the activated translation Skill.",
+            "Submit the review summary and evidence-backed observations through the review result tool. An empty observations array is valid.",
           ].join("\n"),
         },
         {
@@ -68,76 +107,41 @@ export function createLLMTranslationModel(input: {
             })),
           }, null, 2),
         },
-      ], input.activatedSkills), { temperature: 0.1, maxTokens: 4096, signal: input.signal });
-      const parsed = parseJsonObject(response.content);
+      ], 4096, "translation-review"), {
+        name: "submit_translation_review",
+        label: "Submit translation review",
+        description: "Submit the translation review.",
+        parameters: TranslationReviewToolSchema,
+      }, { temperature: 0.1, maxTokens: 4096, signal: input.signal });
       return {
-        passed: parsed.passed === true,
-        summary: typeof parsed.summary === "string" ? parsed.summary : "Translation review completed.",
-        issues: Array.isArray(parsed.issues) ? parsed.issues.filter((issue): issue is string => typeof issue === "string") : [],
+        summary: parsed.summary,
+        observations: parsed.observations,
       };
     },
   };
 }
 
-function parseTranslatedSegments(value: unknown, sourceSegments: ReadonlyArray<TranslationSegment>): ReadonlyArray<{
+function validateTranslatedSegments(
+  value: ReadonlyArray<{ readonly index: number; readonly target: string; readonly notes?: string }>,
+  sourceSegments: ReadonlyArray<TranslationSegment>,
+): ReadonlyArray<{
   readonly index: number;
   readonly target: string;
   readonly notes?: string;
 }> {
-  if (!Array.isArray(value)) {
-    throw new Error("Translation model did not return a segments array.");
-  }
   const sourceIndex = new Set(sourceSegments.map((segment) => segment.index));
-  const parsed = value.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as Record<string, unknown>;
-    const index = Number(record.index);
-    const target = typeof record.target === "string" ? record.target.trim() : "";
-    if (!Number.isInteger(index) || !sourceIndex.has(index) || !target) return [];
-    return [{
-      index,
-      target,
-      ...(typeof record.notes === "string" && record.notes.trim() ? { notes: record.notes.trim() } : {}),
-    }];
-  });
-  if (parsed.length === 0) throw new Error("Translation model returned no usable translated segments.");
-  return parsed;
-}
-
-function parseGlossary(value: unknown): ReadonlyArray<TranslationGlossaryTerm> {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as Record<string, unknown>;
-    const source = typeof record.source === "string" ? record.source.trim() : "";
-    const target = typeof record.target === "string" ? record.target.trim() : "";
-    if (!source || !target) return [];
-    return [{
-      source,
-      target,
-      ...(typeof record.note === "string" && record.note.trim() ? { note: record.note.trim() } : {}),
-    }];
-  });
-}
-
-function parseJsonObject(raw: string): Record<string, unknown> {
-  const trimmed = stripFence(raw.trim());
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  } catch {
-    // Try extracting the first object below.
+  const byIndex = new Map<number, { readonly index: number; readonly target: string; readonly notes?: string }>();
+  for (const item of value) {
+    if(!item.target.trim())throw Object.assign(new Error(`Translation returned an empty target for segment ${item.index}.`),{code:"TRANSLATION_TARGET_EMPTY",segmentIndex:item.index});
+    if (!sourceIndex.has(item.index)) throw new Error(`Translation returned unknown segment index ${item.index}.`);
+    if (byIndex.has(item.index)) throw new Error(`Translation returned duplicate segment index ${item.index}.`);
+    byIndex.set(item.index, {
+      index: item.index,
+      target: item.target.trim(),
+      ...(item.notes?.trim() ? { notes: item.notes.trim() } : {}),
+    });
   }
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    const parsed = JSON.parse(trimmed.slice(start, end + 1)) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  }
-  throw new Error("Translation model did not return a JSON object.");
-}
-
-function stripFence(raw: string): string {
-  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(raw);
-  return match ? match[1]!.trim() : raw;
+  const missing = sourceSegments.map((segment) => segment.index).filter((index) => !byIndex.has(index));
+  if (missing.length > 0) throw new Error(`Translation omitted segment index(es): ${missing.join(", ")}.`);
+  return sourceSegments.map((segment) => byIndex.get(segment.index)!);
 }

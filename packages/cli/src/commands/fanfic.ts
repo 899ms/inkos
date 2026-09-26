@@ -1,13 +1,21 @@
 import { Command } from "commander";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, resolve, basename } from "node:path";
-import { deriveBookIdFromTitle, normalizePlatformOrOther, PipelineRunner, type BookConfig, type FanficMode } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import {
+  createFanficBookTool,
+  createRefreshFanficCanonTool,
+  deriveBookIdFromTitle,
+  executeExplicitCapabilityTool,
+  PlatformSchema,
+  PipelineRunner,
+  type BookConfig,
+  type FanficMode,
+} from "@actalk/inkos-core";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatFanficCanonMissingError,
-  formatFanficInvalidModeError,
   formatFanficSourceDirEmptyError,
-  formatFanficSourceTooShortError,
+  resolveCliLanguage,
 } from "../localization.js";
 
 export const fanficCommand = new Command("fanfic")
@@ -18,12 +26,12 @@ fanficCommand
   .description("Create a fanfic book from external source material")
   .requiredOption("--title <title>", "Book title")
   .requiredOption("--from <path>", "Source file or directory (novel text, wiki, character docs)")
-  .option("--mode <mode>", "Fanfic mode: canon|au|ooc|cp", "canon")
+  .option("--mode <mode>", "Fanfiction boundary or mode in natural language", "canon")
   .option("--genre <genre>", "Genre", "other")
   .option("--platform <platform>", "Target platform", "other")
   .option("--target-chapters <n>", "Target chapter count", "100")
   .option("--chapter-words <n>", "Words per chapter", "3000")
-  .option("--lang <language>", "Writing language: zh or en. Defaults from genre.")
+  .option("--lang <language>", "Writing language: zh or en. Defaults from the project.")
   .option("--json", "Output JSON")
   .action(async (opts) => {
     try {
@@ -31,18 +39,13 @@ fanficCommand
       const root = findProjectRoot();
 
       const mode = opts.mode as FanficMode;
-      if (!["canon", "au", "ooc", "cp"].includes(mode)) {
-        throw new Error(formatFanficInvalidModeError(mode));
-      }
 
       // Read source material
       const sourcePath = resolve(opts.from);
       const sourceText = await readSourceMaterial(sourcePath);
       const sourceName = basename(sourcePath);
 
-      if (!sourceText || sourceText.length < 100) {
-        throw new Error(formatFanficSourceTooShortError(sourceText.length));
-      }
+      if (!sourceText.trim()) throw new Error("Fanfic source material is empty.");
 
       const bookId = deriveBookIdFromTitle(opts.title) || `book-${Date.now().toString(36)}`;
 
@@ -50,12 +53,12 @@ fanficCommand
       const book: BookConfig = {
         id: bookId,
         title: opts.title,
-        platform: normalizePlatformOrOther(opts.platform),
+        platform: PlatformSchema.parse(opts.platform ?? "other"),
         genre: opts.genre,
         status: "outlining",
         targetChapters: parseInt(opts.targetChapters, 10),
         chapterWordCount: parseInt(opts.chapterWords, 10),
-        language: opts.lang ?? config.language,
+        language: resolveCliLanguage(opts.lang ?? config.language),
         createdAt: now,
         updatedAt: now,
         fanficMode: mode,
@@ -65,7 +68,25 @@ fanficCommand
       if (!opts.json) log(`  Source: ${sourceName} (${sourceText.length} chars)`);
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
-      await pipeline.initFanficBook(book, sourceText, sourceName, mode);
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import"],
+      });
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default", risk: "recoverable-write" },
+        tool: createFanficBookTool(pipeline, root, { defaultSkills: activatedSkills }),
+        parameters: {
+          title: book.title,
+          sourceText,
+          sourceName,
+          mode,
+          genre: book.genre,
+          platform: book.platform,
+          language: book.language,
+          targetChapters: book.targetChapters,
+          chapterWordCount: book.chapterWordCount,
+        },
+      });
 
       if (opts.json) {
         log(JSON.stringify({
@@ -74,13 +95,13 @@ fanficCommand
           genre: book.genre,
           fanficMode: mode,
           source: sourceName,
-          location: `books/${bookId}/`,
+          location: `works/${bookId}/source/`,
           nextStep: `inkos write next ${bookId}`,
         }, null, 2));
       } else {
         log(`Fanfic created: ${bookId}`);
         log(`  Mode: ${mode}`);
-        log(`  Location: books/${bookId}/`);
+        log(`  Location: works/${bookId}/source/`);
         log(`  fanfic_canon.md + foundation generated.`);
         log("");
         log(`Next: inkos write next ${bookId}`);
@@ -155,7 +176,16 @@ fanficCommand
       if (!opts.json) log(`Refreshing fanfic canon for "${bookId}" from ${sourceName}...`);
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
-      await pipeline.importFanficCanon(bookId, sourceText, sourceName, mode);
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import", "inkos-fanfic-writing"],
+      });
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "refresh_fanfic_canon", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createRefreshFanficCanonTool(pipeline, root, bookId, { defaultSkills: activatedSkills }),
+        workId: bookId,
+        parameters: { sourceText, sourceName, mode },
+      });
 
       if (opts.json) {
         log(JSON.stringify({ bookId, source: sourceName, refreshedAt: new Date().toISOString() }));

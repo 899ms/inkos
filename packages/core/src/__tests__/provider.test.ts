@@ -6,6 +6,7 @@ import {
   type LLMClient,
 } from "../llm/provider.js";
 import { runWithAgentTrajectory } from "../llm/agent-trajectory.js";
+import { readFile } from "node:fs/promises";
 
 // ── Mock @mariozechner/pi-ai ──────────────────────────────────────────────────
 // We intercept streamSimple so tests don't hit the network.
@@ -290,7 +291,8 @@ describe("chatCompletion via pi-ai", () => {
     await chatCompletion(client, "test-model", [{ role: "user", content: "hi" }]);
 
     const opts = mockStreamSimple.mock.calls[0]?.[2] as { headers?: Record<string, string> };
-    expect(opts.headers).toMatchObject({ "User-Agent": "InkOS/1.3.5", "X-Valid": "ok" });
+    const version=JSON.parse(await readFile(new URL('../../package.json',import.meta.url),'utf8')).version;
+    expect(opts.headers).toMatchObject({ "User-Agent": `InkOS/${version}`, "X-Valid": "ok" });
     expect(opts.headers).not.toHaveProperty("X-Bad");
   });
 
@@ -1069,6 +1071,23 @@ describe("createLLMClient with providers lookup", () => {
     expect(client._piModel?.contextWindow).toBe(1_000_000);
   });
 
+  it("custom Anthropic Messages config selects the existing native transport", async () => {
+    const { createLLMClient } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "custom",
+      service: "custom",
+      model: "claude-compatible-model",
+      apiKey: "",
+      baseUrl: "https://gateway.example",
+      apiFormat: "anthropic",
+    }));
+
+    expect(client.provider).toBe("anthropic");
+    expect(client._piModel?.api).toBe("anthropic-messages");
+    expect(client._piModel?.provider).toBe("anthropic");
+  });
+
   it("custom service + gpt-4o 靠 Layer 2 全局扫命中 openai provider", async () => {
     const { createLLMClient } = await import("../llm/provider.js");
     const { LLMConfigSchema } = await import("../models/project.js");
@@ -1095,20 +1114,6 @@ describe("createLLMClient with providers lookup", () => {
     }));
     expect(client.defaults.maxTokens).toBe(24_576);
     expect(client._piModel?.maxTokens).toBe(24_576);
-  });
-
-  it("config.maxTokens 命中 modelCard 后被覆盖（用户填 4000 还是用 modelCard 的 64000）", async () => {
-    const { createLLMClient } = await import("../llm/provider.js");
-    const { LLMConfigSchema } = await import("../models/project.js");
-    const client = createLLMClient(LLMConfigSchema.parse({
-      provider: "anthropic",
-      service: "anthropic",
-      model: "claude-sonnet-4-6",
-      apiKey: "test",
-      baseUrl: "https://api.anthropic.com",
-      maxTokens: 4000,
-    }));
-    expect(client.defaults.maxTokens).toBe(64_000);
   });
 
   it("B7: kimiCodingPlan 的 kimi-k2.5 走 API 时 piModel.id 是 deploymentName (k2p5)", async () => {

@@ -1,5 +1,6 @@
 import { access, cp, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { workDirectory } from "@actalk/inkos-core";
 
 export interface BookBackupInfo {
   readonly id: string;
@@ -30,10 +31,7 @@ export interface RestoreBookBackupResult {
   readonly preRestoreBackupId: string | null;
 }
 
-/**
- * Whole-book backups live OUTSIDE books/ (at .inkos/backups/<bookId>/<backupId>/),
- * so a backup never recursively contains other backups.
- */
+/** Whole-Work backups live outside works/, so they never contain other backups. */
 export function bookBackupsDir(root: string, bookId: string): string {
   return join(root, ".inkos", "backups", bookId);
 }
@@ -43,10 +41,10 @@ export async function createBookBackup(
   bookId: string,
   options: CreateBookBackupOptions = {},
 ): Promise<CreateBookBackupResult> {
-  const bookDir = join(root, "books", bookId);
+  const bookDir = workDirectory(root, bookId);
   const bookInfo = await stat(bookDir).catch(() => null);
   if (!bookInfo?.isDirectory()) {
-    throw new Error(`Book "${bookId}" not found at books/${bookId}/.`);
+    throw new Error(`Book Work not found: ${bookId}.`);
   }
 
   const backupsDir = bookBackupsDir(root, bookId);
@@ -109,7 +107,7 @@ export async function restoreBookBackup(
     );
   }
 
-  const bookDir = join(root, "books", bookId);
+  const bookDir = workDirectory(root, bookId);
   const bookExists = await stat(bookDir).then((info) => info.isDirectory()).catch(() => false);
   let preRestoreBackupId: string | null = null;
   if (bookExists) {

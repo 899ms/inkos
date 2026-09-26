@@ -48,16 +48,12 @@ export const detectCommand = new Command("detect")
           log(JSON.stringify(stats, null, 2));
         } else {
           log(`Detection Statistics:`);
-          log(`  Total detections: ${stats.totalDetections}`);
-          log(`  Total rewrites: ${stats.totalRewrites}`);
-          log(`  Avg original score: ${stats.avgOriginalScore.toFixed(3)}`);
-          log(`  Avg final score: ${stats.avgFinalScore.toFixed(3)}`);
-          log(`  Avg score reduction: ${stats.avgScoreReduction.toFixed(3)}`);
-          log(`  Pass rate: ${(stats.passRate * 100).toFixed(0)}%`);
+          log(`  Observations: ${stats.totalObservations}`);
+          log(`  Average latest score: ${stats.avgLatestScore.toFixed(3)}`);
           if (stats.chapterBreakdown.length > 0) {
             log(`  Chapters:`);
             for (const ch of stats.chapterBreakdown) {
-              log(`    Ch.${ch.chapterNumber}: ${ch.originalScore.toFixed(3)} → ${ch.finalScore.toFixed(3)} (${ch.rewriteAttempts} rewrites)`);
+              log(`    Ch.${ch.chapterNumber}: ${ch.latestScore.toFixed(3)} (${ch.observationCount} observation(s))`);
             }
           }
         }
@@ -70,7 +66,7 @@ export const detectCommand = new Command("detect")
         const index = await state.loadChapterIndex(bookId);
         for (const ch of index) {
           const content = await readChapterContent(bookDir, ch.number);
-          const result = await detectChapter(detectionConfig, content, ch.number);
+          const result = await detectChapter(detectionConfig, content, ch.number, bookDir);
           printResult(result, opts.json);
         }
       } else {
@@ -80,7 +76,7 @@ export const detectCommand = new Command("detect")
           process.exit(1);
         }
         const content = await readChapterContent(bookDir, targetChapter);
-        const result = await detectChapter(detectionConfig, content, targetChapter);
+        const result = await detectChapter(detectionConfig, content, targetChapter, bookDir);
         printResult(result, opts.json);
       }
     } catch (e) {
@@ -90,14 +86,13 @@ export const detectCommand = new Command("detect")
   });
 
 function printResult(
-  result: { chapterNumber: number; detection: { score: number; provider: string }; passed: boolean },
+  result: { chapterNumber: number; detection: { score: number; provider: string } },
   json: boolean,
 ): void {
   if (json) {
     log(JSON.stringify(result, null, 2));
   } else {
-    const icon = result.passed ? "✅" : "⚠️";
-    log(`  ${icon} Chapter ${result.chapterNumber}: score=${result.detection.score.toFixed(3)} (${result.detection.provider}) ${result.passed ? "PASS" : "FAIL"}`);
+    log(`  Chapter ${result.chapterNumber}: score=${result.detection.score.toFixed(3)} (${result.detection.provider})`);
   }
 }
 

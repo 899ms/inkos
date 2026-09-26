@@ -3,6 +3,7 @@ import { useHashRoute } from "./hooks/use-hash-route";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { Sidebar } from "./components/Sidebar";
 import { Dashboard } from "./pages/Dashboard";
+import { WorkInspector } from "./pages/WorkInspector";
 import { ChatPage } from "./pages/ChatPage";
 import { BookDetail } from "./pages/BookDetail";
 import { ChapterReader } from "./pages/ChapterReader";
@@ -13,7 +14,6 @@ import { ProjectSettings } from "./pages/ProjectSettings";
 import { TruthFiles } from "./pages/TruthFiles";
 import { DaemonControl } from "./pages/DaemonControl";
 import { LogViewer } from "./pages/LogViewer";
-import { GenreManager } from "./pages/GenreManager";
 import { StyleManager } from "./pages/StyleManager";
 import { TranslationManager } from "./pages/TranslationManager";
 import { ImportManager } from "./pages/ImportManager";
@@ -95,6 +95,8 @@ export function App() {
     toBook: (bookId: string) => setRoute({ page: "book", bookId }),
     toBookSettings: (bookId: string) => setRoute({ page: "book-settings", bookId }),
     toBookCreate: () => setRoute({ page: "book-create" }),
+    toWork: (workId: string) => setRoute({ page: "work", workId }),
+    toWorkChat: (workId: string, profileId: string) => setRoute({ page: "work-chat", workId, profileId }),
     toChapter: (bookId: string, chapterNumber: number) =>
       setRoute({ page: "chapter", bookId, chapterNumber }),
     toAnalytics: (bookId: string) => setRoute({ page: "analytics", bookId }),
@@ -104,7 +106,6 @@ export function App() {
     toTruth: (bookId: string) => setRoute({ page: "truth", bookId }),
     toDaemon: () => setRoute({ page: "daemon" }),
     toLogs: () => setRoute({ page: "logs" }),
-    toGenres: () => setRoute({ page: "genres" }),
     toStyle: () => setRoute({ page: "style" }),
     toTranslation: () => setRoute({ page: "translation" }),
     toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => setRoute({ page: "import", ...(tab ? { tab } : {}) }),
@@ -232,6 +233,24 @@ export function App() {
               <Dashboard nav={nav} sse={sse} theme={theme} t={t} />
             </div>
           )}
+          {route.page === "work" && (
+            <div className="mx-auto w-full max-w-5xl px-6 py-12 md:px-12 lg:py-16 fade-in">
+              <WorkInspector workId={route.workId} onBack={nav.toDashboard} onChat={nav.toWorkChat} />
+            </div>
+          )}
+          {route.page === "work-chat" && (
+            <div className="absolute inset-0 flex min-w-0">
+              <ChatPage
+                activeWorkId={route.workId}
+                workProfileId={route.profileId}
+                mode="work"
+                nav={nav}
+                theme={theme}
+                t={t}
+                sse={sse}
+              />
+            </div>
+          )}
           {isBookCreateChatRoute(route) && (
             <div className="absolute inset-0 flex min-w-0">
               <ChatPage
@@ -311,11 +330,6 @@ export function App() {
           {route.page === "logs" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <LogViewer nav={nav} theme={theme} t={t} />
-            </div>
-          )}
-          {route.page === "genres" && (
-            <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <GenreManager nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "style" && (

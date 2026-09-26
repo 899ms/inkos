@@ -1,91 +1,72 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LLMClient } from "../llm/provider.js";
-import { generateStoryGraph } from "../interactive-film/generate.js";
-
-const runWorkerAgentToolMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../agent/worker-agent.js", () => ({
-  runWorkerAgentTool: runWorkerAgentToolMock,
-}));
-
-const client = {} as LLMClient;
+import { describe, expect, it } from "vitest";
+import { materializeStoryGraph } from "../interactive-film/generate.js";
 
 function playableGraphContent() {
   return {
-    projectId: "model-must-not-own-this",
-    title: "model-must-not-own-this",
+    worldAnchor: {
+      storyCore: "A branching mystery",
+      theme: "Trust",
+      genre: "Mystery",
+      worldRules: "Choices persist",
+      durationMinutes: 15,
+    },
+    characters: [],
     variables: [{ name: "trust", type: "relationship", default: 0, desc: "Trust" }],
     nodes: [
-      { id: "s", type: "start", choices: [{ id: "s-b1", text: "enter", targetNodeId: "b1" }] },
       {
-        id: "b1",
-        type: "branch",
+        id: "s",
+        type: "start" as const,
+        title: "Opening",
+        sceneDesc: "The player chooses.",
+        dialogue: [],
         choices: [
-          { id: "b1-b2", text: "investigate", targetNodeId: "b2", effects: [{ var: "trust", op: "add", value: 1 }] },
-          { id: "b1-e1", text: "leave", targetNodeId: "e1" },
+          { id: "s-e1", text: "report", targetNodeId: "e1", effects: [{ var: "trust", op: "add" as const, value: 1 }] },
+          { id: "s-e2", text: "investigate", targetNodeId: "e2", effects: [{ var: "trust", op: "sub" as const, value: 1 }] },
         ],
+        act: "one",
       },
-      {
-        id: "b2",
-        type: "branch",
-        choices: [
-          { id: "b2-e1", text: "trust", targetNodeId: "e1" },
-          { id: "b2-e2", text: "expose", targetNodeId: "e2" },
-        ],
-      },
-      { id: "e1", type: "ending", choices: [] },
-      { id: "e2", type: "ending", choices: [] },
+      { id: "e1", type: "ending" as const, title: "Report", sceneDesc: "Reported.", dialogue: [], choices: [], act: "two" },
+      { id: "e2", type: "ending" as const, title: "Investigate", sceneDesc: "Investigated.", dialogue: [], choices: [], act: "two" },
     ],
     endings: [
-      { id: "ending-1", nodeId: "e1", title: "Trust", type: "good" },
-      { id: "ending-2", nodeId: "e2", title: "Exposure", type: "secret" },
+      { id: "ending-1", nodeId: "e1", title: "Report", type: "neutral", description: "Reported." },
+      { id: "ending-2", nodeId: "e2", title: "Investigate", type: "neutral", description: "Investigated." },
     ],
   };
 }
 
-describe("generateStoryGraph structured worker", () => {
-  beforeEach(() => {
-    runWorkerAgentToolMock.mockReset();
-    runWorkerAgentToolMock.mockResolvedValue(playableGraphContent());
-  });
-
-  it("uses a typed Pi result tool and keeps host-owned identity authoritative", async () => {
-    const graph = await generateStoryGraph(client, "m", {
+describe("interactive-film graph materialization", () => {
+  it("keeps host-owned identity authoritative", () => {
+    const graph = materializeStoryGraph({
       projectId: "real-id",
       title: "Real title",
-      premise: "A branching mystery",
-    }, { language: "en" });
+      content: playableGraphContent(),
+    });
 
     expect(graph.projectId).toBe("real-id");
     expect(graph.title).toBe("Real title");
-    expect(graph.nodes).toHaveLength(5);
-    expect(runWorkerAgentToolMock).toHaveBeenCalledTimes(1);
-    const [, , messages, tool] = runWorkerAgentToolMock.mock.calls[0];
-    expect(messages[0].content).toContain("interactive film scriptwriter");
-    expect(messages[0].content).not.toContain("Output strictly JSON");
-    expect(tool.name).toBe("submit_story_graph");
-    expect(tool.parameters.type).toBe("object");
+    expect(graph.nodes).toHaveLength(3);
   });
 
-  it("rejects a structurally valid but unplayable graph instead of writing a generic fallback", async () => {
-    runWorkerAgentToolMock.mockResolvedValue({
-      nodes: [
-        { id: "s", type: "start", choices: [] },
-        { id: "b1", type: "branch", choices: [] },
-        { id: "b2", type: "branch", choices: [] },
-        { id: "e1", type: "ending", choices: [] },
-        { id: "e2", type: "ending", choices: [] },
-      ],
-      endings: [
-        { id: "one", nodeId: "e1", title: "One", type: "good" },
-        { id: "two", nodeId: "e2", title: "Two", type: "bad" },
-      ],
-    });
+  it("rejects a structurally typed but unplayable graph", () => {
+    const content = playableGraphContent();
+    content.nodes[0] = { ...content.nodes[0]!, choices: [] };
 
-    await expect(generateStoryGraph(client, "m", {
+    expect(() => materializeStoryGraph({
       projectId: "p",
       title: "T",
-      premise: "P",
-    })).rejects.toThrow("Generated story graph is not playable");
+      content,
+    })).toThrow();
+  });
+
+  it("accepts an opening node that directly carries the meaningful branch", () => {
+    const graph = materializeStoryGraph({
+      projectId: "p",
+      title: "T",
+      content: playableGraphContent(),
+    });
+
+    expect(graph.nodes[0]?.type).toBe("start");
+    expect(graph.nodes[0]?.choices).toHaveLength(2);
   });
 });

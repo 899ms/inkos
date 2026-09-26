@@ -28,7 +28,7 @@ describe("resolveEffectiveLLMConfig", () => {
     await writeFile(join(root, ".inkos", "secrets.json"), JSON.stringify({ services }, null, 2), "utf-8");
   }
 
-  it("Studio consumer 使用 Studio/project 配置，并忽略旧顶层 model/baseUrl", async () => {
+  it("Studio consumer derives the effective endpoint and model from the selected service", async () => {
     await writeProject({
       configSource: "studio",
       service: "google",
@@ -54,7 +54,32 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.llm.model).toBe("gemini-2.5-flash");
     expect(result.llm.apiKey).toBe("sk-google");
     expect(result.diagnostics.apiKeySource).toBe("studio-secret");
-    expect(result.diagnostics.warnings.join("\n")).toContain("旧顶层");
+    expect(result.diagnostics.warnings).toEqual([]);
+  });
+
+  it("Studio consumer preserves a custom Anthropic Messages protocol", async () => {
+    await writeProject({
+      configSource: "studio",
+      service: "custom:Anthropic Gateway",
+      services: [{
+        service: "custom",
+        name: "Anthropic Gateway",
+        baseUrl: "https://gateway.example",
+        apiFormat: "anthropic",
+      }],
+      defaultModel: "claude-compatible-model",
+    });
+
+    const result = await resolveEffectiveLLMConfig({
+      consumer: "studio",
+      projectRoot: root,
+      envLayers: { global: {}, project: {}, process: {} },
+      requireApiKey: false,
+    });
+
+    expect(result.llm.provider).toBe("custom");
+    expect(result.llm.apiFormat).toBe("anthropic");
+    expect(result.llm.baseUrl).toBe("https://gateway.example");
   });
 
   it("CLI consumer 允许 INKOS_LLM_SERVICE 切换服务，并从 provider bank 推导 baseUrl", async () => {
@@ -159,7 +184,7 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.diagnostics.warnings.join("\n")).toContain("Studio 运行时不会使用 env");
   });
 
-  it("旧 configSource=env 保持 legacy-env 行为", async () => {
+  it("configSource=env uses environment mode", async () => {
     await writeProject({
       configSource: "env",
       provider: "openai",
@@ -185,7 +210,7 @@ describe("resolveEffectiveLLMConfig", () => {
       },
     });
 
-    expect(result.diagnostics.configMode).toBe("legacy-env");
+    expect(result.diagnostics.configMode).toBe("environment");
     expect(result.llm.service).toBe("custom");
     expect(result.llm.provider).toBe("custom");
     expect(result.llm.baseUrl).toBe("https://api.example.com/v1");
@@ -193,7 +218,7 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.llm.apiKey).toBe("sk-env");
   });
 
-  it("legacy-env 模式下 CLI --service 覆盖会切换到目标 service 的 endpoint 默认值", async () => {
+  it("environment mode CLI --service selects the endpoint defaults", async () => {
     await writeProject({
       configSource: "env",
       provider: "custom",
@@ -223,7 +248,7 @@ describe("resolveEffectiveLLMConfig", () => {
       },
     });
 
-    expect(result.diagnostics.configMode).toBe("legacy-env");
+    expect(result.diagnostics.configMode).toBe("environment");
     expect(result.llm.service).toBe("google");
     expect(result.llm.provider).toBe("openai");
     expect(result.llm.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
@@ -232,7 +257,7 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.llm.apiKey).toBe("sk-google");
   });
 
-  it("legacy-env 模式下 CLI transport 覆盖优先级高于 env", async () => {
+  it("environment mode CLI transport overrides env", async () => {
     await writeProject({
       configSource: "env",
       provider: "openai",
@@ -261,7 +286,7 @@ describe("resolveEffectiveLLMConfig", () => {
       },
     });
 
-    expect(result.diagnostics.configMode).toBe("legacy-env");
+    expect(result.diagnostics.configMode).toBe("environment");
     expect(result.llm.apiFormat).toBe("responses");
     expect(result.llm.stream).toBe(false);
   });

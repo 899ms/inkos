@@ -10,6 +10,7 @@ Use this skill when the user asks to deconstruct, compare, learn from, or contin
 - Analyze semantic mechanisms: reader promise, conflict escalation, character motivation, information release, scene function, emotional payoff, volume rhythm, prose behavior, and continuity load.
 - Keep source evidence pointers. Separate direct observation from inference.
 - Extract reusable craft, not names, wording, scene order, or signature combinations.
+- For style analysis, describe narrative distance and tone, dialogue behavior, scene-detail selection, transitions, sentence and paragraph rhythm, diction, emotional externalization, and distinctive habits. Anchor each important claim to a short source example.
 - If the user explicitly wants the active book to consult this source later, call `manage_book_reference(action="bind")` with the user's natural-language purposes. Binding is guidance, never canon.
 - If the user only asks a question, answer it; do not start writing or editing a book.
 - Respond in the user's language.

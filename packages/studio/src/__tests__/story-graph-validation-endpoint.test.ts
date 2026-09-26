@@ -7,7 +7,7 @@ import { saveStoryGraph, StoryGraphSchema } from "@actalk/inkos-core";
 
 describe("GET /api/v1/projects/:id/story-graph/validation", () => {
   let root: string;
-  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-val-")); await mkdir(join(root, "interactive-films", "p"), { recursive: true }); });
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-val-")); await mkdir(join(root, "works", "p", "source"), { recursive: true }); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
   it("returns a report including IMAGE_MISSING for an imageless node", async () => {

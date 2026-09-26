@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  AutomationModeSchema,
   ActionPayloadSchema,
   ActionSourceSchema,
-  BookCreationDraftSchema,
-  InteractionIntentTypeSchema,
   ExecutionStatusSchema,
   InteractionSessionSchema,
   PlayModeSchema,
@@ -19,34 +16,14 @@ import {
   SessionKindSchema,
   StoryboardCreateActionPayloadSchema,
   bindActiveBook,
-  clearPendingDecision,
   isTerminalExecutionStatus,
   normalizeActionSource,
   normalizePlayMode,
   normalizeRequestedIntent,
   appendInteractionMessage,
-  appendInteractionEvent,
-  updateCreationDraft,
-  clearCreationDraft,
 } from "../index.js";
 
 describe("interaction models", () => {
-  it("parses supported automation modes", () => {
-    expect(AutomationModeSchema.parse("auto")).toBe("auto");
-    expect(AutomationModeSchema.parse("semi")).toBe("semi");
-    expect(AutomationModeSchema.parse("manual")).toBe("manual");
-  });
-
-  it("parses supported interaction intents", () => {
-    expect(InteractionIntentTypeSchema.parse("develop_book")).toBe("develop_book");
-    expect(InteractionIntentTypeSchema.parse("create_book")).toBe("create_book");
-    expect(InteractionIntentTypeSchema.parse("discard_book_draft")).toBe("discard_book_draft");
-    expect(InteractionIntentTypeSchema.parse("chat")).toBe("chat");
-    expect(InteractionIntentTypeSchema.parse("write_next")).toBe("write_next");
-    expect(InteractionIntentTypeSchema.parse("rewrite_chapter")).toBe("rewrite_chapter");
-    expect(InteractionIntentTypeSchema.parse("explain_failure")).toBe("explain_failure");
-  });
-
   it("parses Studio/agent action envelope fields from one shared schema", () => {
     expect(ActionSourceSchema.parse("free-text")).toBe("free-text");
     expect(ActionSourceSchema.parse("button")).toBe("button");
@@ -60,7 +37,9 @@ describe("interaction models", () => {
     expect(SessionKindSchema.parse("script")).toBe("script");
     expect(SessionKindSchema.parse("storyboard")).toBe("storyboard");
     expect(SessionKindSchema.parse("interactive-film")).toBe("interactive-film");
+    expect(SessionKindSchema.parse("work")).toBe("work");
     expect(ScriptTargetFormatSchema.parse("vertical_short_drama")).toBe("vertical_short_drama");
+    expect(ScriptTargetFormatSchema.parse("舞台剧分场本")).toBe("舞台剧分场本");
     expect(PlayModeSchema.parse("guided")).toBe("guided");
 
     expect(normalizeActionSource(undefined)).toBe("free-text");
@@ -71,13 +50,10 @@ describe("interaction models", () => {
     expect(normalizePlayMode(null)).toBeUndefined();
 
     expect(ActionPayloadSchema.parse({
-      writeNext: { chapterCount: 5 },
-    })).toEqual({
-      writeNext: { chapterCount: 5 },
-    });
-    expect(ActionPayloadSchema.safeParse({
       writeNext: { chapterCount: 21 },
-    }).success).toBe(false);
+    })).toEqual({
+      writeNext: { chapterCount: 21 },
+    });
   });
 
   it("validates structured script and storyboard creation payloads", () => {
@@ -128,7 +104,8 @@ describe("interaction models", () => {
     expect(ContinuationImportActionPayloadSchema.parse({
       title: "雾港续章",
       sourcePath: ".inkos/uploads/novel.txt",
-    })).toMatchObject({ title: "雾港续章" });
+      instruction: "Keep the cabinet locked",
+    })).toMatchObject({ title: "雾港续章", instruction: "Keep the cabinet locked" });
     expect(ContinuationImportActionPayloadSchema.safeParse({
       sourcePath: "novel.txt",
       targetRoute: "import:continuation",
@@ -162,14 +139,7 @@ describe("interaction models", () => {
     const session = InteractionSessionSchema.parse({
       sessionId: "session-1",
       projectRoot: "/tmp/project",
-      automationMode: "semi",
       messages: [],
-      pendingDecision: {
-        kind: "approve-chapter",
-        bookId: "book-a",
-        chapterNumber: 3,
-        summary: "Chapter 3 is waiting for review.",
-      },
       currentExecution: {
         status: "waiting_human",
         bookId: "book-a",
@@ -190,7 +160,6 @@ describe("interaction models", () => {
       projectRoot: "/tmp/project",
       sessionKind: "interactive-film",
       modelOverride: "deepseek-v4-pro",
-      automationMode: "semi",
       messages: [],
       pendingProposedAction: {
         action: "interactive_film_create",
@@ -213,32 +182,10 @@ describe("interaction models", () => {
     });
   });
 
-  it("clears pending decisions while keeping the rest of the session intact", () => {
-    const session = InteractionSessionSchema.parse({
-      sessionId: "session-2",
-      projectRoot: "/tmp/project",
-      activeBookId: "book-a",
-      automationMode: "auto",
-      messages: [],
-      pendingDecision: {
-        kind: "choose-repair-mode",
-        bookId: "book-a",
-        chapterNumber: 8,
-        summary: "Choose whether to local-fix or rewrite chapter 8.",
-      },
-    });
-
-    expect(clearPendingDecision(session)).toEqual({
-      ...session,
-      pendingDecision: undefined,
-    });
-  });
-
   it("appends interaction messages in timestamp order", () => {
     const session = InteractionSessionSchema.parse({
       sessionId: "session-3",
       projectRoot: "/tmp/project",
-      automationMode: "semi",
       messages: [],
     });
 
@@ -255,50 +202,43 @@ describe("interaction models", () => {
     }]);
   });
 
-  it("appends interaction events in timestamp order", () => {
+  it("round-trips task execution metadata through the shared chat schema", () => {
     const session = InteractionSessionSchema.parse({
-      sessionId: "session-4",
+      sessionId: "session-task",
       projectRoot: "/tmp/project",
-      automationMode: "semi",
-      messages: [],
-      events: [],
+      messages: [{
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        toolExecutions: [{
+          id: "task-1",
+          tool: "longform__create_book",
+          label: "Create long-form Work",
+          status: "completed",
+          logs: ["Creating foundation"],
+          background: true,
+          stages: [{
+            label: "Foundation",
+            status: "completed",
+            progress: {
+              status: "streaming",
+              elapsedMs: 1200,
+              totalChars: 1800,
+              chineseChars: 1200,
+            },
+          }],
+          startedAt: 1,
+          completedAt: 2,
+        }],
+      }],
     });
 
-    const next = appendInteractionEvent(session, {
-      kind: "task.completed",
-      timestamp: 2,
-      status: "completed",
-      bookId: "harbor",
-      detail: "Completed write_next for harbor.",
+    expect(session.messages[0]?.toolExecutions?.[0]).toMatchObject({
+      logs: ["Creating foundation"],
+      background: true,
+      stages: [{ progress: { totalChars: 1800 } }],
     });
-
-    expect(next.events).toEqual([{
-      kind: "task.completed",
-      timestamp: 2,
-      status: "completed",
-      bookId: "harbor",
-      detail: "Completed write_next for harbor.",
-    }]);
   });
 
-  it("stores and clears a creation draft inside the shared session", () => {
-    const draft = BookCreationDraftSchema.parse({
-      concept: "港风商战悬疑，主角从灰产洗白。",
-      title: "夜港账本",
-      genre: "urban",
-      readyToCreate: false,
-    });
 
-    const session = InteractionSessionSchema.parse({
-      sessionId: "session-5",
-      projectRoot: "/tmp/project",
-      automationMode: "semi",
-      messages: [],
-      events: [],
-    });
-
-    const withDraft = updateCreationDraft(session, draft);
-    expect(withDraft.creationDraft?.title).toBe("夜港账本");
-    expect(clearCreationDraft(withDraft).creationDraft).toBeUndefined();
-  });
 });

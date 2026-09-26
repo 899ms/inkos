@@ -1,13 +1,15 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { EPub } from "epub-gen-memory";
+import {renderChapterDocument} from '../utils/chapter-document.js';
+import {readChapterHeading} from '../utils/chapter-splitter.js';
 
 export interface ExportStateLike {
   readonly bookDir: (bookId: string) => string;
   readonly loadBookConfig: (bookId: string) => Promise<{ readonly title: string; readonly language?: string }>;
   readonly loadChapterIndex: (bookId: string) => Promise<ReadonlyArray<{
     readonly number: number;
-    readonly status: string;
+    readonly title?: string;
     readonly wordCount: number;
   }>>;
 }
@@ -22,17 +24,47 @@ export interface ExportArtifact {
   readonly payload: string | Buffer;
 }
 
-function buildChapterFileLookup(files: ReadonlyArray<string>): ReadonlyMap<number, string> {
+export class ChapterExportSourceError extends Error {
+  readonly code = "CHAPTER_EXPORT_SOURCE_MISMATCH";
+  constructor(readonly details: {
+    readonly missingChapterNumbers: number[];
+    readonly duplicateChapterNumbers: number[];
+    readonly duplicateIndexNumbers: number[];
+    readonly unindexedFiles: string[];
+  }) {
+    super(`Chapter index and source files differ: ${JSON.stringify(details)}. Inspect these files and reconcile the chapter index through chapter import before exporting.`);
+    this.name = "ChapterExportSourceError";
+  }
+}
+
+function buildChapterFileLookup(files: ReadonlyArray<string>, chapters: ReadonlyArray<{ readonly number: number }>): ReadonlyMap<number, string> {
   const lookup = new Map<number, string>();
-  for (const file of files) {
-    if (!file.endsWith(".md") || !/^\d{4}/.test(file)) {
+  const indexed = new Set<number>();
+  const duplicateIndexNumbers = new Set<number>();
+  for (const chapter of chapters) {
+    if (indexed.has(chapter.number)) duplicateIndexNumbers.add(chapter.number);
+    indexed.add(chapter.number);
+  }
+  const duplicateChapterNumbers = new Set<number>();
+  const unindexedFiles: string[] = [];
+  for (const file of [...files].sort()) {
+    if (!file.endsWith(".md")) continue;
+    const match = /^(\d+)_.*\.md$/u.exec(file);
+    const chapterNumber = match ? Number(match[1]) : undefined;
+    if (chapterNumber === undefined || !indexed.has(chapterNumber)) {
+      unindexedFiles.push(file);
       continue;
     }
-    const chapterNumber = parseInt(file.slice(0, 4), 10);
-    if (!lookup.has(chapterNumber)) {
-      lookup.set(chapterNumber, file);
-    }
+    if (lookup.has(chapterNumber)) duplicateChapterNumbers.add(chapterNumber);
+    lookup.set(chapterNumber, file);
   }
+  const details = {
+    missingChapterNumbers: [...indexed].filter(number => !lookup.has(number)).sort((a,b) => a-b),
+    duplicateChapterNumbers: [...duplicateChapterNumbers].sort((a,b) => a-b),
+    duplicateIndexNumbers: [...duplicateIndexNumbers].sort((a,b) => a-b),
+    unindexedFiles,
+  };
+  if (Object.values(details).some(items => items.length > 0)) throw new ChapterExportSourceError(details);
   return lookup;
 }
 
@@ -60,16 +92,13 @@ export async function buildExportArtifact(
   bookId: string,
   options: {
     readonly format?: "txt" | "md" | "epub";
-    readonly approvedOnly?: boolean;
     readonly outputPath?: string;
   },
 ): Promise<ExportArtifact> {
   const format = options.format ?? "txt";
   const index = await state.loadChapterIndex(bookId);
   const book = await state.loadBookConfig(bookId);
-  const chapters = options.approvedOnly
-    ? index.filter((chapter) => chapter.status === "approved")
-    : index;
+  const chapters = index;
 
   if (chapters.length === 0) {
     throw new Error("No chapters to export.");
@@ -77,10 +106,15 @@ export async function buildExportArtifact(
 
   const bookDir = state.bookDir(bookId);
   const chaptersDir = join(bookDir, "chapters");
-  const projectRoot = dirname(dirname(bookDir));
-  const outputPath = options.outputPath ?? join(projectRoot, `${bookId}_export.${format}`);
-  const chapterFiles = buildChapterFileLookup(await readdir(chaptersDir));
+  const outputPath = options.outputPath ?? join(bookDir, "exports", `${bookId}.${format}`);
+  const chapterFiles = buildChapterFileLookup(await readdir(chaptersDir), chapters);
   const totalWords = chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0);
+  const readChapter = async (chapter: typeof chapters[number], file: string) => {
+    const raw = await readFile(join(chaptersDir, file), 'utf-8');
+    const heading = readChapterHeading(raw.trimStart().split(/\r?\n/u)[0] ?? '');
+    return renderChapterDocument(chapter.number, chapter.title ?? heading?.title ?? file.replace(/^\d+_/u,'').replace(/\.md$/u,''), raw,
+      book.language === 'en' || book.language === undefined && heading?.language === 'en' ? 'en' : 'zh');
+  };
 
   if (format === "epub") {
     const epubChapters: Array<{ title: string; content: string }> = [];
@@ -89,7 +123,7 @@ export async function buildExportArtifact(
       if (!match) {
         continue;
       }
-      const markdown = await readFile(join(chaptersDir, match), "utf-8");
+      const markdown = await readChapter(chapter, match);
       const { title, html } = markdownToSimpleHtml(markdown);
       epubChapters.push({ title, content: html });
     }
@@ -109,14 +143,13 @@ export async function buildExportArtifact(
   }
 
   const parts: string[] = [];
-  parts.push(format === "md" ? `# ${book.title}\n\n---\n` : `${book.title}\n\n`);
+  parts.push(format === "md" ? `# ${book.title}` : book.title);
   for (const chapter of chapters) {
     const match = chapterFiles.get(chapter.number);
     if (!match) {
       continue;
     }
-    parts.push(await readFile(join(chaptersDir, match), "utf-8"));
-    parts.push("\n\n");
+    parts.push(await readChapter(chapter, match));
   }
 
   return {
@@ -126,7 +159,7 @@ export async function buildExportArtifact(
     totalWords,
     format,
     contentType: format === "md" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8",
-    payload: parts.join(format === "md" ? "\n---\n\n" : "\n"),
+    payload: parts.join("\n\n"),
   };
 }
 
@@ -135,7 +168,6 @@ export async function writeExportArtifact(
   bookId: string,
   options: {
     readonly format?: "txt" | "md" | "epub";
-    readonly approvedOnly?: boolean;
     readonly outputPath?: string;
   },
 ): Promise<Omit<ExportArtifact, "payload" | "contentType" | "fileName">> {

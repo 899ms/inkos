@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   BookSessionSchema,
-  GlobalSessionSchema,
   createBookSession,
   appendBookSessionMessage,
 } from "../interaction/session.js";
@@ -13,8 +12,6 @@ describe("BookSession", () => {
         sessionId: "123-abc",
         bookId: "my-book",
         messages: [],
-        draftRounds: [],
-        events: [],
         createdAt: 1000,
         updatedAt: 1000,
       };
@@ -28,8 +25,6 @@ describe("BookSession", () => {
         sessionId: "123-abc",
         bookId: null,
         messages: [],
-        draftRounds: [],
-        events: [],
         createdAt: 1000,
         updatedAt: 1000,
       };
@@ -37,7 +32,7 @@ describe("BookSession", () => {
       expect(result.bookId).toBeNull();
     });
 
-    it("defaults empty arrays", () => {
+    it("defaults an empty message list", () => {
       const raw = {
         sessionId: "123-abc",
         bookId: null,
@@ -46,22 +41,6 @@ describe("BookSession", () => {
       };
       const result = BookSessionSchema.parse(raw);
       expect(result.messages).toEqual([]);
-      expect(result.draftRounds).toEqual([]);
-      expect(result.events).toEqual([]);
-    });
-  });
-
-  describe("GlobalSessionSchema", () => {
-    it("parses with defaults", () => {
-      const result = GlobalSessionSchema.parse({});
-      expect(result.automationMode).toBe("semi");
-      expect(result.activeBookId).toBeUndefined();
-    });
-
-    it("parses with values", () => {
-      const result = GlobalSessionSchema.parse({ activeBookId: "book-1", automationMode: "auto" });
-      expect(result.activeBookId).toBe("book-1");
-      expect(result.automationMode).toBe("auto");
     });
   });
 
@@ -69,6 +48,7 @@ describe("BookSession", () => {
     it("creates session with bookId", () => {
       const session = createBookSession("my-book");
       expect(session.bookId).toBe("my-book");
+      expect(session.workId).toBe("my-book");
       expect(session.sessionId).toBeTruthy();
       expect(session.messages).toEqual([]);
       expect(session.createdAt).toBeGreaterThan(0);
@@ -78,6 +58,27 @@ describe("BookSession", () => {
     it("creates session with null bookId", () => {
       const session = createBookSession(null);
       expect(session.bookId).toBeNull();
+    });
+
+    it("stores profile and non-book Work identity independently from the UI surface", () => {
+      const session = createBookSession(null, "film-session", "interactive-film-authoring", {
+        profileId: "interactive-film",
+        workId: "film-work",
+      });
+      expect(session).toMatchObject({
+        sessionKind: "interactive-film-authoring",
+        profileId: "interactive-film",
+        workId: "film-work",
+      });
+    });
+
+    it("stores a creation-entry proposal action without granting execution authority", () => {
+      const session = createBookSession(null, "imitation-session", "chat", {
+        profileId: "workspace-default",
+        workId: null,
+        proposalAction: "style_imitation",
+      });
+      expect(session.proposalAction).toBe("style_imitation");
     });
 
     it("rejects unsafe bookId", () => {

@@ -1,20 +1,13 @@
 import { access, mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { AgentContext } from "../agents/base.js";
-import { generateStoryGraph } from "../interactive-film/generate.js";
-import type { StoryGraph } from "../interactive-film/graph-schema.js";
-import {
-  commitProductionArtifacts,
-  createProductionRunSnapshot,
-} from "../production/harness.js";
+import { materializeStoryGraph } from "../interactive-film/generate.js";
+import {readFilmRequirements,checkFilmRequirements,type FilmRequirements}from'../interactive-film/delivery-requirements.js';
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import {
   InteractiveFilmCreationAgent,
   ScriptCreationAgent,
   StoryboardCreationAgent,
-  countMarkdownSections,
-  extractStoryboardImagePrompts,
-  extractMarkdownSection,
-  normalizeScriptEpisodeEndLabels,
   renderInteractiveFilmSpec,
   renderScriptSpec,
   renderStoryboardSpec,
@@ -25,6 +18,11 @@ import {
 } from "../agents/script-storyboard.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath } from "../utils/posix-path.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harness/work-store.js";
+import { readArtifactRevision } from "../harness/artifact-reader.js";
+import { createBuiltInWorkProfileRegistry } from '../harness/builtin-profiles.js';
+import { currentExecutionAuthorRequest } from '../harness/execution-evidence.js';
 
 export interface ScriptCreationRunOptions {
   readonly projectRoot: string;
@@ -40,7 +38,6 @@ export interface ScriptCreationRunOptions {
   readonly episodeDuration?: string;
   readonly language?: "zh" | "en";
   readonly projectId?: string;
-  readonly outDir?: string;
   readonly onProgress?: (message: string) => void;
 }
 
@@ -59,11 +56,11 @@ export interface StoryboardCreationRunOptions {
   readonly maxShots?: number;
   readonly language?: "zh" | "en";
   readonly projectId?: string;
-  readonly outDir?: string;
   readonly onProgress?: (message: string) => void;
 }
 
 export interface InteractiveFilmCreationRunOptions {
+  readonly deliveryRequirements?: FilmRequirements;
   readonly projectRoot: string;
   readonly runtime: AgentContext;
   readonly title: string;
@@ -79,7 +76,6 @@ export interface InteractiveFilmCreationRunOptions {
   readonly referenceMode?: string;
   readonly language?: "zh" | "en";
   readonly projectId?: string;
-  readonly outDir?: string;
   readonly onProgress?: (message: string) => void;
 }
 
@@ -91,6 +87,8 @@ export interface ScriptCreationRunResult {
 }
 
 export interface InteractiveFilmCreationRunResult {
+  readonly delivery:ReturnType<typeof checkFilmRequirements>;
+  readonly observations:ReadonlyArray<{code:string;category:'quality';assessment:'issue'|'unavailable';summary:string;evidence:string[]}>;
   readonly projectId: string;
   readonly baseDir: string;
   readonly storyGraphPath: string;
@@ -153,9 +151,10 @@ export async function runScriptCreation(
   options: ScriptCreationRunOptions,
 ): Promise<ScriptCreationRunResult> {
   const projectId = safeSegment(options.projectId ?? slugify(options.title));
-  const baseDir = resolveProjectBaseDir(options.outDir ?? "dramas", projectId);
-  const sourceText = await resolveSourceText(options.projectRoot, options.sourceText, options.sourcePath);
+  const baseDir = relPath("works", projectId, "source");
+  const sourceText = await resolveSourceText(options.projectRoot, options.sourceText, options.sourcePath, projectId);
   const input: ScriptCreationInput = {
+    authorRequest: currentExecutionAuthorRequest(),
     title: options.title,
     sourceKind: options.sourceKind,
     targetFormat: options.targetFormat,
@@ -168,29 +167,20 @@ export async function runScriptCreation(
 
   options.onProgress?.("Writing script creation spec...");
   const spec = renderScriptSpec(input);
+  await ensureUnwrittenWork(options.projectRoot, projectId, options.title, "script", options.language ?? "zh");
+  await persistProductionInputs(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "script-spec.md"), spec),
+  ], sourceText);
 
   options.onProgress?.("Writing script draft...");
   const agent = new ScriptCreationAgent(options.runtime);
-  const script = normalizeScriptEpisodeEndLabels(await agent.writeScript(input));
-  assertScriptDeliverable(script, options.language ?? "zh");
+  const script = await agent.writeScript(input);
   const artifacts = [
     textArtifact(join(baseDir, "script-spec.md"), spec),
     textArtifact(join(baseDir, "script.md"), script),
   ];
-  await commitProductionArtifacts({
-    rootDir: options.projectRoot,
-    artifacts,
-    runPath: join(baseDir, "status.json"),
-    run: createProductionRunSnapshot({
-      kind: "script",
-      id: projectId,
-      status: "complete",
-      stage: "commit",
-      artifacts: artifacts.map((artifact) => artifact.relativePath),
-      observations: [],
-    }),
-    validate: () => assertNonEmptyArtifacts(artifacts),
-  });
+  assertNonEmptyArtifacts(artifacts);
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId, accept: true, writes: artifacts });
 
   return {
     projectId,
@@ -200,35 +190,19 @@ export async function runScriptCreation(
   };
 }
 
-function assertScriptDeliverable(script: string, language: "zh" | "en"): void {
-  const characterHeadings = language === "en" ? ["Characters"] : ["人物", "Characters"];
-  const scriptHeadings = language === "en" ? ["Script"] : ["剧本正文", "Script"];
-  const body = extractMarkdownSection(
-    script,
-    scriptHeadings,
-  );
-  const characterSectionCount = countMarkdownSections(script, characterHeadings);
-  const scriptSectionCount = countMarkdownSections(script, scriptHeadings);
-  if (!body?.trim() || characterSectionCount !== 1 || scriptSectionCount !== 1) {
-    throw new Error(
-      language === "en"
-        ? "Script production did not return exactly one `## Characters` and one non-empty `## Script` deliverable. No artifacts were committed."
-        : "剧本生产没有返回且仅返回一份 `## 人物` 和一份非空 `## 剧本正文` 交付段，未提交任何产物。",
-    );
-  }
-}
-
 export async function runInteractiveFilmCreation(
   options: InteractiveFilmCreationRunOptions,
 ): Promise<InteractiveFilmCreationRunResult> {
   const projectId = safeSegment(options.projectId ?? slugify(options.title));
-  const baseDir = resolveProjectBaseDir(options.outDir ?? "interactive-films", projectId);
-  const sourceText = await resolveSourceText(options.projectRoot, options.sourceText, options.sourcePath);
+  const baseDir = relPath("works", projectId, "source");
+  const deliveryRequirements=options.deliveryRequirements??await readFilmRequirements(options.projectRoot,projectId);
+  const sourceText = await resolveSourceText(options.projectRoot, options.sourceText, options.sourcePath, projectId);
   const input: InteractiveFilmCreationInput = {
+    authorRequest: currentExecutionAuthorRequest(),
     title: options.title,
     sourceKind: options.sourceKind,
     sourceText,
-    requirements: mergeRequirements(options.instruction, options.requirements, options.language),
+    requirements: mergeRequirements(options.instruction, [options.requirements,deliveryRequirements?JSON.stringify(deliveryRequirements):undefined].filter(Boolean).join('\n'), options.language),
     targetAudience: options.targetAudience,
     episodeCount: options.episodeCount,
     episodeDuration: options.episodeDuration,
@@ -239,37 +213,26 @@ export async function runInteractiveFilmCreation(
 
   options.onProgress?.("Writing interactive-film creation spec...");
   const spec = renderInteractiveFilmSpec(input);
+  await ensureUnwrittenWork(options.projectRoot, projectId, options.title, "interactive-film", options.language ?? "zh");
+  await persistProductionInputs(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "interactive-spec.md"), spec),
+    ...(deliveryRequirements?[textArtifact(join(baseDir,'delivery-requirements.json'),JSON.stringify(deliveryRequirements,null,2))]:[]),
+  ], sourceText);
 
   options.onProgress?.("Writing story tree, flags, script, storyboard, and image prompts...");
   const agent = new InteractiveFilmCreationAgent(options.runtime);
-  const packageMarkdown = await agent.writeInteractiveFilm(input);
-  const storyTree = requiredSection(packageMarkdown, [
-    "剧情树",
-    "Story Tree",
-    "Branching Story Tree",
-  ], packageMarkdown);
-  const flags = requiredSection(packageMarkdown, [
-    "旗标与变量系统说明",
-    "变量与旗标表",
-    "变量和旗标表",
-    "变量表",
-    "旗标表",
-    "Variables and Flags",
-    "Flag Table",
-  ], packageMarkdown);
-  const script = requiredSection(packageMarkdown, [
-    "互动剧本",
-    "Interactive Script",
-    "Script",
-  ], packageMarkdown);
-  const storyboard = requiredSection(packageMarkdown, [
-    "分镜与图像提示词",
-    "分镜表",
-    "Storyboard and Image Prompts",
-    "Storyboard",
-  ], packageMarkdown);
-  const imagePrompts = extractStoryboardImagePrompts(storyboard);
-  const storyGraphPath = relPath("interactive-films", projectId, "story-graph.json");
+  const compiled = await agent.createInteractiveFilmPackage(input);
+  const { storyTree, flags, script, storyboard } = compiled;
+  const imagePromptItems = compiled.imagePrompts;
+  const imagePrompts = renderImagePrompts(imagePromptItems);
+  const storyGraphPath = relPath(baseDir, "story-graph.json");
+  await persistCandidateArtifacts(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "story-tree.md"), storyTree),
+    textArtifact(join(baseDir, "flags.md"), flags),
+    textArtifact(join(baseDir, "script.md"), script),
+    textArtifact(join(baseDir, "storyboard.md"), storyboard),
+    textArtifact(join(baseDir, "image-prompts.md"), imagePrompts),
+  ]);
 
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "source"));
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "generated"));
@@ -280,50 +243,37 @@ export async function runInteractiveFilmCreation(
     baseDir,
     storyboardPath: join(baseDir, "storyboard.md"),
     imagePromptsPath: join(baseDir, "image-prompts.md"),
-    imagePrompts,
+    imagePrompts: imagePromptItems,
     createdAt: new Date().toISOString(),
   });
 
-  options.onProgress?.("Writing interactive-film story graph...");
-  const graph = await createInteractiveFilmStoryGraph(options.runtime, {
+  options.onProgress?.("Validating interactive-film story graph...");
+  const graph = materializeStoryGraph({
     projectId,
     title: options.title,
-    input,
-    storyTree,
-    flags,
-    script,
-    imagePrompts,
-    onProgress: options.onProgress,
+    content: compiled.storyGraph,
   });
+  const delivery=checkFilmRequirements(graph,deliveryRequirements);
   const artifacts = [
     textArtifact(join(baseDir, "interactive-spec.md"), spec),
     textArtifact(join(baseDir, "story-tree.md"), storyTree),
     textArtifact(join(baseDir, "flags.md"), flags),
-    textArtifact(join(baseDir, "script.md"), normalizeScriptEpisodeEndLabels(script)),
+    textArtifact(join(baseDir, "script.md"), script),
     textArtifact(join(baseDir, "storyboard.md"), storyboard),
     textArtifact(join(baseDir, "image-prompts.md"), imagePrompts),
     textArtifact(join(baseDir, "assets.json"), JSON.stringify(assetsManifest, null, 2)),
     textArtifact(storyGraphPath, JSON.stringify(graph, null, 2)),
+    textArtifact(join(baseDir,'delivery-report.json'),JSON.stringify(delivery,null,2)),
   ];
-  await commitProductionArtifacts({
-    rootDir: options.projectRoot,
-    artifacts,
-    runPath: join(baseDir, "status.json"),
-    run: createProductionRunSnapshot({
-      kind: "interactive-film",
-      id: projectId,
-      status: "complete",
-      stage: "commit",
-      artifacts: artifacts.map((artifact) => artifact.relativePath),
-      observations: [],
-    }),
-    validate: () => assertNonEmptyArtifacts(artifacts),
-  });
+  assertNonEmptyArtifacts(artifacts);
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId, accept: true, writes: artifacts });
 
   return {
     projectId,
     baseDir,
     storyGraphPath,
+    delivery,
+    observations:delivery.issues.map(issue=>({code:issue.code,category:'quality',assessment:delivery.status==='unverified'?'unavailable':'issue',summary:JSON.stringify(issue),evidence:[relPath(baseDir,'delivery-report.json')]})),
     specPath: relPath(baseDir, "interactive-spec.md"),
     storyTreePath: relPath(baseDir, "story-tree.md"),
     flagsPath: relPath(baseDir, "flags.md"),
@@ -339,9 +289,10 @@ export async function runStoryboardCreation(
   options: StoryboardCreationRunOptions,
 ): Promise<StoryboardCreationRunResult> {
   const projectId = safeSegment(options.projectId ?? slugify(options.title));
-  const baseDir = resolveProjectBaseDir(options.outDir ?? "storyboards", projectId);
-  const sourceText = await resolveSourceText(options.projectRoot, options.sourceText, options.sourcePath);
+  const baseDir = relPath("works", projectId, "source");
+  const sourceText = await resolveSourceText(options.projectRoot, options.sourceText, options.sourcePath, projectId);
   const input: StoryboardCreationInput = {
+    authorRequest: currentExecutionAuthorRequest(),
     title: options.title,
     sourceKind: options.sourceKind,
     sourceText,
@@ -355,35 +306,20 @@ export async function runStoryboardCreation(
 
   options.onProgress?.("Writing storyboard creation spec...");
   const spec = renderStoryboardSpec(input);
+  await ensureUnwrittenWork(options.projectRoot, projectId, options.title, "storyboard", options.language ?? "zh");
+  await persistProductionInputs(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "storyboard-spec.md"), spec),
+  ], sourceText);
 
   options.onProgress?.("Writing storyboard and image prompts...");
   const agent = new StoryboardCreationAgent(options.runtime);
-  const segments = splitStoryboardSource(input.sourceText, input.maxShots);
-  const storyboardParts: string[] = [];
-  for (const [index, segment] of segments.entries()) {
-    if (segments.length > 1) {
-      options.onProgress?.(`Writing storyboard segment ${index + 1}/${segments.length}: ${segment.label}...`);
-    }
-    storyboardParts.push(await agent.writeStoryboard({
-      ...input,
-      sourceText: segment.sourceText,
-      ...(segments.length > 1 ? {
-        segment: {
-          label: segment.label,
-          index,
-          count: segments.length,
-          estimatedShots: Math.ceil((input.maxShots ?? 24) / segments.length),
-        },
-      } : {}),
-    }));
-  }
-  const storyboard = storyboardParts.join("\n\n");
-  // Extract each segment before concatenation because a Markdown section
-  // extractor correctly returns only the first matching heading.
-  const imagePrompts = storyboardParts
-    .map((part) => extractStoryboardImagePrompts(part))
-    .filter(Boolean)
-    .join("\n\n");
+  const storyboardPackage = await agent.writeStoryboard(input);
+  const storyboard = storyboardPackage.storyboard;
+  await persistCandidateArtifacts(options.projectRoot, projectId, [
+    textArtifact(join(baseDir, "storyboard.md"), storyboard),
+  ]);
+  const imagePromptItems = storyboardPackage.imagePrompts;
+  const imagePrompts = renderImagePrompts(imagePromptItems);
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "source"));
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "generated"));
   await ensureProjectDir(options.projectRoot, join(baseDir, "assets", "selected"));
@@ -393,7 +329,7 @@ export async function runStoryboardCreation(
     baseDir,
     storyboardPath: join(baseDir, "storyboard.md"),
     imagePromptsPath: join(baseDir, "image-prompts.md"),
-    imagePrompts,
+    imagePrompts: imagePromptItems,
     createdAt: new Date().toISOString(),
   });
   const artifacts = [
@@ -402,20 +338,8 @@ export async function runStoryboardCreation(
     textArtifact(join(baseDir, "image-prompts.md"), imagePrompts),
     textArtifact(join(baseDir, "assets.json"), JSON.stringify(assetsManifest, null, 2)),
   ];
-  await commitProductionArtifacts({
-    rootDir: options.projectRoot,
-    artifacts,
-    runPath: join(baseDir, "status.json"),
-    run: createProductionRunSnapshot({
-      kind: "storyboard",
-      id: projectId,
-      status: "complete",
-      stage: "commit",
-      artifacts: artifacts.map((artifact) => artifact.relativePath),
-      observations: [],
-    }),
-    validate: () => assertNonEmptyArtifacts(artifacts),
-  });
+  assertNonEmptyArtifacts(artifacts);
+  await syncWorkSourceArtifacts({ projectRoot: options.projectRoot, workId: projectId, accept: true, writes: artifacts });
 
   return {
     projectId,
@@ -428,136 +352,6 @@ export async function runStoryboardCreation(
   };
 }
 
-interface StoryboardSourceSegment {
-  readonly label: string;
-  readonly sourceText: string;
-}
-
-/**
- * Large storyboards are generated one explicit document section at a time so
- * no model call has to emit the entire deliverable. This parses Markdown
- * structure only; it does not infer story meaning or discard source text.
- */
-function splitStoryboardSource(
-  sourceText: string | undefined,
-  maxShots: number | undefined,
-): StoryboardSourceSegment[] {
-  const source = sourceText?.trim();
-  if (!source || (maxShots ?? 24) * 700 <= 24_000) {
-    return [{ label: "full storyboard", sourceText: source ?? "" }];
-  }
-
-  const lines = source.split(/\r?\n/);
-  const headings: Array<{ readonly line: number; readonly label: string }> = [];
-  for (const [line, raw] of lines.entries()) {
-    const heading = /^#{1,6}\s+(.+?)\s*$/u.exec(raw.trim());
-    if (!heading) continue;
-    const label = heading[1]!.trim();
-    if (/^第\s*[一二三四五六七八九十百千万\d]+\s*集(?:\s|《|$)/u.test(label)
-      || /^episode\s+\d+(?:\s|[:：\-—]|$)/iu.test(label)) {
-      headings.push({ line, label });
-    }
-  }
-  if (headings.length < 2) {
-    return [{ label: "full storyboard", sourceText: source }];
-  }
-
-  const episodeSegments = headings.map((heading, index) => {
-    const start = index === 0 ? 0 : heading.line;
-    const end = headings[index + 1]?.line ?? lines.length;
-    return {
-      label: heading.label,
-      sourceText: lines.slice(start, end).join("\n").trim(),
-    };
-  });
-  return episodeSegments.flatMap(splitStoryboardEpisodeScenes);
-}
-
-function splitStoryboardEpisodeScenes(episode: StoryboardSourceSegment): StoryboardSourceSegment[] {
-  const lines = episode.sourceText.split(/\r?\n/);
-  const boundaries: Array<{ readonly line: number; readonly label: string }> = [];
-  for (const [line, raw] of lines.entries()) {
-    const text = raw.trim();
-    const bold = /^\*\*(.+?)\*\*(?:\s.*)?$/u.exec(text);
-    const label = bold?.[1]?.trim();
-    if (!label) continue;
-    if (/^(?:场次\s*\d+|集尾钩子)(?:\s|[：:／/]|$)/u.test(label)
-      || /^(?:scene\s+\d+|episode[- ]end hook)(?:\s|[：:/\-—]|$)/iu.test(label)) {
-      boundaries.push({ line, label });
-    }
-  }
-  if (boundaries.length < 2) return [episode];
-  return boundaries.map((boundary, index) => ({
-    label: `${episode.label} / ${boundary.label}`,
-    sourceText: lines
-      .slice(index === 0 ? 0 : boundary.line, boundaries[index + 1]?.line ?? lines.length)
-      .join("\n")
-      .trim(),
-  }));
-}
-
-async function createInteractiveFilmStoryGraph(
-  runtime: AgentContext,
-  args: {
-    readonly projectId: string;
-    readonly title: string;
-    readonly input: InteractiveFilmCreationInput;
-    readonly storyTree: string;
-    readonly flags: string;
-    readonly script: string;
-    readonly imagePrompts: string;
-    readonly onProgress?: (message: string) => void;
-  },
-): Promise<StoryGraph> {
-  args.onProgress?.(args.input.language === "en"
-    ? "Building the playable story graph through the structured authoring harness..."
-    : "正在通过结构化创作内核生成可玩故事图谱……");
-  return generateStoryGraph(runtime.client, runtime.model, {
-    projectId: args.projectId,
-    title: args.title,
-    premise: buildInteractiveFilmGraphPremise(args.input, args.storyTree, args.flags, args.script, args.imagePrompts),
-  }, {
-    language: args.input.language,
-    activatedSkills: runtime.activatedSkills,
-    signal: runtime.signal,
-  });
-}
-
-function buildInteractiveFilmGraphPremise(
-  input: InteractiveFilmCreationInput,
-  storyTree: string,
-  flags: string,
-  script: string,
-  imagePrompts: string,
-): string {
-  if ((input.language ?? "zh") === "en") {
-    return [
-      `Creation brief: ${input.requirements}`,
-      input.targetAudience ? `Target audience: ${input.targetAudience}` : "",
-      input.episodeCount ? `Segments/episodes: ${input.episodeCount}` : "",
-      input.episodeDuration ? `Per-segment duration: ${input.episodeDuration}` : "",
-      input.budget ? `Budget: ${input.budget}` : "",
-      input.referenceMode ? `Reference mode: ${input.referenceMode}` : "",
-      `Story tree:\n${storyTree}`,
-      `Variables and flags:\n${flags}`,
-      `Interactive script:\n${script}`,
-      `Image prompts:\n${imagePrompts}`,
-    ].filter(Boolean).join("\n\n");
-  }
-  return [
-    `创作需求：${input.requirements}`,
-    input.targetAudience ? `目标受众：${input.targetAudience}` : "",
-    input.episodeCount ? `段落/集数：${input.episodeCount}` : "",
-    input.episodeDuration ? `单段时长：${input.episodeDuration}` : "",
-    input.budget ? `预算：${input.budget}` : "",
-    input.referenceMode ? `参考模式：${input.referenceMode}` : "",
-    `剧情树：\n${storyTree}`,
-    `变量旗标：\n${flags}`,
-    `互动剧本：\n${script}`,
-    `图像提示词：\n${imagePrompts}`,
-  ].filter(Boolean).join("\n\n");
-}
-
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -568,11 +362,10 @@ export function createStoryboardAssetsManifest(args: {
   readonly baseDir: string;
   readonly storyboardPath: string;
   readonly imagePromptsPath: string;
-  readonly imagePrompts: string;
+  readonly imagePrompts: ReadonlyArray<string>;
   readonly createdAt: string;
 }): StoryboardAssetsManifest {
   const assetsDir = relPath(args.baseDir, "assets");
-  const prompts = parseStoryboardPromptLines(args.imagePrompts);
   return {
     version: 1,
     kind: "storyboard_assets",
@@ -586,7 +379,7 @@ export function createStoryboardAssetsManifest(args: {
     generatedDir: relPath(assetsDir, "generated"),
     selectedDir: relPath(assetsDir, "selected"),
     createdAt: args.createdAt,
-    assets: prompts.map((prompt, index) => {
+    assets: args.imagePrompts.map((prompt, index) => {
       const shotId = `shot-${String(index + 1).padStart(3, "0")}`;
       return {
         shotId,
@@ -599,16 +392,29 @@ export function createStoryboardAssetsManifest(args: {
   };
 }
 
+function renderImagePrompts(prompts: ReadonlyArray<string>): string {
+  return prompts.map((prompt, index) => `${index + 1}. ${prompt}`).join("\n");
+}
+
 async function resolveSourceText(
   projectRoot: string,
   sourceText: string | undefined,
   sourcePath: string | undefined,
+  workId: string,
 ): Promise<string | undefined> {
   const direct = sourceText?.trim();
   if (direct) return direct;
   const path = sourcePath?.trim();
-  if (!path) return undefined;
-  return readFile(safeChildPath(projectRoot, path), "utf-8");
+  if (path) return readFile(safeChildPath(projectRoot, path), "utf-8");
+  try {
+    const work = await loadWorkManifest(projectRoot, workId);
+    const source = work.artifacts.find(artifact => artifact.revisions.some(revision => revision.id === artifact.currentRevisionId && revision.path === "source/source-material.md"));
+    if (!source) return undefined;
+    return (await readArtifactRevision({ projectRoot, workId, artifactId: source.id })).bytes.toString("utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 function textArtifact(relativePath: string, content: string): {
@@ -631,6 +437,78 @@ function assertNonEmptyArtifacts(
   }
 }
 
+/** Work lifecycle is independent of whether its first production has completed. */
+async function ensureUnwrittenWork(
+  projectRoot: string,
+  projectId: string,
+  title: string,
+  profileId: "script" | "storyboard" | "interactive-film",
+  language: "zh" | "en",
+): Promise<void> {
+  try {
+    const existing = await loadWorkManifest(projectRoot, projectId);
+    const recovery = { action: "workspace__inspect_work", parameters: { workId: projectId },
+      reason: "Inspect the existing Work and revise its current artifacts; do not recreate it under another ID." };
+    if (!createBuiltInWorkProfileRegistry(projectRoot).require(existing.profileId).capabilityIds.includes(profileId)) {
+      throw Object.assign(new Error(`Work "${projectId}" does not declare the ${profileId} capability.`), { code: "WORK_PROFILE_MISMATCH", requiredCapabilityId:profileId, recovery });
+    }
+    if (existing.status === "archived") {
+      throw Object.assign(new Error(`Work "${projectId}" is archived.`), { code: "WORK_ARCHIVED", recovery });
+    }
+    const productionPaths = profileId === "script" ? ["source/script.md"]
+      : profileId === "storyboard" ? ["source/storyboard.md"]
+      : ["source/story-graph.json", "source/story-tree.md", "source/script.md", "source/storyboard.md"];
+    for (const path of productionPaths) {
+      const artifact = existing.artifacts.find(item => item.revisions.some(revision => revision.path === path));
+      if (artifact?.currentRevisionId) {
+        throw Object.assign(new Error(`Work "${projectId}" already has a current production artifact: ${path}.`), { code: "WORK_ALREADY_PRODUCED", recovery });
+      }
+      // Registered candidates can be retried; never overwrite unregistered source bytes.
+      if (!artifact) {
+        let exists = false;
+        try { await access(join(projectRoot, "works", projectId, path)); exists = true; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        if (exists) throw Object.assign(new Error(`Production source is not registered: ${path}.`), { code: "WORK_SOURCE_UNREGISTERED", recovery });
+      }
+    }
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await saveWorkManifest(projectRoot, createWorkManifest({
+    id: projectId,
+    title,
+    profileId,
+    language,
+    status: "draft",
+  }));
+}
+
+async function persistCandidateArtifacts(
+  projectRoot: string,
+  projectId: string,
+  artifacts: ReadonlyArray<{ readonly relativePath: string; readonly content: string }>,
+): Promise<void> {
+  assertNonEmptyArtifacts(artifacts);
+  await commitAtomicFileSet({ rootDir: projectRoot, writes: artifacts });
+  await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: false });
+}
+
+/** Preserve the actual supplied input before generation, independently of draft acceptance. */
+async function persistProductionInputs(
+  projectRoot: string,
+  workId: string,
+  specifications: ReadonlyArray<{ readonly relativePath: string; readonly content: string }>,
+  sourceText: string | undefined,
+): Promise<void> {
+  const sourcePath = "source/source-material.md";
+  await mkdir(join(projectRoot, "works", workId, "source"), { recursive: true });
+  await syncWorkSourceArtifacts({ projectRoot, workId, accept: Boolean(sourceText),
+    acceptPaths: sourceText ? [sourcePath] : [],
+    writes: [...specifications, ...(sourceText ? [{ relativePath: join("works", workId, sourcePath), content: sourceText }] : [])],
+  });
+}
+
 async function ensureProjectDir(projectRoot: string, relativePath: string): Promise<void> {
   await mkdir(safeChildPath(projectRoot, relativePath), { recursive: true });
 }
@@ -645,19 +523,6 @@ function mergeRequirements(
     instruction.trim(),
     requirements?.trim() ? `\n${extraLabel}\n${requirements.trim()}` : "",
   ].filter(Boolean).join("\n");
-}
-
-function normalizeOutputDir(value: string): string {
-  const text = value.trim().replace(/^\/+|\/+$/g, "");
-  if (!text || text.includes("..") || text.includes("\0")) {
-    throw new Error(`Invalid output directory: ${JSON.stringify(value)}`);
-  }
-  return text;
-}
-
-function resolveProjectBaseDir(outDir: string, projectId: string): string {
-  const outputDir = normalizeOutputDir(outDir);
-  return basename(outputDir) === projectId ? outputDir : relPath(outputDir, projectId);
 }
 
 // Project-relative path for results and manifests: always "/" separators.
@@ -682,84 +547,12 @@ function slugify(value: string): string {
   return text || `script-${Date.now()}`;
 }
 
-function parseStoryboardPromptLines(markdown: string): string[] {
-  const lines = markdown.split(/\r?\n/);
-  const prompts: string[] = [];
-  let promptColumnIndex = -1;
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) {
-      promptColumnIndex = -1;
-      continue;
-    }
-    const tableCells = parseMarkdownTableRow(line);
-    if (tableCells) {
-      if (isMarkdownTableSeparator(tableCells)) continue;
-      const headerIndex = tableCells.findIndex(isPromptColumnHeader);
-      if (headerIndex >= 0) {
-        promptColumnIndex = headerIndex;
-        continue;
-      }
-      if (promptColumnIndex >= 0) {
-        const prompt = cleanPromptText(tableCells[promptColumnIndex] ?? "");
-        if (prompt) prompts.push(prompt);
-      }
-      continue;
-    }
-    promptColumnIndex = -1;
-    const promptMatch = /(?:^|[|>\-\d.)、\s])(?:\*\*)?\s*(?:Prompt(?:\s+for\s+[^:*：]+)?|提示词(?:\s*[^:*：]+)?|图像提示词|分镜图提示词)\s*(?:\*\*)?\s*[：:]\s*(.+?)\s*$/iu.exec(line);
-    if (promptMatch) {
-      const prompt = cleanPromptText(promptMatch[1]!);
-      if (prompt) prompts.push(prompt);
-      continue;
-    }
-    const numberedPrompt = /^(?:[-*]\s*)?(?:\d+|[０-９]+)[.)、：:\s-]+(.+)$/u.exec(line);
-    if (numberedPrompt) {
-      const prompt = numberedPrompt[1]!
-        .replace(/\s+/g, " ")
-        .trim();
-      if (prompt) prompts.push(prompt);
-    }
-  }
-
-  return prompts;
-}
-
-function parseMarkdownTableRow(line: string): string[] | undefined {
-  if (!line.startsWith("|") || !line.endsWith("|")) return undefined;
-  const cells = line.slice(1, -1).split("|").map((cell) => cell.trim());
-  return cells.length >= 2 ? cells : undefined;
-}
-
-function isMarkdownTableSeparator(cells: readonly string[]): boolean {
-  return cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
-}
-
-function isPromptColumnHeader(cell: string): boolean {
-  return /^(?:prompt|image\s*prompt|shot\s*prompt|提示词|图像提示词|分镜图提示词)$/iu.test(
-    cell.replace(/[`*_]+/gu, "").trim(),
-  );
-}
-
-function cleanPromptText(text: string): string {
-  return text
-    .replace(/\s*\|\s*$/u, "")
-    .replace(/\*\*$/u, "")
-    .replace(/^(?:Prompt(?:\s+for\s+[^:*：]+)?|提示词(?:\s*[^:*：]+)?|图像提示词|分镜图提示词)\s*[：:]\s*/iu, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function requiredSection(raw: string, headings: readonly string[], fallback: string): string {
-  return extractMarkdownSection(raw, headings)?.trim() || fallback.trim();
-}
-
 export async function projectFileExists(projectRoot: string, relativePath: string): Promise<boolean> {
   try {
     await access(safeChildPath(projectRoot, relativePath));
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }

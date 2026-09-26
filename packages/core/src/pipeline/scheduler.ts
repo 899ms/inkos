@@ -2,9 +2,8 @@ import { PipelineRunner } from "./runner.js";
 import type { PipelineConfig } from "./runner.js";
 import { StateManager } from "../state/manager.js";
 import type { BookConfig } from "../models/book.js";
-import type { QualityGates, DetectionConfig } from "../models/project.js";
-import { dispatchWebhookEvent } from "../notify/dispatcher.js";
-import { detectChapter, detectAndRewrite } from "./detection-runner.js";
+import type { DetectionConfig } from "../models/project.js";
+import { detectChapter } from "./detection-runner.js";
 import type { Logger } from "../utils/logger.js";
 
 export interface SchedulerConfig extends PipelineConfig {
@@ -15,11 +14,9 @@ export interface SchedulerConfig extends PipelineConfig {
   readonly retryDelayMs: number;
   readonly cooldownAfterChapterMs: number;
   readonly maxChaptersPerDay: number;
-  readonly qualityGates?: QualityGates;
   readonly detection?: DetectionConfig;
-  readonly onChapterComplete?: (bookId: string, chapter: number, status: string) => void;
+  readonly onChapterComplete?: (bookId: string, chapter: number) => void;
   readonly onError?: (bookId: string, error: Error) => void;
-  readonly onPause?: (bookId: string, reason: string) => void;
 }
 
 interface ScheduledTask {
@@ -37,11 +34,6 @@ export class Scheduler {
   private writeCycleInFlight: Promise<void> | null = null;
   private radarScanInFlight: Promise<void> | null = null;
 
-  // Quality gate tracking (per book)
-  private consecutiveFailures = new Map<string, number>();
-  private pausedBooks = new Set<string>();
-  // Failure clustering: bookId → (dimension → count)
-  private failureDimensions = new Map<string, Map<string, number>>();
   // Daily chapter counter: "YYYY-MM-DD" → count
   private dailyChapterCount = new Map<string, number>();
 
@@ -130,26 +122,6 @@ export class Scheduler {
     await scan;
   }
 
-  /** Resume a paused book. */
-  resumeBook(bookId: string): void {
-    this.pausedBooks.delete(bookId);
-    this.consecutiveFailures.delete(bookId);
-    this.failureDimensions.delete(bookId);
-  }
-
-  /** Check if a book is paused. */
-  isBookPaused(bookId: string): boolean {
-    return this.pausedBooks.has(bookId);
-  }
-
-  private get gates(): QualityGates {
-    return this.config.qualityGates ?? {
-      maxAuditRetries: 2,
-      pauseAfterConsecutiveFailures: 3,
-      retryTemperatureStep: 0.1,
-    };
-  }
-
   /** Check if daily cap is reached across all books. */
   private isDailyCapReached(): boolean {
     const today = new Date().toISOString().slice(0, 10);
@@ -179,7 +151,6 @@ export class Scheduler {
 
     const activeBooks: Array<{ readonly id: string; readonly config: BookConfig }> = [];
     for (const id of bookIds) {
-      if (this.pausedBooks.has(id)) continue;
       const config = await this.state.loadBookConfig(id);
       if (config.status === "active" || config.status === "outlining") {
         activeBooks.push({ id, config });
@@ -199,7 +170,6 @@ export class Scheduler {
     for (let i = 0; i < this.config.chaptersPerCycle; i++) {
       if (!this.running) return;
       if (this.isDailyCapReached()) return;
-      if (this.pausedBooks.has(bookId)) return;
 
       // Cooldown between chapters (skip for the first one)
       if (i > 0 && this.config.cooldownAfterChapterMs > 0) {
@@ -208,133 +178,50 @@ export class Scheduler {
 
       const success = await this.writeOneChapter(bookId, bookConfig);
       if (!success) {
-        // Immediate retry with delay (if within retry limit)
-        const failures = this.consecutiveFailures.get(bookId) ?? 0;
-        if (failures <= this.gates.maxAuditRetries && this.config.retryDelayMs > 0) {
+        if (this.config.retryDelayMs > 0) {
           this.log?.warn(`${bookId} retrying in ${this.config.retryDelayMs}ms`);
           await this.sleep(this.config.retryDelayMs);
           const retrySuccess = await this.writeOneChapter(bookId, bookConfig);
-          if (!retrySuccess) break; // Stop this book's cycle on second failure
+          if (!retrySuccess) break;
         } else {
-          break; // Stop this book's cycle
+          break;
         }
       }
     }
   }
 
-  /** Write one chapter for a book. Returns true if approved. */
+  /** Write one chapter for a book. Semantic review findings do not fail the write. */
   private async writeOneChapter(bookId: string, bookConfig: BookConfig): Promise<boolean> {
     try {
-      // Compute temperature override: base 0.7 + failures * step
-      const failures = this.consecutiveFailures.get(bookId) ?? 0;
-      const tempOverride = failures > 0
-        ? Math.min(1.2, 0.7 + failures * this.gates.retryTemperatureStep)
-        : undefined;
-
-      const result = await this.pipeline.writeNextChapter(bookId, undefined, tempOverride);
-
-      if (result.status === "ready-for-review") {
-        this.consecutiveFailures.delete(bookId);
-        this.recordChapterWritten();
-
-        // Auto-detection loop after successful audit
-        if (this.config.detection?.enabled) {
-          await this.runDetection(bookId, bookConfig, result.chapterNumber);
-        }
-
-        this.config.onChapterComplete?.(bookId, result.chapterNumber, result.status);
-        return true;
+      const result = await this.pipeline.writeNextChapter(bookId);
+      this.recordChapterWritten();
+      if (this.config.detection?.enabled) {
+        await this.runDetection(bookId, result.chapterNumber);
       }
-
-      // Audit failed — apply quality gates
-      const issueCategories = result.auditResult.issues.map((i) => i.category);
-      await this.handleAuditFailure(bookId, result.chapterNumber, issueCategories);
-      this.config.onChapterComplete?.(bookId, result.chapterNumber, result.status);
-      return false;
+      this.config.onChapterComplete?.(bookId, result.chapterNumber);
+      return true;
     } catch (e) {
       this.config.onError?.(bookId, e as Error);
-      await this.handleAuditFailure(bookId, 0);
       return false;
     }
   }
 
   private async runDetection(
     bookId: string,
-    bookConfig: BookConfig,
     chapterNumber: number,
   ): Promise<void> {
     if (!this.config.detection) return;
     try {
       const bookDir = this.state.bookDir(bookId);
       const chapterContent = await this.readChapterContent(bookDir, chapterNumber);
-      const detResult = await detectChapter(
+      await detectChapter(
         this.config.detection,
         chapterContent,
         chapterNumber,
+        bookDir,
       );
-      if (!detResult.passed && this.config.detection.autoRewrite) {
-        await detectAndRewrite(
-          this.config.detection,
-          { client: this.config.client, model: this.config.model, projectRoot: this.config.projectRoot },
-          bookDir,
-          chapterContent,
-          chapterNumber,
-          bookConfig.genre,
-        );
-      }
     } catch (e) {
       this.config.onError?.(bookId, e as Error);
-    }
-  }
-
-  private async handleAuditFailure(
-    bookId: string,
-    chapterNumber: number,
-    issueCategories: ReadonlyArray<string> = [],
-  ): Promise<void> {
-    const failures = (this.consecutiveFailures.get(bookId) ?? 0) + 1;
-    this.consecutiveFailures.set(bookId, failures);
-
-    // Track failure dimensions for clustering
-    if (issueCategories.length > 0) {
-      const existing = this.failureDimensions.get(bookId);
-      const dimMap = existing ? new Map(existing) : new Map<string, number>();
-      for (const cat of issueCategories) {
-        dimMap.set(cat, (dimMap.get(cat) ?? 0) + 1);
-      }
-      this.failureDimensions.set(bookId, dimMap);
-
-      // Check for dimension clustering (any dimension with >=3 failures)
-      for (const [dimension, count] of dimMap) {
-        if (count >= 3) {
-          await this.emitDiagnosticAlert(bookId, chapterNumber, dimension, count);
-        }
-      }
-    }
-
-    const gates = this.gates;
-
-    if (failures <= gates.maxAuditRetries) {
-      this.log?.warn(`${bookId} audit failed (${failures}/${gates.maxAuditRetries}), will retry`);
-      return;
-    }
-
-    // Check if we should pause
-    if (failures >= gates.pauseAfterConsecutiveFailures) {
-      this.pausedBooks.add(bookId);
-      const reason = `${failures} consecutive audit failures (threshold: ${gates.pauseAfterConsecutiveFailures})`;
-      this.log?.error(`${bookId} PAUSED: ${reason}`);
-      this.config.onPause?.(bookId, reason);
-
-      if (this.config.notifyChannels && this.config.notifyChannels.length > 0) {
-        await dispatchWebhookEvent(this.config.notifyChannels, {
-          event: "pipeline-error",
-          bookId,
-          chapterNumber: chapterNumber > 0 ? chapterNumber : undefined,
-          timestamp: new Date().toISOString(),
-          data: { reason, consecutiveFailures: failures },
-        });
-      }
     }
   }
 
@@ -343,25 +230,6 @@ export class Scheduler {
       await this.pipeline.runRadar();
     } catch (e) {
       this.config.onError?.("radar", e as Error);
-    }
-  }
-
-  private async emitDiagnosticAlert(
-    bookId: string,
-    chapterNumber: number,
-    dimension: string,
-    count: number,
-  ): Promise<void> {
-    this.log?.warn(`DIAGNOSTIC: ${bookId} has ${count} failures in dimension "${dimension}"`);
-
-    if (this.config.notifyChannels && this.config.notifyChannels.length > 0) {
-      await dispatchWebhookEvent(this.config.notifyChannels, {
-        event: "diagnostic-alert",
-        bookId,
-        chapterNumber: chapterNumber > 0 ? chapterNumber : undefined,
-        timestamp: new Date().toISOString(),
-        data: { dimension, failureCount: count },
-      });
     }
   }
 

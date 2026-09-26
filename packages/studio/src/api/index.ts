@@ -8,6 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const root = resolve(process.argv[2] ?? process.env.INKOS_PROJECT_ROOT ?? process.cwd());
 const port = parseInt(process.env.INKOS_STUDIO_PORT ?? "4567", 10);
+const hostname = process.env.INKOS_STUDIO_HOST?.trim() || "127.0.0.1";
 
 // Find studio package root (2 levels up from src/api/)
 const studioRoot = resolve(__dirname, "../..");
@@ -24,7 +25,7 @@ if (!existsSync(join(distDir, "index.html"))) {
   }
 }
 
-startStudioServer(root, port, { staticDir: distDir }).catch((e) => {
+startStudioServer(root, port, { staticDir: distDir, hostname }).catch((e) => {
   console.error("Failed to start studio:", e);
   process.exit(1);
 });

@@ -1,5 +1,6 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
+import { workDirectory } from "../harness/work-store.js";
 import type { AgentContext } from "../agents/base.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { NarrativeForecastAgent } from "./agent.js";
@@ -8,10 +9,6 @@ import { renderForecastComparisonMarkdown, renderSelectedBranchPlanMarkdown } fr
 import {
   FORECAST_DEFAULT_BRANCHES,
   FORECAST_DEFAULT_HORIZON,
-  FORECAST_MAX_BRANCHES,
-  FORECAST_MAX_HORIZON,
-  FORECAST_MIN_BRANCHES,
-  FORECAST_MIN_HORIZON,
   type ForecastBranch,
   type NarrativeForecast,
 } from "./schema.js";
@@ -46,12 +43,8 @@ export async function createNarrativeForecast(
   if (!divergence) {
     throw new Error("divergence is required: describe the decision point the forecast should branch on.");
   }
-  const branchCount = boundedInteger(
-    options.branchCount, FORECAST_DEFAULT_BRANCHES, "branchCount", FORECAST_MIN_BRANCHES, FORECAST_MAX_BRANCHES,
-  );
-  const horizon = boundedInteger(
-    options.horizon, FORECAST_DEFAULT_HORIZON, "horizon", FORECAST_MIN_HORIZON, FORECAST_MAX_HORIZON,
-  );
+  const branchCount = positiveInteger(options.branchCount, FORECAST_DEFAULT_BRANCHES, "branchCount");
+  const horizon = positiveInteger(options.horizon, FORECAST_DEFAULT_HORIZON, "horizon");
   const bookDir = await resolveBookDir(options.projectRoot, bookId);
 
   options.onProgress?.("Reading canonical context...");
@@ -187,19 +180,19 @@ async function isForecastStale(
 }
 
 async function resolveBookDir(projectRoot: string, bookId: string): Promise<string> {
-  const bookDir = join(projectRoot, "books", bookId);
+  const bookDir = join(workDirectory(projectRoot, bookId), "source");
   try {
     await access(join(bookDir, "book.json"));
   } catch {
-    throw new Error(`Book "${bookId}" not found under ${join(projectRoot, "books")}.`);
+    throw new Error(`Book Work not found: ${bookId}.`);
   }
   return bookDir;
 }
 
-function boundedInteger(value: number | undefined, fallback: number, name: string, min: number, max: number): number {
+function positiveInteger(value: number | undefined, fallback: number, name: string): number {
   const parsed = value ?? fallback;
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer.`);
   }
   return parsed;
 }

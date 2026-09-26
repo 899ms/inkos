@@ -1,4 +1,4 @@
-import { normalizePlatformOrOther, defaultChapterLength, type Platform } from "@actalk/inkos-core";
+import { PlatformSchema, defaultChapterLength, type Platform } from "@actalk/inkos-core";
 export { waitForStudioBookReady } from "../lib/book-ready.js";
 export type { StudioBookDetail, WaitForStudioBookReadyOptions } from "../lib/book-ready.js";
 
@@ -8,6 +8,8 @@ export interface StudioCreateBookBody {
   readonly language?: string;
   readonly platform?: string;
   readonly chapterWordCount?: number;
+  readonly minChapterLength?: number;
+  readonly maxChapterLength?: number;
   readonly targetChapters?: number;
   readonly blurb?: string;
 }
@@ -20,13 +22,15 @@ export interface StudioBookConfigDraft {
   readonly status: "outlining";
   readonly targetChapters: number;
   readonly chapterWordCount: number;
-  readonly language?: "zh" | "en";
+  readonly minChapterLength?: number;
+  readonly maxChapterLength?: number;
+  readonly language: "zh" | "en";
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
 export function normalizeStudioPlatform(platform?: string): Platform {
-  return normalizePlatformOrOther(platform);
+  return platform === undefined ? "other" : PlatformSchema.parse(platform);
 }
 
 export function buildStudioBookConfig(body: StudioCreateBookBody, now: string): StudioBookConfigDraft {
@@ -42,11 +46,9 @@ export function buildStudioBookConfig(body: StudioCreateBookBody, now: string): 
     status: "outlining",
     targetChapters: body.targetChapters ?? 200,
     chapterWordCount: body.chapterWordCount ?? defaultChapterLength(body.language === "en" ? "en" : "zh"),
-    ...(body.language === "en"
-      ? { language: "en" as const }
-      : body.language === "zh"
-        ? { language: "zh" as const }
-        : {}),
+    ...(body.minChapterLength!==undefined?{minChapterLength:body.minChapterLength}:{}),
+    ...(body.maxChapterLength!==undefined?{maxChapterLength:body.maxChapterLength}:{}),
+    language: body.language === "en" ? "en" : "zh",
     createdAt: now,
     updatedAt: now,
   };

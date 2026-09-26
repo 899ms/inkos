@@ -3,8 +3,6 @@ import {
   buildLengthSpec,
   countChapterLength,
   defaultChapterLength,
-  isOutsideHardRange,
-  isOutsideSoftRange,
 } from "../utils/length-metrics.js";
 
 describe("length metrics", () => {
@@ -36,45 +34,16 @@ describe("length metrics", () => {
     expect(countChapterLength(markdownChapter, "zh_chars")).toBe("陈风抬头看天。".length);
   });
 
-  it("builds a conservative length spec for Chinese chapters", () => {
+  it("keeps only the user's target and language-native counting mode", () => {
     const spec = buildLengthSpec(2200, "zh");
 
     expect(spec).toEqual({
       target: 2200,
-      softMin: 1900,
-      softMax: 2500,
-      hardMin: 1600,
-      hardMax: 2800,
       countingMode: "zh_chars",
     });
+    expect(buildLengthSpec(2200, "en")).toEqual({
+      target: 2200,
+      countingMode: "en_words",
+    });
   });
-
-  it("builds a conservative length spec for English chapters", () => {
-    const spec = buildLengthSpec(2200, "en");
-
-    expect(spec.countingMode).toBe("en_words");
-    expect(spec.softMin).toBe(1900);
-    expect(spec.softMax).toBe(2500);
-    expect(spec.hardMin).toBe(1600);
-    expect(spec.hardMax).toBe(2800);
-  });
-
-  it("scales the conservative bands for smaller targets", () => {
-    const spec = buildLengthSpec(220, "zh");
-
-    expect(spec.softMin).toBe(190);
-    expect(spec.softMax).toBe(250);
-    expect(spec.hardMin).toBe(160);
-    expect(spec.hardMax).toBe(280);
-  });
-
-  it("detects soft and hard range drift", () => {
-    const spec = buildLengthSpec(2200, "zh");
-
-    expect(isOutsideSoftRange(1800, spec)).toBe(true);
-    expect(isOutsideSoftRange(2200, spec)).toBe(false);
-    expect(isOutsideHardRange(1500, spec)).toBe(true);
-    expect(isOutsideHardRange(2200, spec)).toBe(false);
-  });
-
 });

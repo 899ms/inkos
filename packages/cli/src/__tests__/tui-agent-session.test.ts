@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createProjectSession, loadProjectSession } from "../tui/session-store.js";
+import { createWorkManifest, saveWorkManifest } from "@actalk/inkos-core";
 
 const {
   runAgentSessionMock,
@@ -24,7 +25,7 @@ vi.mock("@actalk/inkos-core", async () => {
         chapterNumber: 1,
         title: "雨夜",
         wordCount: 1200,
-        status: "ready-for-review",
+        observations: [],
       };
     }
   }
@@ -111,10 +112,6 @@ describe("tui agent session bridge", () => {
         projectRoot,
       }),
       "帮我整理这一章",
-      [
-        { role: "user", content: "旧问题" },
-        { role: "assistant", content: "旧回答" },
-      ],
     );
     expect(result.responseText).toBe("这是 agent 直接返回的回复。");
     expect(result.session.messages.at(-1)).toEqual(expect.objectContaining({
@@ -178,7 +175,6 @@ describe("tui agent session bridge", () => {
         actionSource: "free-text",
       }),
       expect.stringContaining("雾灯小巷"),
-      [],
     );
     expect(result.session.activeBookId).toBeUndefined();
     expect(result.responseText).toContain("请确认");
@@ -203,7 +199,6 @@ describe("tui agent session bridge", () => {
     expect(runAgentSessionMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ bookId: null, sessionKind: "book-create", actionSource: "slash" }),
       "一部海港悬疑长篇",
-      [],
     );
     expect(newBook.session.activeBookId).toBeUndefined();
 
@@ -215,7 +210,6 @@ describe("tui agent session bridge", () => {
     expect(runAgentSessionMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ bookId: null, sessionKind: "short", actionSource: "slash" }),
       "婚姻背叛后的证据反杀",
-      [],
     );
 
     await processTuiAgentInput({
@@ -226,7 +220,71 @@ describe("tui agent session bridge", () => {
     expect(runAgentSessionMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ bookId: null, sessionKind: "play", playMode: "open" }),
       "雨夜便利店里时间停止",
-      [],
+    );
+  });
+
+  it("inspects all Work profiles locally without spending a model turn", async () => {
+    await saveWorkManifest(projectRoot, createWorkManifest({
+      id: "tui-film",
+      title: "TUI Film",
+      profileId: "interactive-film",
+      language: "en",
+    }));
+    const { processTuiAgentInput } = await import("../tui/agent-input.js");
+    const session = createProjectSession(projectRoot);
+
+    const listed = await processTuiAgentInput({
+      projectRoot,
+      input: "/works",
+      session,
+    });
+    expect(listed.responseText).toContain("tui-film | interactive-film | TUI Film");
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+
+    const shown = await processTuiAgentInput({
+      projectRoot,
+      input: "/work tui-film",
+      session: listed.session,
+    });
+    expect(shown.responseText).toContain("TUI Film (tui-film)");
+    expect(shown.responseText).toContain("interactive-film");
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("binds a Work with /use and routes later free text through that Pi profile", async () => {
+    await saveWorkManifest(projectRoot, createWorkManifest({
+      id: "tui-script",
+      title: "TUI Script",
+      profileId: "script",
+      language: "en",
+    }));
+    runAgentSessionMock.mockResolvedValue({
+      responseText: "I will revise the registered script artifact.",
+      messages: [{ role: "assistant", content: "I will revise the registered script artifact." }],
+      profileId: "script",
+      workId: "tui-script",
+    });
+    const { processTuiAgentInput } = await import("../tui/agent-input.js");
+    const selected = await processTuiAgentInput({
+      projectRoot,
+      input: "/use tui-script",
+      session: createProjectSession(projectRoot),
+    });
+    expect(selected.session).toMatchObject({
+      sessionKind: "work",
+      profileId: "script",
+      workId: "tui-script",
+    });
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+
+    await processTuiAgentInput({
+      projectRoot,
+      input: "Rewrite the second scene.",
+      session: selected.session,
+    });
+    expect(runAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "script", workId: "tui-script" }),
+      "Rewrite the second scene.",
     );
   });
 
@@ -295,7 +353,6 @@ describe("tui agent session bridge", () => {
         },
       }),
       "把上传的故事改成三幕互动影游",
-      expect.any(Array),
     );
     expect(confirmed.session.pendingProposedAction).toBeUndefined();
   });
@@ -346,7 +403,6 @@ describe("tui agent session bridge", () => {
         requestedIntent: "write_next",
       }),
       "写下一章",
-      [],
     );
     expect(result.responseText).toContain("完成下一章");
     const persisted = await loadProjectSession(projectRoot);

@@ -97,6 +97,8 @@ export function createUseSkillTool(
         retrievedResources = await retrieveSkillResources(skill.id, skill.baseDir, params.query.trim());
       }
 
+      const linked = await loadLinkedSkillResources(skill);
+      retrievedResources = [...linked.map(item => ({ ...item, heading: item.heading ?? "", score: 0 })), ...retrievedResources];
       options.onActivate?.({
         skill,
         resources: resource
@@ -220,24 +222,41 @@ export async function hydrateActivatedSkillGuidance(
   activations: ReadonlyArray<ActivatedSkillGuidance> | undefined,
   query: string,
 ): Promise<ReadonlyArray<ActivatedSkillGuidance> | undefined> {
-  if (!activations || activations.length === 0 || !query.trim()) return activations;
+  if (!activations || activations.length === 0) return activations;
   return Promise.all(activations.map(async (activation) => {
-    if (activation.resources.length > 0 || !activation.skill.baseDir) return activation;
-    const resources = await retrieveSkillResources(
+    if (!activation.skill.baseDir) return activation;
+    const linked = await loadLinkedSkillResources(activation.skill);
+    const linkedPaths = new Set(linked.map(resource => resource.path));
+    const resources = (await retrieveSkillResources(
       activation.skill.id,
       activation.skill.baseDir,
       query,
-    );
+    )).map(({ path, heading, body, charStart, charEnd }) => ({
+      path,
+      heading,
+      body,
+      charStart,
+      charEnd,
+    }));
     return {
       skill: activation.skill,
-      resources: resources.map(({ path, heading, body, charStart, charEnd }) => ({
-        path,
-        heading,
-        body,
-        charStart,
-        charEnd,
-      })),
+      resources: [...new Map([...activation.resources.filter(resource => !linkedPaths.has(resource.path)), ...linked, ...resources.filter(resource => !linkedPaths.has(resource.path))].map(item => [`${item.path}:${item.charStart}:${item.charEnd}`, item])).values()],
     };
+  }));
+}
+
+/** Literal local document links in SKILL.md are part of its instructions, independent of query language. */
+export async function loadLinkedSkillResources(skill: AgentSkill): Promise<ActivatedSkillResource[]> {
+  if (!skill.baseDir) return [];
+  const paths = [...new Set([...skill.body.matchAll(/(?:`|\]\()((?:references|examples)\/[^`\n)]+\.(?:md|txt))(?:`|\))/g)].map(match => match[1]!))];
+  return Promise.all(paths.map(async path => {
+    const fullPath = safeChildPath(skill.baseDir!, path);
+    const info = await lstatWithoutSymlinks(skill.baseDir!, fullPath);
+    if (!info.isFile() || info.size > MAX_SKILL_RESOURCE_BYTES) throw Object.assign(new Error(
+      `Skill reference cannot be loaded: ${skill.id}/${path}`), { code: "SKILL_REFERENCE_UNAVAILABLE" });
+    const body = await readFile(fullPath, "utf8");
+    if (body.includes("\0")) throw Object.assign(new Error("Skill reference must be text"), { code: "SKILL_REFERENCE_INVALID" });
+    return { path, body, charStart: 0, charEnd: body.length };
   }));
 }
 
@@ -288,7 +307,7 @@ function expireSkillToolResult(message: AgentMessage): AgentMessage {
     !message
     || typeof message !== "object"
     || (message as { role?: unknown }).role !== "toolResult"
-    || (message as { toolName?: unknown }).toolName !== "use_skill"
+    || !isUseSkillToolName((message as { toolName?: unknown }).toolName)
   ) {
     return message;
   }
@@ -312,8 +331,12 @@ export function assistantInvokesSkill(message: AgentMessage): boolean {
     part
     && typeof part === "object"
     && (part as { type?: unknown }).type === "toolCall"
-    && (part as { name?: unknown }).name === "use_skill"
+    && isUseSkillToolName((part as { name?: unknown }).name)
   ));
+}
+
+function isUseSkillToolName(value: unknown): boolean {
+  return typeof value === "string" && (value === "use_skill" || value.endsWith("__use_skill"));
 }
 
 export function sanitizeSkillTurnMessage(

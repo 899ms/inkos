@@ -31,16 +31,6 @@ describe("service-presets regression", () => {
       expect(preset!.api).toBe("openai-completions");
     });
 
-    it("has knownModels with current MiniMax chat models", () => {
-      const preset = resolveServicePreset("minimax");
-      expect(preset!.knownModels).toBeDefined();
-      expect(preset!.knownModels).toHaveLength(8);
-      expect(preset!.knownModels).toContain("MiniMax-M3");
-      expect(preset!.knownModels).toContain("MiniMax-M2.7");
-      expect(preset!.knownModels).toContain("MiniMax-M2.7-highspeed");
-      expect(preset!.knownModels).toContain("MiniMax-M2.5");
-      expect(preset!.knownModels).toContain("MiniMax-M2");
-    });
   });
 
   describe("listModelsForService", () => {
@@ -60,7 +50,7 @@ describe("service-presets regression", () => {
       expect(guessServiceFromBaseUrl("https://api.kkaiapi.com/v1")).toBe("kkaiapi");
     });
 
-    it("returns provider bank models for minimax (B8 升级：provider.models 替代 preset.knownModels)", async () => {
+    it("returns endpoint registry models for minimax", async () => {
       const models = await listModelsForService("minimax");
       expect(models.length).toBeGreaterThanOrEqual(7);
       expect(models.some((m) => m.id === "MiniMax-M3")).toBe(true);

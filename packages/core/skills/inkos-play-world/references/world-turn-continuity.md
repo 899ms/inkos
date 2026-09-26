@@ -1,8 +1,8 @@
 # World turn continuity
 
-## One turn, one adjacent consequence
+## Complete the requested action
 
-Start from the player's literal action and carry it through contact with the world. Stop after the nearest meaningful consequence or new pressure. Do not skip the requested action and narrate only its aftermath.
+Start from the player's literal action or sequence and carry feasible actions through their visible result. Routine transitions do not create an extra decision for the player. A real obstacle or interruption may prevent completion, but it must be grounded in the scene and state; mere preparation or arrival at the point of acting is not completion. Stop before a genuinely new choice the player has not made. A rewrite of a settled scene preserves its completed actions and does not resolve another turn.
 
 ## Synchronized time
 

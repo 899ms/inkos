@@ -3,7 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { render } from "ink";
 import React from "react";
 import { InkTuiApp } from "./dashboard.js";
-import { formatModeLabel, getTuiCopy, normalizeStageLabel, resolveTuiLocale, type TuiLocale } from "./i18n.js";
+import { getTuiCopy, resolveTuiLocale, type TuiLocale } from "./i18n.js";
 import { loadProjectSession } from "./session-store.js";
 import { detectModelInfo, detectProjectLanguage, ensureProject, interactiveLlmSetup } from "./setup.js";
 import { animateStartup } from "./effects.js";
@@ -12,7 +12,6 @@ export interface TuiFrameState {
   readonly locale?: TuiLocale;
   readonly projectName: string;
   readonly activeBookTitle?: string;
-  readonly automationMode: string;
   readonly status: string;
   readonly messages?: ReadonlyArray<string>;
   readonly events?: ReadonlyArray<string>;
@@ -23,8 +22,7 @@ export function renderTuiFrame(state: TuiFrameState): string {
   const copy = getTuiCopy(locale);
   const lines = [
     `${copy.labels.project} ${state.projectName}`,
-    `${copy.labels.stage} ${normalizeStageLabel(state.status, copy)}`,
-    `${copy.labels.mode} ${formatModeLabel(state.automationMode, copy)}`,
+    `${copy.labels.stage} ${state.status}`,
     `${copy.labels.book} ${state.activeBookTitle ?? copy.labels.none}`,
     "",
     ...(state.messages?.length
@@ -56,7 +54,7 @@ async function readVersion(): Promise<string> {
 
 async function resolveProjectRoot(cwd: string): Promise<string> {
   // If CWD is a book directory (contains book.json), walk up to the actual project root.
-  // Structure: <projectRoot>/books/<bookId>/book.json
+  // Structure: <projectRoot>/works/<bookId>/source/book.json
   try {
     await access(join(cwd, "book.json"));
     const parent = dirname(cwd);

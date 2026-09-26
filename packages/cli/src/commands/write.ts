@@ -1,9 +1,16 @@
 import { Command } from "commander";
-import { PipelineRunner, StateManager, resolveChapterReviewMode } from "@actalk/inkos-core";
+import {
+  PipelineRunner,
+  StateManager,
+  createResyncChapterStateTool,
+  createWriteChaptersTool,
+  executeExplicitCapabilityTool,
+  type Observation,
+} from "@actalk/inkos-core";
 import { readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { loadConfig, buildPipelineConfig, findProjectRoot, getLegacyMigrationHint, resolveContext, resolveBookId, log, logError } from "../utils.js";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveContext, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatNotifyBatchWriteBody,
   formatNotifyCommandTitle,
@@ -42,50 +49,44 @@ writeCommand
       const language = resolveCliLanguage(book.language);
       notifyLanguage = language;
       notifyBookName = book.title ?? bookId;
-      const migrationHint = await getLegacyMigrationHint(root, bookId);
-      if (migrationHint && !opts.json) {
-        log(`[migration] ${migrationHint}`);
-      }
       const config = await loadConfig();
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: context,
         quiet: opts.quiet,
-        chapterReviewMode: resolveChapterReviewMode(book, config.writing),
       }));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
       const count = parseInt(opts.count, 10);
       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
 
-      const results = [];
-      for (let i = 0; i < count; i++) {
-        if (!opts.json) log(formatWriteNextProgress(language, i + 1, count, bookId));
+      if (!opts.json) log(formatWriteNextProgress(language, 1, count, bookId));
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createWriteChaptersTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
+        workId: bookId,
+        parameters: {
+          instruction: context || "Write the requested consecutive chapters for the active Work.",
+          bookId,
+          chapterCount: count,
+          ...(wordCount ? { chapterWordCount: wordCount } : {}),
+        },
+      });
+      const actionData = action.data as {
+        readonly chapters?: ReadonlyArray<{
+          readonly chapterNumber: number;
+          readonly title: string;
+          readonly wordCount: number;
+          readonly observations: ReadonlyArray<Observation>;
+        }>;
+      } | undefined;
+      const results = [...(actionData?.chapters ?? [])];
 
-        const result = await pipeline.writeNextChapter(bookId, wordCount);
-        results.push(result);
-
-        if (!opts.json) {
-          for (const line of formatWriteNextResultLines(language, {
-            chapterNumber: result.chapterNumber,
-            title: result.title,
-            wordCount: result.wordCount,
-            auditPassed: result.auditResult.passed,
-            revised: result.revised,
-            status: result.status,
-            issues: result.auditResult.issues,
-          })) {
-            log(line);
-          }
+      if (!opts.json) {
+        for (const result of results) {
+          for (const line of formatWriteNextResultLines(language, result)) log(line);
           log("");
-        }
-
-        if (result.status === "state-degraded") {
-          if (!opts.json) {
-            log(language === "en"
-              ? "State repair required before continuing. Stopping batch."
-              : "需要先修复 state，已停止后续连写。");
-          }
-          break;
         }
       }
 
@@ -107,7 +108,7 @@ writeCommand
             chapterNumber: r.chapterNumber,
             title: r.title,
             wordCount: r.wordCount,
-            auditPassed: r.auditResult.passed,
+            observationCount: r.observations.length,
           }))),
         }, config);
       }
@@ -179,10 +180,6 @@ writeCommand
       await stat(restoreSnapshotDir).catch(() => {
         throw new Error(`Cannot rewrite chapter ${chapter}: missing snapshot for chapter ${restoreFrom}`);
       });
-      const migrationHint = await getLegacyMigrationHint(root, bookId);
-      if (migrationHint && !opts.json) {
-        log(`[migration] ${migrationHint}`);
-      }
 
       // Remove existing chapter file
       const files = await readdir(chaptersDir);
@@ -227,10 +224,30 @@ writeCommand
       const config = await loadConfig();
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: opts.brief,
-        chapterReviewMode: resolveChapterReviewMode(book, config.writing),
       }));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
-      const result = await pipeline.writeNextChapter(bookId, wordCount);
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createWriteChaptersTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
+        workId: bookId,
+        parameters: {
+          instruction: opts.brief?.trim() || `Rewrite chapter ${chapter}.`,
+          bookId,
+          chapterCount: 1,
+          ...(wordCount ? { chapterWordCount: wordCount } : {}),
+        },
+      });
+      const result = (action.data as {
+        readonly chapters?: ReadonlyArray<{
+          readonly chapterNumber: number;
+          readonly title: string;
+          readonly wordCount: number;
+          readonly observations: ReadonlyArray<Observation>;
+        }>;
+      } | undefined)?.chapters?.[0];
+      if (!result) throw new Error("Rewrite action completed without a chapter artifact.");
       const language = resolveCliLanguage(book.language);
 
       if (opts.json) {
@@ -240,10 +257,7 @@ writeCommand
           chapterNumber: result.chapterNumber,
           title: result.title,
           wordCount: result.wordCount,
-          auditPassed: result.auditResult.passed,
-          revised: result.revised,
-          status: result.status,
-          issues: result.auditResult.issues,
+          observations: result.observations,
         })) {
           log(line);
         }
@@ -300,19 +314,32 @@ writeCommand
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: opts.brief,
       }));
-      const result = await pipeline.resyncChapterArtifacts(bookId, chapter);
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "resync_chapter_state", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createResyncChapterStateTool(pipeline, bookId, {
+          defaultSkills: activatedSkills,
+          language: book.language,
+        }),
+        workId: bookId,
+        parameters: { bookId, chapterNumber: chapter },
+      });
+      const result = action.data as {
+        readonly chapterNumber: number;
+        readonly observations: ReadonlyArray<Observation>;
+      };
+      const chapterMeta = (await state.loadChapterIndex(bookId)).find((item) => item.number === result.chapterNumber);
+      if (!chapterMeta) throw new Error(`Resync action completed without chapter ${result.chapterNumber}.`);
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
         for (const line of formatWriteNextResultLines(language, {
           chapterNumber: result.chapterNumber,
-          title: result.title,
-          wordCount: result.wordCount,
-          auditPassed: result.auditResult.passed,
-          revised: result.revised,
-          status: result.status,
-          issues: result.auditResult.issues,
+          title: chapterMeta.title,
+          wordCount: chapterMeta.wordCount,
+          observations: result.observations,
         })) {
           log(line);
         }
@@ -322,61 +349,6 @@ writeCommand
         log(JSON.stringify({ error: String(e) }));
       } else {
         logError(`Failed to sync chapter artifacts: ${e}`);
-      }
-      process.exit(1);
-    }
-  });
-
-writeCommand
-  .command("repair-state")
-  .description("Rebuild truth files for a persisted state-degraded chapter without rewriting body text")
-  .argument("<args...>", "Book ID (optional) and chapter number")
-  .option("--json", "Output JSON")
-  .action(async (args: ReadonlyArray<string>, opts) => {
-    try {
-      const root = findProjectRoot();
-
-      let bookId: string;
-      let chapter: number;
-      if (args.length === 1) {
-        chapter = parseInt(args[0]!, 10);
-        if (isNaN(chapter)) throw new Error(`Expected chapter number, got "${args[0]}"`);
-        bookId = await resolveBookId(undefined, root);
-      } else if (args.length === 2) {
-        chapter = parseInt(args[1]!, 10);
-        if (isNaN(chapter)) throw new Error(`Expected chapter number, got "${args[1]}"`);
-        bookId = await resolveBookId(args[0], root);
-      } else {
-        throw new Error("Usage: inkos write repair-state [book-id] <chapter>");
-      }
-
-      const state = new StateManager(root);
-      const book = await state.loadBookConfig(bookId);
-      const language = resolveCliLanguage(book.language);
-      const config = await loadConfig();
-      const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
-      const result = await pipeline.repairChapterState(bookId, chapter);
-
-      if (opts.json) {
-        log(JSON.stringify(result, null, 2));
-      } else {
-        for (const line of formatWriteNextResultLines(language, {
-          chapterNumber: result.chapterNumber,
-          title: result.title,
-          wordCount: result.wordCount,
-          auditPassed: result.auditResult.passed,
-          revised: result.revised,
-          status: result.status,
-          issues: result.auditResult.issues,
-        })) {
-          log(line);
-        }
-      }
-    } catch (e) {
-      if (opts.json) {
-        log(JSON.stringify({ error: String(e) }));
-      } else {
-        logError(`Failed to repair chapter state: ${e}`);
       }
       process.exit(1);
     }

@@ -13,7 +13,7 @@ const upsertRemove = <T extends z.ZodTypeAny>(item: T) =>
   z.object({
     upsert: z.array(item).default([]),
     remove: z.array(z.string()).default([]),
-  });
+  }).strict();
 
 export const StoryGraphDeltaSchema = z.object({
   worldAnchor: WorldAnchorSchema.partial().optional(),
@@ -22,7 +22,7 @@ export const StoryGraphDeltaSchema = z.object({
   variables: upsertRemove(VariableSchema).optional(),
   endings: upsertRemove(EndingSchema).optional(),
   notes: z.array(z.string()).default([]),
-});
+}).strict();
 export type StoryGraphDelta = z.infer<typeof StoryGraphDeltaSchema>;
 
 function applyUpsertRemove<T>(

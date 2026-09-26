@@ -32,7 +32,8 @@ describe("runtime requirements", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.detail).toContain("Node 22+");
+    expect(evaluateNodeRuntimeSupport({nodeVersion:"v22.15.0",hasNodeSqlite:true}).ok).toBe(false);
+    expect(evaluateNodeRuntimeSupport({nodeVersion:"v22.16.0",hasNodeSqlite:true}).ok).toBe(true);
     expect(result.detail).toContain("v20.17.0");
   });
 

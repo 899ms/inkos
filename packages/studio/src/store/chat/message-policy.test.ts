@@ -10,7 +10,7 @@ describe("shouldRefreshSidebarForTool", () => {
 
   it("refreshes for mutating and unknown tools", () => {
     expect(shouldRefreshSidebarForTool("edit")).toBe(true);
-    expect(shouldRefreshSidebarForTool("sub_agent")).toBe(true);
+    expect(shouldRefreshSidebarForTool("write_chapters")).toBe(true);
     expect(shouldRefreshSidebarForTool("some_future_tool")).toBe(true);
   });
 });
@@ -35,7 +35,6 @@ describe("isConfirmedProductionSend", () => {
   it("does not treat other sources or non-production intents as production sends", () => {
     expect(isConfirmedProductionSend("free-text", "write_next")).toBe(false);
     expect(isConfirmedProductionSend("quick-action", "create_book")).toBe(false);
-    expect(isConfirmedProductionSend("button", "edit_artifact")).toBe(false);
     expect(isConfirmedProductionSend("button", undefined)).toBe(false);
   });
 });

@@ -6,13 +6,7 @@ import { useColors } from "../hooks/use-colors";
 import { Wand2, Upload, BarChart3 } from "lucide-react";
 
 interface StyleProfile {
-  readonly sourceName: string;
-  readonly avgSentenceLength: number;
-  readonly sentenceLengthStdDev: number;
-  readonly avgParagraphLength: number;
-  readonly vocabularyDiversity: number;
-  readonly topPatterns: ReadonlyArray<string>;
-  readonly rhetoricalFeatures: ReadonlyArray<string>;
+  readonly guide: string;
 }
 
 interface BookSummary {
@@ -27,35 +21,20 @@ export interface StyleStatusNotice {
   readonly message: string;
 }
 
-export function buildStyleStatusNotice(analyzeStatus: string, importStatus: string): StyleStatusNotice | null {
-  const message = analyzeStatus.trim() || importStatus.trim();
-  if (!message) return null;
-  if (message.startsWith("Error:")) {
-    return { tone: "error", message };
-  }
-  if (message.endsWith("...")) {
-    return { tone: "info", message };
-  }
-  return { tone: "success", message };
-}
-
 export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const [text, setText] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [profile, setProfile] = useState<StyleProfile | null>(null);
   const [loading, setLoading] = useState(false);
-  const [analyzeStatus, setAnalyzeStatus] = useState("");
   const [importBookId, setImportBookId] = useState("");
-  const [importStatus, setImportStatus] = useState("");
+  const [statusNotice, setStatusNotice] = useState<StyleStatusNotice | null>(null);
   const { data: booksData } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
-  const statusNotice = buildStyleStatusNotice(analyzeStatus, importStatus);
-
   const handleAnalyze = async () => {
     if (!text.trim()) return;
     setLoading(true);
     setProfile(null);
-    setAnalyzeStatus("");
+    setStatusNotice(null);
     try {
       const data = await fetchJson<StyleProfile>("/style/analyze", {
         method: "POST",
@@ -64,19 +43,19 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       });
       setProfile(data);
     } catch (e) {
-      setAnalyzeStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatusNotice({ tone: "error", message: e instanceof Error ? e.message : String(e) });
     }
     setLoading(false);
   };
 
   const handleImport = async () => {
     if (!importBookId || !text.trim()) return;
-    setImportStatus("Importing...");
+    setStatusNotice({ tone: "info", message: "Importing..." });
     try {
       await postApi(`/books/${importBookId}/style/import`, { text, sourceName: sourceName || "sample" });
-      setImportStatus("Style guide imported successfully!");
+      setStatusNotice({ tone: "success", message: "Style guide imported successfully!" });
     } catch (e) {
-      setImportStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStatusNotice({ tone: "error", message: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -133,45 +112,9 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
           {profile && (
             <div className={`border ${c.cardStatic} rounded-lg p-5 space-y-4`}>
               <h3 className="font-semibold text-sm uppercase tracking-wider text-muted-foreground">{t("style.results")}</h3>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="bg-secondary/30 rounded-lg p-3">
-                  <div className="text-muted-foreground text-xs">{t("style.avgSentence")}</div>
-                  <div className="text-xl font-bold">{profile.avgSentenceLength.toFixed(1)}</div>
-                </div>
-                <div className="bg-secondary/30 rounded-lg p-3">
-                  <div className="text-muted-foreground text-xs">{t("style.vocabDiversity")}</div>
-                  <div className="text-xl font-bold">{(profile.vocabularyDiversity * 100).toFixed(0)}%</div>
-                </div>
-                <div className="bg-secondary/30 rounded-lg p-3">
-                  <div className="text-muted-foreground text-xs">{t("style.avgParagraph")}</div>
-                  <div className="text-xl font-bold">{profile.avgParagraphLength.toFixed(0)}</div>
-                </div>
-                <div className="bg-secondary/30 rounded-lg p-3">
-                  <div className="text-muted-foreground text-xs">{t("style.sentenceStdDev")}</div>
-                  <div className="text-xl font-bold">{profile.sentenceLengthStdDev.toFixed(1)}</div>
-                </div>
-              </div>
-              {profile.topPatterns.length > 0 && (
-                <div>
-                  <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2">{t("style.topPatterns")}</div>
-                  <div className="flex gap-2 flex-wrap">
-                    {profile.topPatterns.map((p) => (
-                      <span key={p} className="px-2 py-1 text-xs bg-secondary rounded">{p}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {profile.rhetoricalFeatures.length > 0 && (
-                <div>
-                  <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2">{t("style.rhetoricalFeatures")}</div>
-                  <div className="flex gap-2 flex-wrap">
-                    {profile.rhetoricalFeatures.map((f) => (
-                      <span key={f} className="px-2 py-1 text-xs bg-primary/10 text-primary rounded">{f}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
+              <article className="whitespace-pre-wrap rounded-lg bg-secondary/30 p-4 text-sm leading-7 font-serif">
+                {profile.guide}
+              </article>
               {/* Import to book */}
               <div className="border-t border-border pt-4 mt-4 space-y-3">
                 <h4 className="font-semibold text-sm flex items-center gap-2">
@@ -195,7 +138,6 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
                 >
                   {t("style.importGuide")}
                 </button>
-                {importStatus && <div className="text-xs text-muted-foreground">{importStatus}</div>}
               </div>
             </div>
           )}

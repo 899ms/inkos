@@ -64,15 +64,10 @@ export async function selectBookReferenceContext(
   }
   if (sections.length === 0) return { entries: [], notes };
 
-  let selectedSources: ReadonlyArray<string>;
-  try {
-    selectedSources = await selector({
-      ...task,
-      candidates: sections.map(({ content: _content, ...candidate }) => candidate),
-    });
-  } catch {
-    return { entries: [], notes: [...notes, "book-reference-selection-failed"] };
-  }
+  const selectedSources = await selector({
+    ...task,
+    candidates: sections.map(({ content: _content, ...candidate }) => candidate),
+  });
 
   const selected = new Set(selectedSources);
   return {
@@ -82,6 +77,7 @@ export async function selectBookReferenceContext(
         source: section.source,
         reason: renderReason(section),
         excerpt: section.content,
+        protection: "compressible" as const,
       })),
     notes,
   };

@@ -1,40 +1,12 @@
 import type { ActionPayload, ActionSource, PlayMode, RequestedIntent, SessionKind } from "@actalk/inkos-core";
+import type { StudioChatRequestSnapshot, StudioCompletionStatus, ToolExecution, SendMessageOptions, FailedSendRecord } from "../../shared/session-request";
+export type { ToolExecution, PipelineStage, SendMessageOptions, FailedSendRecord, ChatAttachmentPayload } from "../../shared/session-request";
 
 // -- Data types --
 
 export interface ToolCall {
   readonly name: string;
   readonly arguments: Record<string, unknown>;
-}
-
-export interface PipelineStage {
-  label: string;
-  status: "pending" | "active" | "completed";
-  progress?: {
-    status?: string;          // "thinking" | "streaming" | ...
-    elapsedMs: number;
-    totalChars: number;
-    chineseChars: number;
-  };
-}
-
-export interface ToolExecution {
-  id: string;
-  tool: string;
-  agent?: string;
-  label: string;
-  status: "running" | "processing" | "completed" | "error";
-  args?: Record<string, unknown>;
-  result?: string;
-  details?: unknown;
-  error?: string;
-  stages?: PipelineStage[];
-  logs?: string[];
-  startedAt: number;
-  completedAt?: number;
-  // 后台生产任务的工具卡（来自带 background 标记的 tool:start 或任务快照恢复）。
-  // 无 executionId 事件的回退路由据此跳过任务卡，只挂聊天轮工具卡。
-  background?: boolean;
 }
 
 // -- Message parts (chronologically ordered for rendering) --
@@ -46,6 +18,7 @@ export type MessagePart =
 
 export interface Message {
   readonly role: "user" | "assistant";
+  readonly kind?: "message" | "error";
   readonly content: string;
   readonly thinking?: string;
   readonly thinkingStreaming?: boolean;
@@ -57,6 +30,7 @@ export interface Message {
 
 export interface SessionMessage {
   readonly role: "user" | "assistant" | "system";
+  readonly kind?: "message" | "error";
   readonly content: string;
   readonly thinking?: string;
   readonly toolExecutions?: ReadonlyArray<ToolExecution>;
@@ -67,7 +41,12 @@ export interface SessionSummary {
   readonly sessionId: string;
   readonly bookId: string | null;
   readonly sessionKind?: ChatSessionKind;
+  readonly profileId?: string;
+  readonly workId?: string | null;
+  readonly proposalAction?: ChatRequestedIntent;
   readonly playMode?: PlayMode;
+  readonly modelOverride?: string;
+  readonly serviceOverride?: string;
   readonly title: string | null;
   readonly messageCount: number;
   readonly createdAt: number;
@@ -75,6 +54,7 @@ export interface SessionSummary {
 }
 
 export interface AgentResponse {
+  readonly completionStatus?: StudioCompletionStatus;
   readonly response?: string;
   readonly error?: string | { code?: string; message?: string };
   readonly details?: {
@@ -86,21 +66,31 @@ export interface AgentResponse {
     readonly sessionId?: string;
     readonly bookId?: string | null;
     readonly sessionKind?: ChatSessionKind;
+    readonly profileId?: string;
+    readonly workId?: string | null;
+    readonly proposalAction?: ChatRequestedIntent;
     readonly playMode?: PlayMode;
+    readonly modelOverride?: string;
+    readonly serviceOverride?: string;
     readonly title?: string | null;
     readonly activeBookId?: string;
-    readonly creationDraft?: unknown;
     readonly messages?: ReadonlyArray<SessionMessage>;
   };
   readonly request?: unknown;
 }
 
 export interface SessionResponse {
+  readonly chatRequest?: StudioChatRequestSnapshot | null;
   readonly session?: {
     readonly sessionId?: string;
     readonly bookId?: string | null;
     readonly sessionKind?: ChatSessionKind;
+    readonly profileId?: string;
+    readonly workId?: string | null;
+    readonly proposalAction?: ChatRequestedIntent;
     readonly playMode?: PlayMode;
+    readonly modelOverride?: string;
+    readonly serviceOverride?: string;
     readonly title?: string | null;
     readonly activeBookId?: string;
     readonly messages?: ReadonlyArray<SessionMessage>;
@@ -131,46 +121,27 @@ export type ChatActionSource = ActionSource;
 export type ChatRequestedIntent = RequestedIntent;
 export type ChatActionPayload = ActionPayload;
 
-export interface SendMessageOptions {
-  readonly activeBookId?: string;
-  readonly sessionKind?: ChatSessionKind;
-  readonly actionSource?: ChatActionSource;
-  readonly requestedIntent?: ChatRequestedIntent;
-  readonly actionPayload?: ChatActionPayload;
-  readonly requestedSkills?: ReadonlyArray<string>;
-  readonly disabledSkills?: ReadonlyArray<string>;
-  readonly attachments?: ReadonlyArray<ChatAttachmentPayload>;
-  readonly playMode?: PlayMode;
-}
-
-// 一次失败的聊天轮发送的原样参数（sendMessage 的 text 与 options），
-// 供"重试"按钮一键重发。
-export interface FailedSendRecord {
-  readonly text: string;
-  readonly options?: SendMessageOptions;
-}
-
-export interface ChatAttachmentPayload {
-  readonly id: string;
-  readonly filename: string;
-  readonly mediaType: string;
-  readonly size: number;
-  readonly dataUrl: string;
-}
-
 export interface SessionRuntime {
   readonly sessionId: string;
   readonly bookId: string | null;
   readonly sessionKind?: ChatSessionKind;
+  readonly profileId?: string;
+  readonly workId?: string | null;
+  readonly pendingWorkTarget?: { readonly workId: string; readonly profileId: string; readonly fromWorkId: string | null };
+  readonly proposalAction?: ChatRequestedIntent;
   readonly playMode?: PlayMode;
+  readonly modelOverride?: string;
+  readonly serviceOverride?: string;
   readonly title: string | null;
   readonly messages: ReadonlyArray<Message>;
-  readonly stream: EventSource | null;
+  readonly stream: import("../../lib/studio-events").StudioEventStream | null;
   // isStreaming = 聊天轮流式中 或 后台生产任务运行中（面向"会话是否忙"的读取方）。
   readonly isStreaming: boolean;
   // isChatStreaming 只表示聊天轮本身在流式中；后台任务运行期间它是 false，
   // 用户仍可继续发消息。
   readonly isChatStreaming: boolean;
+  /** The server owns this round after its HTTP response connection was lost. */
+  readonly detachedChatRequestId?: string;
   readonly lastError: string | null;
   // 上一条失败的聊天轮发送记录：请求失败（fetch 拒绝、/agent 返回 error 等）时写入，
   // 新一轮发送开始时清除。用户主动停止与后台生产任务轮的失败不记录
@@ -192,9 +163,9 @@ export interface MessageState {
 export interface CreateState {
   bookDataVersion: number;
   sidebarView: "panel" | "artifact";
-  artifactFile: string | null;         // foundation file name, e.g. "story_bible.md"
+  artifactFile: string | null;
   artifactChapter: number | null;      // chapter number, e.g. 1
-  projectArtifactPath: string | null;  // generated project artifact, e.g. "interactive-films/demo/script.md"
+  projectArtifactPath: string | null;  // generated Work artifact, e.g. "works/demo/source/script.md"
   bookSummary: BookSummary | null;
   // Proposed-action cards (propose_action) are one-shot: once confirmed or
   // rejected, the card locks so the user can't re-fire the production action.
@@ -216,12 +187,12 @@ export interface MessageActions {
   addErrorMessage: (sessionId: string, errorMsg: string) => void;
   loadSessionMessages: (sessionId: string, msgs: ReadonlyArray<SessionMessage>) => void;
   loadSessionList: (bookId: string | null) => Promise<ReadonlyArray<SessionSummary>>;
-  createSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => Promise<string>;
-  createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => string;
+  createSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode, binding?: { readonly profileId?: string; readonly workId?: string | null; readonly proposalAction?: ChatRequestedIntent }) => Promise<string>;
+  createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode, binding?: { readonly profileId?: string; readonly workId?: string | null; readonly proposalAction?: ChatRequestedIntent }) => string;
   setSessionPlayMode: (sessionId: string, playMode: PlayMode) => void;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
-  loadSessionDetail: (sessionId: string) => Promise<void>;
+  loadSessionDetail: (sessionId: string, reconcile?: boolean, snapshot?: SessionResponse) => Promise<boolean>;
   sendMessage: (sessionId: string, text: string, options?: SendMessageOptions) => Promise<void>;
   // 用 lastFailedSend 记录的原样参数重发上一条失败的消息；无记录或聊天轮流式中时不做任何事。
   retryLastSend: (sessionId: string) => Promise<void>;

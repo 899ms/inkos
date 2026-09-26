@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStudioServer } from "../api/server.js";
-import { saveStoryGraph, StoryGraphSchema } from "@actalk/inkos-core";
+import { createWorkManifest, saveWorkManifest, saveStoryGraph, StoryGraphSchema } from "@actalk/inkos-core";
 
 describe("GET /api/v1/interactive-films", () => {
   let root: string;
@@ -17,6 +17,12 @@ describe("GET /api/v1/interactive-films", () => {
   });
 
   it("returns both seeded film projects sorted by title", async () => {
+    await saveWorkManifest(root, createWorkManifest({
+      id: "alpha", title: "Alpha Film", profileId: "interactive-film", language: "en",
+    }));
+    await saveWorkManifest(root, createWorkManifest({
+      id: "beta", title: "Beta Film", profileId: "interactive-film", language: "en",
+    }));
     await saveStoryGraph(
       root,
       "alpha",

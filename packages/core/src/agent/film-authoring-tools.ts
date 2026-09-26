@@ -3,7 +3,10 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { applyGraphDelta } from "../interactive-film/authoring-store.js";
 import type { LLMClient } from "../llm/provider.js";
 import { runWorkerAgentTool } from "./worker-agent.js";
-import { loadStoryGraph } from "../interactive-film/graph-store.js";
+import { loadStoryGraph, storyGraphPath } from "../interactive-film/graph-store.js";
+import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { validateStoryGraph } from "../interactive-film/validation.js";
 import { buildFilmAuthoringContext } from "../interactive-film/film-context.js";
 import {
   buildWorldAnchorDelta,
@@ -13,15 +16,13 @@ import {
   buildConnectChoiceDelta,
   buildRemoveNodeDelta,
 } from "../interactive-film/authoring-tools.js";
-import { StoryNodeSchema, type StoryNode } from "../interactive-film/graph-schema.js";
-import { StoryNodeContentToolSchema, StoryStructureToolSchema } from "../interactive-film/tool-schemas.js";
-import { writeCharacterFacts } from "../interactive-film/memory-link.js";
-import { MemoryDB } from "../state/memory-db.js";
-import { join } from "node:path";
+import { StoryNodeSchema,StoryGraphSchema, type StoryNode } from "../interactive-film/graph-schema.js";
+import { StoryNodeContentToolSchema, StoryNodeRevisionToolSchema, StoryNodeToolSchema, StoryStructureToolSchema, ChoiceToolSchema } from "../interactive-film/tool-schemas.js";
 import { generateNodeImage, defaultNodeImageDeps, type NodeImageDeps } from "../interactive-film/node-image.js";
-import { appendPromptPackGuidance } from "../prompts/prompt-pack.js";
-import { appendActivatedSkillGuidance } from "../agents/base.js";
+import { prepareWorkerMessages } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "./skill-tool.js";
+import { createInspectFilmTool, createExportFilmTool,createSetFilmRequirementsTool } from "../harness/tools/film-delivery.js";
+import{readFilmRequirements,checkFilmRequirements}from'../interactive-film/delivery-requirements.js';
 
 // ---------------------------------------------------------------------------
 // Local helper — textResult is not exported from agent-tools.ts
@@ -64,7 +65,7 @@ export function createSetWorldAnchorTool(projectRoot: string, projectId: string)
 
 const AddVariableParams = Type.Object({
   name: Type.String({ description: "variable name (unique key)" }),
-  type: Type.Union([Type.Literal("flag"), Type.Literal("counter"), Type.Literal("relationship"), Type.Literal("item")]),
+  type: Type.String({ description: "user-defined variable role, e.g. flag, relationship, clue-state, or another story-specific kind" }),
   default: Type.Union([Type.Number(), Type.String(), Type.Boolean()], { description: "default value" }),
   desc: Type.Optional(Type.String({ description: "what it tracks" })),
 });
@@ -94,7 +95,7 @@ const DefineEndingParams = Type.Object({
   id: Type.String({ description: "ending id" }),
   nodeId: Type.String({ description: "the ending node this describes (must exist)" }),
   title: Type.String(),
-  type: Type.Union([Type.Literal("good"), Type.Literal("bad"), Type.Literal("neutral"), Type.Literal("secret")]),
+  type: Type.String({ description: "ending meaning in the work's own terms" }),
   description: Type.Optional(Type.String()),
 });
 
@@ -123,7 +124,7 @@ const UpsertCharactersParams = Type.Object({
   characters: Type.Array(Type.Object({
     id: Type.String(),
     name: Type.String(),
-    role: Type.Optional(Type.Union([Type.Literal("protagonist"), Type.Literal("antagonist"), Type.Literal("support"), Type.Literal("other")])),
+    role: Type.Optional(Type.String({ description: "character role in the work's own terms" })),
     motivation: Type.Optional(Type.String()),
     voiceProfile: Type.Optional(Type.Object({
       speakingRhythm: Type.Optional(Type.String()),
@@ -154,12 +155,6 @@ export function createUpsertCharactersTool(projectRoot: string, projectId: strin
           : undefined,
       }));
       const { rev } = await applyGraphDelta({ projectRoot, projectId, delta: buildUpsertCharactersDelta(chars) });
-      const db = new MemoryDB(join(projectRoot, "interactive-films", projectId));
-      try {
-        writeCharacterFacts(db, chars, rev);
-      } finally {
-        db.close();
-      }
       return textResult(`Upserted ${chars.length} character(s) (rev ${rev}).`, { kind: "graph_updated", rev });
     },
   };
@@ -175,6 +170,8 @@ export interface FilmLLMDeps {
     user: string,
     nodeId: string,
     signal?: AbortSignal,
+    currentNode?: StoryNode,
+    fields?: ReadonlyArray<"sceneDesc" | "dialogue">,
   ) => Promise<StoryNode>;
   readonly submitStructure: (
     system: string,
@@ -189,17 +186,18 @@ function defaultSubmitNode(
   model: string,
   activatedSkills?: () => ReadonlyArray<ActivatedSkillGuidance>,
 ): FilmLLMDeps["submitNode"] {
-  return async (system, user, nodeId, signal) => {
-    const submitted = await runWorkerAgentTool(client, model, appendActivatedSkillGuidance([
+  return async (system, user, nodeId, signal, currentNode, fields) => {
+    const submitted = await runWorkerAgentTool(client, model, await prepareWorkerMessages({ client, activatedSkills: activatedSkills?.(), signal }, [
       { role: "system", content: system },
       { role: "user", content: user },
-    ], activatedSkills?.()), {
-      name: "submit_story_node",
-      label: "Submit Story Node",
-      description: "Submit the complete scene, dialogue, choices, and image direction for the requested node. The host owns the node id.",
-      parameters: StoryNodeContentToolSchema,
+    ], 4000, "film-node"), {
+      name: currentNode ? "submit_story_node_revision" : "submit_story_node",
+      label: currentNode ? "Submit node prose revision" : "Submit Story Node",
+      description: currentNode ? "Submit only the selected prose fields. The host preserves every other node field."
+        : "Submit the complete scene, dialogue, choices, and image direction for the requested node. The host owns the node id.",
+      parameters: currentNode ? Type.Pick(StoryNodeRevisionToolSchema, fields ?? ["sceneDesc", "dialogue"]) : StoryNodeContentToolSchema,
     }, { temperature: 0.6, maxTokens: 4000, signal });
-    return StoryNodeSchema.parse({ ...submitted, id: nodeId });
+    return StoryNodeSchema.parse({ ...currentNode, ...submitted, id: nodeId });
   };
 }
 
@@ -209,10 +207,10 @@ function defaultSubmitStructure(
   activatedSkills?: () => ReadonlyArray<ActivatedSkillGuidance>,
 ): FilmLLMDeps["submitStructure"] {
   return async (system, user, signal) => {
-    const submitted = await runWorkerAgentTool(client, model, appendActivatedSkillGuidance([
+    const submitted = await runWorkerAgentTool(client, model, await prepareWorkerMessages({ client, activatedSkills: activatedSkills?.(), signal }, [
       { role: "system", content: system },
       { role: "user", content: user },
-    ], activatedSkills?.()), {
+    ], 6000, "film-structure"), {
       name: "submit_story_structure",
       label: "Submit Story Structure",
       description: "Submit the complete branching node skeleton. Node ids and choice targets must form one connected playable graph.",
@@ -227,20 +225,32 @@ const FillNodeParams = Type.Object({
   instruction: Type.String({ description: "what this scene should contain (beats, who speaks, choices)" }),
 });
 
+const ReviseNodeParams = Type.Object({
+  ...FillNodeParams.properties,
+  fields: Type.Array(Type.Union([Type.Literal("sceneDesc"), Type.Literal("dialogue")]), {
+    minItems: 1, uniqueItems: true,
+    description: "Select only the fields the author permits changing. For dialogue-only edits select dialogue; for description-only edits select sceneDesc. Select both only when both are in scope.",
+  }),
+});
+
 export type FilmAuthoringLanguage = "zh" | "en";
 
-const NODE_SYSTEM_ZH = `你是互动影游编剧。根据当前图上下文和指令，写出指定节点的完整场景、对白、选项和配图方向。choices[].targetNodeId 必须指向已存在的节点 id。完成后调用 submit_story_node。`;
-const NODE_SYSTEM_EN = `You are an interactive film scriptwriter. Using the current graph context and the instruction, write the requested node's complete scene, dialogue, choices, and image direction. Every choices[].targetNodeId must point to an existing node id. Finish by calling submit_story_node.`;
-
-function nodeSystemPrompt(language: FilmAuthoringLanguage): string {
-  return language === "en" ? NODE_SYSTEM_EN : NODE_SYSTEM_ZH;
+function nodeSystemPrompt(language: FilmAuthoringLanguage, revision = false): string {
+  const operation = language === 'en'
+    ? revision ? 'Use the activated interactive-film Skill to revise the requested node. Submit only the selected fields through submit_story_node_revision. All other node fields are read-only and preserved by the host.'
+      : 'Use the activated interactive-film Skill and current graph context to submit the requested node through submit_story_node. Every choices[].targetNodeId must identify an existing node. The host owns the node id.'
+    : revision ? '按已激活的互动影游 Skill 修改指定节点。通过 submit_story_node_revision 仅提交选定字段；其他节点字段是只读参考，由宿主保持。'
+      : '按已激活的互动影游 Skill 和当前图上下文，通过 submit_story_node 提交指定节点。choices[].targetNodeId 必须指向已存在的节点，节点 id 由宿主提供。';
+  const rendering = language === 'en'
+    ? 'The player renders sceneDesc and condition-matching dialogue on entry, before a choice is made. Outgoing choice effects apply only after that choice; the destination node then renders with the resulting state. sceneDesc is unconditional. Node prose is player-facing; conditions belong in dialogue[].condition.'
+    : '播放器进入节点后先显示 sceneDesc 和符合 condition 的对白，随后才让玩家选择。选项 effects 仅在点击该选项后生效，目标节点使用生效后的状态显示。sceneDesc 无条件显示。节点正文面向玩家，状态条件写在 dialogue[].condition 中。';
+  return `${operation}\n${rendering}`;
 }
 
-function graphUpdatedDetails(rev: number, promptId: string, extra: Record<string, unknown> = {}) {
+function graphUpdatedDetails(rev: number, extra: Record<string, unknown> = {}) {
   return {
     kind: "graph_updated" as const,
     rev,
-    promptPacks: [promptId],
     ...extra,
   };
 }
@@ -253,27 +263,24 @@ export function createFillNodeTool(
 ): AgentTool<typeof FillNodeParams> {
   return {
     name: "fill_node",
-    description: "interactive-film authoring: write/rewrite one node's scene, dialogue and choices via the model. Applies immediately.",
+    description: "Write one node's scene and dialogue. Existing choices, variable effects and node identity remain unchanged; use connect_choice for topology changes.",
     label: "Fill Node",
     parameters: FillNodeParams,
     async execute(_id, params: Static<typeof FillNodeParams>, signal) {
       const graph = await loadStoryGraph(projectRoot, projectId);
-      const context = graph ? buildFilmAuthoringContext(graph) : "(empty graph)";
-      const systemPrompt = await appendPromptPackGuidance(nodeSystemPrompt(language), {
-        promptId: "interactive-film.script",
-        projectRoot,
-      });
-      const userPrompt = language === "en"
-        ? `${context}\n\nNode id to fill: ${params.nodeId}\nInstruction: ${params.instruction}`
-        : `${context}\n\n要填的节点 id：${params.nodeId}\n指令：${params.instruction}`;
+      const context = graph ? JSON.parse(buildFilmAuthoringContext(graph)) : null;
+      const systemPrompt = nodeSystemPrompt(language);
+      const userPrompt = JSON.stringify({context, targetNodeId: params.nodeId, instruction: params.instruction});
       const node = await deps.submitNode(systemPrompt, userPrompt, params.nodeId, signal);
+      const existing=graph?.nodes.find(n=>n.id===params.nodeId);
+      const filled=existing?{...node,id:existing.id,type:existing.type,choices:existing.choices}:node;
       const { rev } = await applyGraphDelta({
         projectRoot,
         projectId,
-        delta: { nodes: { upsert: [node], remove: [] }, notes: [] },
+        delta: { nodes: { upsert: [filled], remove: [] }, notes: [] },
         phase: "workshop",
       });
-      return textResult(`Node ${params.nodeId} filled (rev ${rev}).`, graphUpdatedDetails(rev, "interactive-film.script", {
+      return textResult(`Node ${params.nodeId} filled (rev ${rev}).`, graphUpdatedDetails(rev, {
         skillIds: deps.skillIds?.() ?? [],
       }));
     },
@@ -285,31 +292,31 @@ export function createReviseNodeTool(
   projectId: string,
   deps: FilmLLMDeps,
   language: FilmAuthoringLanguage = "zh",
-): AgentTool<typeof FillNodeParams> {
+): AgentTool<typeof ReviseNodeParams> {
   return {
     name: "revise_node",
-    description: "interactive-film authoring: revise one existing node per instruction. Applies immediately.",
+    description: "interactive-film authoring: revise the selected prose fields of one existing node. Select only fields authorized by the author. All unselected fields remain unchanged. Applies immediately.",
     label: "Revise Node",
-    parameters: FillNodeParams,
-    async execute(_id, params: Static<typeof FillNodeParams>, signal) {
+    parameters: ReviseNodeParams,
+    async execute(_id, params: Static<typeof ReviseNodeParams>, signal) {
       const graph = await loadStoryGraph(projectRoot, projectId);
-      const context = graph ? buildFilmAuthoringContext(graph) : "(empty graph)";
+      const context = graph ? JSON.parse(buildFilmAuthoringContext(graph)) : null;
       const current = graph?.nodes.find((n) => n.id === params.nodeId);
-      const systemPrompt = await appendPromptPackGuidance(nodeSystemPrompt(language), {
-        promptId: "interactive-film.script",
-        projectRoot,
-      });
-      const userPrompt = language === "en"
-        ? `${context}\n\nNode id to revise: ${params.nodeId}\nCurrent content: ${JSON.stringify(current ?? {})}\nRevision instruction: ${params.instruction}`
-        : `${context}\n\n要修改的节点 id：${params.nodeId}\n现有内容：${JSON.stringify(current ?? {})}\n修改指令：${params.instruction}`;
-      const node = await deps.submitNode(systemPrompt, userPrompt, params.nodeId, signal);
+      const systemPrompt = nodeSystemPrompt(language, true);
+      const userPrompt = JSON.stringify({context, targetNodeId: params.nodeId, fields: params.fields, instruction: params.instruction});
+      if(!current)throw Object.assign(new Error('Select an existing node'),{code:'NODE_NOT_FOUND'});
+      const generated = await deps.submitNode(systemPrompt, userPrompt, params.nodeId, signal, current, params.fields);
+      const node={...current,
+        ...(params.fields.includes("sceneDesc") ? {sceneDesc:generated.sceneDesc} : {}),
+        ...(params.fields.includes("dialogue") ? {dialogue:generated.dialogue} : {}),
+      };
       const { rev } = await applyGraphDelta({
         projectRoot,
         projectId,
         delta: { nodes: { upsert: [node], remove: [] }, notes: [] },
         phase: "workshop",
       });
-      return textResult(`Node ${params.nodeId} revised (rev ${rev}).`, graphUpdatedDetails(rev, "interactive-film.script", {
+      return textResult(`Node ${params.nodeId} revised (rev ${rev}).`, graphUpdatedDetails(rev, {
         skillIds: deps.skillIds?.() ?? [],
       }));
     },
@@ -334,10 +341,11 @@ export function filmLLMDepsFromClient(
 
 const DraftStructureParams = Type.Object({
   instruction: Type.String({ description: "what skeleton to draft (acts, branch points, endings)" }),
+  referenceWorkId: Type.Optional(Type.String({minLength:1,description:"Use only when the user explicitly requests reuse of an existing Work's exact topology. Reuse its node IDs, choices, conditions and variable defaults atomically; preserve this Work's authored text on matching node IDs. Reference scene/dialogue/image prose is never copied. Fill missing scenes afterward."})),
 });
 
-const STRUCT_SYSTEM_ZH = `你是互动影游编剧。根据上下文与指令设计分支骨架。恰好 1 个 type=start，至少 2 个 branch，至少 2 个差异化 ending 节点；每条路径都能到某个 ending。完成后调用 submit_story_structure。`;
-const STRUCT_SYSTEM_EN = `You are an interactive film scriptwriter. Using the context and the instruction, design the branching skeleton. Include exactly 1 node with type=start, at least 2 branch nodes, and at least 2 clearly differentiated ending nodes; every path must reach an ending. Finish by calling submit_story_structure.`;
+const STRUCT_SYSTEM_ZH = `按已激活的互动影游 Skill 和用户指令设计完整分支骨架。保持一个开场节点、真实分支和可达结局；规模由用户要求与作品本身决定。完成后调用 submit_story_structure。`;
+const STRUCT_SYSTEM_EN = `Design the complete branching skeleton with the activated interactive-film Skill and user instruction. Keep one opening node, real branches, and reachable endings; let the requested work determine scale. Finish by calling submit_story_structure.`;
 
 export function createDraftStructureTool(
   projectRoot: string,
@@ -347,27 +355,63 @@ export function createDraftStructureTool(
 ): AgentTool<typeof DraftStructureParams> {
   return {
     name: "draft_structure",
-    description: "interactive-film authoring: draft the branching node skeleton + topology. Structural — requires user confirmation.",
+    description: "interactive-film authoring: draft the branching node skeleton and topology under the current Profile confirmation policy.",
     label: "Draft Structure",
     parameters: DraftStructureParams,
     async execute(_id, params: Static<typeof DraftStructureParams>, signal) {
       const graph = await loadStoryGraph(projectRoot, projectId);
+      if(params.referenceWorkId){
+        if(params.referenceWorkId===projectId)throw Object.assign(new Error("Select another Work as the topology reference"),{code:"FILM_REFERENCE_SELF"});
+        const referenceBytes=await readFile(storyGraphPath(projectRoot,params.referenceWorkId)).catch(error=>{
+          if((error as NodeJS.ErrnoException).code==='ENOENT')throw Object.assign(new Error("The reference Work has no story graph"),{code:"FILM_REFERENCE_EMPTY"});throw error;
+        });
+        const reference=StoryGraphSchema.parse(JSON.parse(referenceBytes.toString('utf8')));
+        if(!reference.nodes.length)throw Object.assign(new Error("The reference Work has no story graph"),{code:"FILM_REFERENCE_EMPTY"});
+        const validation=validateStoryGraph(reference);
+        if(!validation.ok)throw Object.assign(new Error("The reference topology has invalid links or state types"),{code:"FILM_REFERENCE_INVALID",issues:validation.issues});
+        const nodes=reference.nodes.map(node=>{
+          const own=graph?.nodes.find(item=>item.id===node.id);
+          return StoryNodeSchema.parse({id:node.id,type:node.type,title:own?.title||node.title,choices:node.choices,
+            sceneDesc:own?.sceneDesc??'',dialogue:own?.dialogue??[],imageSlot:own?.imageSlot,act:own?.act||node.act,position:own?.position??node.position});
+        });
+        const endings=reference.endings.map(ending=>graph?.endings.find(item=>item.id===ending.id&&item.nodeId===ending.nodeId)??{...ending,description:''});
+        const variables=[...(graph?.variables??[]).filter(variable=>!reference.variables.some(item=>item.name===variable.name)),...reference.variables];
+        const candidate=StoryGraphSchema.parse({...(graph??{schemaVersion:1,projectId,title:projectId}),nodes,endings,variables});
+        const requirements=await readFilmRequirements(projectRoot,projectId);
+        if(requirements){const report=checkFilmRequirements(candidate,requirements);if(report.status!=='checks_passed')throw Object.assign(new Error(JSON.stringify({code:'FILM_REFERENCE_REQUIREMENTS_UNMET',issues:report.issues})),{code:'FILM_REFERENCE_REQUIREMENTS_UNMET',issues:report.issues});}
+        const sourceHash='sha256:'+createHash('sha256').update(referenceBytes).digest('hex');
+        const {graph:next,rev}=await applyGraphDelta({projectRoot,projectId,phase:'structure',delta:{
+          nodes:{upsert:nodes,remove:graph?.nodes.filter(node=>!nodes.some(item=>item.id===node.id)).map(node=>node.id)??[]},
+          variables:{upsert:reference.variables,remove:[]},endings:{upsert:endings,remove:graph?.endings.filter(ending=>!endings.some(item=>item.id===ending.id)).map(ending=>ending.id)??[]},notes:[],
+        }});
+        const missingSceneNodeIds=next.nodes.filter(node=>!node.sceneDesc.trim()).map(node=>node.id);
+        return textResult(`Reference topology applied: ${next.nodes.length} nodes; ${missingSceneNodeIds.length} scenes still need generation.`,graphUpdatedDetails(rev,{skillIds:deps.skillIds?.()??[],referenceTopology:{workId:params.referenceWorkId,sourceHash},missingSceneNodeIds}));
+      }
       const context = graph ? buildFilmAuthoringContext(graph) : "(empty graph)";
-      const systemPrompt = await appendPromptPackGuidance(language === "en" ? STRUCT_SYSTEM_EN : STRUCT_SYSTEM_ZH, {
-        promptId: "interactive-film.story-graph",
-        projectRoot,
-      });
+      const systemPrompt = language === "en" ? STRUCT_SYSTEM_EN : STRUCT_SYSTEM_ZH;
       const userPrompt = language === "en"
         ? `${context}\n\nSkeleton instruction: ${params.instruction}`
         : `${context}\n\n骨架指令：${params.instruction}`;
-      const nodes = await deps.submitStructure(systemPrompt, userPrompt, signal);
+      const requirements=await readFilmRequirements(projectRoot,projectId);
+      let nodes:readonly StoryNode[]=[];
+      let failures:unknown=[];
+      for(let attempt=0;attempt<3;attempt++){
+        nodes=await deps.submitStructure(systemPrompt,`${userPrompt}\nConfirmed requirements: ${JSON.stringify(requirements??{})}\n${attempt?`Correct these exact validation failures: ${JSON.stringify(failures)}`:''}`,signal);
+        if(!requirements)break;
+        const candidate=StoryGraphSchema.parse({...(graph??{schemaVersion:1,projectId,title:projectId}),nodes:[...nodes],endings:graph?.endings.filter(e=>nodes.some(n=>n.id===e.nodeId))??[]});
+        const report=checkFilmRequirements(candidate,requirements);
+        if(report.status==='checks_passed')break;
+        failures=report.issues;
+        if(attempt===2)throw Object.assign(new Error(JSON.stringify({code:'FILM_STRUCTURE_REQUIREMENTS_UNMET',issues:failures})),{code:'FILM_STRUCTURE_REQUIREMENTS_UNMET',issues:failures});
+      }
+      const removed=graph?.nodes.filter(n=>!nodes.some(next=>next.id===n.id)).map(n=>n.id)??[];
       const { graph: next, rev } = await applyGraphDelta({
         projectRoot,
         projectId,
-        delta: { nodes: { upsert: [...nodes], remove: [] }, notes: [] },
+        delta: { nodes: { upsert: [...nodes], remove: removed }, endings:{upsert:[],remove:graph?.endings.filter(e=>removed.includes(e.nodeId)).map(e=>e.id)??[]},notes: [] },
         phase: "structure",
       });
-      return textResult(`Structure drafted: ${next.nodes.length} nodes (rev ${rev}).`, graphUpdatedDetails(rev, "interactive-film.story-graph", {
+      return textResult(`Structure drafted: ${next.nodes.length} nodes (rev ${rev}).`, graphUpdatedDetails(rev, {
         skillIds: deps.skillIds?.() ?? [],
       }));
     },
@@ -379,7 +423,9 @@ export function createDraftStructureTool(
 // ---------------------------------------------------------------------------
 
 const ConnectChoiceParams = Type.Object({
-  node: Type.Unsafe<unknown>({ description: "the full StoryNode (with updated choices) to upsert" }),
+  nodeId: Type.Optional(Type.String({minLength:1,description:'Existing node whose connections should change; its scene and dialogue are preserved.'})),
+  choices: Type.Optional(Type.Array(ChoiceToolSchema)),
+  node: Type.Optional(Type.Composite([StoryNodeToolSchema], { description: "Full StoryNode for creating a node, or an existing full node with updated choices. Existing scene and dialogue are preserved." })),
 });
 
 export function createConnectChoiceTool(
@@ -388,11 +434,19 @@ export function createConnectChoiceTool(
 ): AgentTool<typeof ConnectChoiceParams> {
   return {
     name: "connect_choice",
-    description: "interactive-film authoring: add/rewire a node's choices (topology). Structural — requires user confirmation.",
+    description: "interactive-film authoring: add or rewire a node's choices under the current Profile confirmation policy.",
     label: "Connect Choice",
     parameters: ConnectChoiceParams,
     async execute(_id, params: Static<typeof ConnectChoiceParams>) {
-      const node = StoryNodeSchema.parse(params.node);
+      const proposed = params.node === undefined ? undefined : StoryNodeSchema.parse(params.node);
+      const nodeId=params.nodeId??proposed?.id;
+      if(!nodeId)throw Object.assign(new Error('Supply nodeId with choices, or a full node'),{code:'NODE_REF_REQUIRED'});
+      if(proposed&&params.nodeId&&proposed.id!==params.nodeId)throw Object.assign(new Error('Node references disagree'),{code:'NODE_REF_MISMATCH'});
+      const current=(await loadStoryGraph(projectRoot,projectId))?.nodes.find(node=>node.id===nodeId);
+      const suppliedChoices=params.choices??(params.node && typeof params.node==='object' && 'choices' in params.node ? proposed?.choices : undefined);
+      if(current&&!suppliedChoices)throw Object.assign(new Error('Supply the updated choices'),{code:'CHOICES_REQUIRED'});
+      const node=current?{...current,choices:suppliedChoices!}:proposed;
+      if(!node)throw Object.assign(new Error('Node not found'),{code:'NODE_NOT_FOUND'});
       const { rev } = await applyGraphDelta({ projectRoot, projectId, delta: buildConnectChoiceDelta(node) });
       return textResult(`Choices updated on node ${node.id} (rev ${rev}).`, { kind: "graph_updated", rev });
     },
@@ -400,7 +454,7 @@ export function createConnectChoiceTool(
 }
 
 // ---------------------------------------------------------------------------
-// remove_node — confirm-class: nodeId → buildRemoveNodeDelta → apply
+// remove_node — versioned graph edit: nodeId → buildRemoveNodeDelta → apply
 // ---------------------------------------------------------------------------
 
 const RemoveNodeParams = Type.Object({
@@ -413,7 +467,7 @@ export function createRemoveNodeTool(
 ): AgentTool<typeof RemoveNodeParams> {
   return {
     name: "remove_node",
-    description: "interactive-film authoring: delete a node. Destructive — requires user confirmation.",
+    description: "Remove a node and its incident choices from the current graph as a versioned edit. Earlier graph revisions remain available. Use to remove an unwanted or unreachable node, then inspect the resulting graph.",
     label: "Remove Node",
     parameters: RemoveNodeParams,
     async execute(_id, params: Static<typeof RemoveNodeParams>) {
@@ -469,15 +523,14 @@ export function createGenerateNodeImageTool(projectRoot: string, projectId: stri
  * Returns the tool names that the interactive-film-authoring session should
  * provide given the current `confirmedIntent`.
  *
- * - No confirmed intent → direct-write tools + propose_action (let the agent
- *   surface high-cost operations for explicit user confirmation).
+ * - No confirmed intent → versioned authoring tools + propose_action.
  * - Confirmed intent → exactly that one tool (already confirmed, execute it).
  */
 export function buildFilmAuthoringToolNames(confirmedIntent: string | undefined): string[] {
   if (confirmedIntent === "draft_structure") return ["draft_structure"];
   if (confirmedIntent === "connect_choice") return ["connect_choice"];
   if (confirmedIntent === "remove_node") return ["remove_node"];
-  return ["set_world_anchor", "upsert_characters", "add_variable", "define_ending", "fill_node", "revise_node", "generate_node_image", "propose_action"];
+  return ["set_film_requirements","set_world_anchor", "upsert_characters", "add_variable", "define_ending", "draft_structure", "connect_choice", "remove_node", "fill_node", "revise_node", "inspect_story_graph", "export_interactive_film", "generate_node_image", "propose_action"];
 }
 
 /**
@@ -489,14 +542,15 @@ export function createFilmAuthoringTools(params: {
   readonly projectRoot: string;
   readonly projectId: string;
   readonly llm: FilmLLMDeps;
-  readonly proposeActionTool: AgentTool<any>;
+  readonly proposeActionTool?: AgentTool<any>;
   readonly confirmedIntent?: string;
   readonly language?: FilmAuthoringLanguage;
 }): AgentTool<any>[] {
   const { projectRoot, projectId, llm } = params;
   const language = params.language ?? "zh";
   const names = buildFilmAuthoringToolNames(params.confirmedIntent);
-  const byName: Record<string, () => AgentTool<any>> = {
+  const byName: Record<string, () => AgentTool<any> | undefined> = {
+    set_film_requirements:()=>createSetFilmRequirementsTool(projectRoot,projectId),
     set_world_anchor: () => createSetWorldAnchorTool(projectRoot, projectId),
     upsert_characters: () => createUpsertCharactersTool(projectRoot, projectId),
     add_variable: () => createAddVariableTool(projectRoot, projectId),
@@ -507,7 +561,9 @@ export function createFilmAuthoringTools(params: {
     draft_structure: () => createDraftStructureTool(projectRoot, projectId, llm, language),
     connect_choice: () => createConnectChoiceTool(projectRoot, projectId),
     remove_node: () => createRemoveNodeTool(projectRoot, projectId),
+    inspect_story_graph: () => createInspectFilmTool(projectRoot,projectId),
+    export_interactive_film: () => createExportFilmTool(projectRoot,projectId),
     propose_action: () => params.proposeActionTool,
   };
-  return names.map((n) => byName[n]());
+  return names.map((n) => byName[n]()).filter((tool): tool is AgentTool<any> => tool !== undefined);
 }

@@ -36,9 +36,11 @@ InkOS は、物語創作と多言語翻訳のための AI Agent システムで�
 
 > 💡 **主要モデルをキー 1 本で** —— InkOS には [**kkaiapi**](https://en.kkaiapi.com/) の併用がおすすめです。Claude / GPT / Gemini / DeepSeek / Kimi / Qwen / GLM と画像モデルを扱える OpenAI 互換ゲートウェイとして、base URL `https://api.kkaiapi.com/v1` をカスタムサービスに設定すれば、複数プロバイダーのアカウントを行き来せずに Studio でモデルを切り替えられます。
 
-## v1.8.0 統一 Pi Agent Harness と専門創作カーネル
+## v2.0.0 統一 Pi Agent Harness と専門創作カーネル
 
-InkOS 1.8.0 は、Chat Agent と各作品パイプラインを一つの pi-agent 中心 harness に統合します。モデルは理解・提案・能力呼び出しを担当し、InkOS は確認、コンテキスト、状態、原子的な保存、成果物の真実性を管理します。長編、短編、脚本、絵コンテ、インタラクティブ影遊、Play、翻訳は、それぞれの専門手法を保ちながら、実行・検索・観測・復旧基盤を共有します。
+1.x からの移行は `inkos work migrate --json` で確認し、`inkos work migrate --apply` で実行します。書籍の既定値、ルール、状態スナップショットを変換し、元のディレクトリと未記入の履歴情報を保持します。旧執筆設定は原本に残り、2.0 は Profile の操作方針を使います。実行状態が不足する作品は、再構築が必要な下書きとして登録されます。
+
+InkOS 2.0 は、Chat Agent と各作品パイプラインを一つの pi-agent 中心 harness に統合します。モデルは理解・提案・能力呼び出しを担当し、InkOS は確認、コンテキスト、状態、原子的な保存、成果物の真実性を管理します。長編、短編、脚本、絵コンテ、インタラクティブ影遊、Play、翻訳は、それぞれの専門手法を保ちながら、実行・検索・観測・復旧基盤を共有します。
 
 - **モデル設定**：Studio はサービス設定、モデルルーティング、表紙サービス、[kkaiapi](https://en.kkaiapi.com/) / OpenRouter などのモデル集約入口、カスタム OpenAI-compatible エンドポイントに対応します。
 - **単一の production harness**：Studio Chat、TUI、`inkos interact`、production worker が pi-agent のツールループと型付き action/result 境界を共有します。既存 pipeline は並行する自然言語判断エンジンではなく、決定論的で中断可能な能力になります。
@@ -88,7 +90,7 @@ InkOS 1.8.0 は、Chat Agent と各作品パイプラインを一つの pi-agent
 
 ### インストール
 
-**Node.js 22 以降**が必要です。
+**Node.js 22.16 以降**が必要です。
 
 ```bash
 npm i -g @actalk/inkos
@@ -124,7 +126,9 @@ cd my-novel
 inkos
 ```
 
-Studio を開き、**モデル設定**へ進みます：
+起動ログに表示されたローカル URL から Studio を開いてください。既定のローカルサーバーは同一オリジンのブラウザー要求を受け付けます。独自の埋め込みやリバースプロキシでは、起動オプション `allowedOrigins` で信頼するオリジンを指定できます。
+
+**モデル設定**へ進みます：
 
 1. Google Gemini、Moonshot、MiniMax、DeepSeek、kkaiapi、OpenRouter、またはカスタムエンドポイントを選択。
 2. API Key を貼り付けて接続をテスト。
@@ -193,7 +197,7 @@ inkos config show-models        # 現在のルーティングを表示
 - **創作入口**：長編、短編、二次創作、番外、文体模倣、続き書き、分岐インタラクション、開放世界を Studio の上部入口から開始できます。
 - **TUI ダッシュボード**：`inkos tui` でフルスクリーン端末 UI を開き、`/new`、`/short`、`/play`、`/cover`、`/write`、`/confirm`、`/cancel`、セッション単位の `/model <name>` を利用できます。
 - **外部 Agent 入口**：`inkos interact --json --message "..."` は OpenClaw など外部 agent 向けの構造化入口です。
-- **アトミックコマンド**：`plan` / `compose` / `draft` / `audit` / `revise` / `write next` はスクリプトや上級者向けに残っています。
+- **明示的なコマンド**：`write next`、`revise`、`review`、import、export は直接実行できます。内部の計画とコンテキスト段階は Harness が管理します。
 
 ### 最初の本を書く
 
@@ -201,10 +205,9 @@ inkos config show-models        # 現在のルーティングを表示
 
 ```bash
 inkos book create --title "The Last Delver" --genre litrpg     # LitRPG小説（デフォルトで英語）
-inkos write next my-book          # 次の章を執筆（フルパイプライン：draft → audit → revise）
+inkos write next my-book          # 次章を執筆・保存（レビューと改稿は明示的な操作）
 inkos status                      # ステータスを確認
-inkos review list my-book         # 下書きをレビュー
-inkos review approve-all my-book  # 一括承認
+inkos review my-book              # 保存済み review observation を確認
 inkos export my-book --format epub  # EPUB形式でエクスポート（スマホ/Kindleで読める）
 ```
 
@@ -292,19 +295,19 @@ Studio Chat は単なる Q&A ではありません。長編作成、Short、表�
 
 Play は、キャラクター、場所、アイテム、証拠、関係性、時間、現在シーン、HUD、画像を含む持続的な世界状態を管理します。固定 RPG システムではありません。修仙世界なら希少度や境界、恋愛ものなら感情段階、探偵ものなら証拠のライフサイクルを、ユーザーの世界契約として状態に保存できます。
 
-### 37次元監査 + 脱AI化
+### 定性的レビューと明示的な改稿
 
-継続性監査エージェントがすべての下書きを37の次元でチェックします：キャラクターの記憶、リソースの継続性、フック回収、アウトライン準拠、ナラティブペーシング、感情アークなど。内蔵のAI痕跡検出が「LLMの声」を自動的に捕捉 — 使いすぎの単語、単調な文型、過度な要約。デフォルトの長編執筆チェーンでは自動修正は最大1回まで行い、残った重大問題は結果に残して人間レビューまたは後続コマンドに渡します。
+レビュー Agent は、ユーザー意図、正典、現在状態、章計画、選択された Skill と原稿を比較し、証拠と修正方向を含む具体的な観察を返します。原稿を採点・却下・自動改稿せず、改稿は追跡可能な新しい成果物リビジョンを作る明示的な操作です。
 
-脱AI化ルールはWriterエージェントのプロンプトに組み込まれています：疲労語リスト、禁止パターン、スタイルフィンガープリント注入 — ソースレベルでAI痕跡を削減。`revise --mode anti-detect` で既存の章に対して専用の脱AI検出リライトを実行できます。
+脱AI化の専門手法は交換可能な `inkos-story-deslop` Skill にあり、必要なときだけ `revise --mode anti-detect` で明示的に使用します。
 
 ### 文体クローニング
 
-`inkos style analyze` で参考テキストを分析し、統計的なフィンガープリント（文長分布、語頻度パターン、リズムプロファイル）とLLM可読のスタイルガイドを抽出。`inkos style import` でこのフィンガープリントを書籍にインジェクト — 以降のすべての章がその文体を採用し、修正エージェントが文体に対して監査を行います。
+`inkos style analyze` は分析・模倣 Skill を使い、参考テキストを証拠付きの実行可能な文体ガイドへコンパイルします。`inkos style import` でガイドを作品に紐づけます。
 
 ### クリエイティブブリーフ
 
-`inkos book create --brief my-ideas.md` — ブレインストーミングノート、世界観設定書、キャラクターシートを渡せます。アーキテクトエージェントがゼロから生成するのではなく、ブリーフを基に構築（`story_bible.md` と `book_rules.md` を生成）し、ブリーフを `story/author_intent.md` に永続化して、初期化後も書籍の長期的な意図が失われないようにします。
+`inkos book create --brief my-ideas.md` はブレインストーミング、世界観、キャラクター資料を渡します。Architect は `outline/story_frame.md`、`outline/volume_map.md`、役割カード、`book_rules.md/json` を作成し、長期方向を `story/author_intent.md` に保存します。
 
 ### 入力ガバナンスコントロールサーフェス
 
@@ -313,18 +316,11 @@ Play は、キャラクター、場所、アイテム、証拠、関係性、時
 - `story/author_intent.md`：この書籍が長期的にどうあるべきか
 - `story/current_focus.md`：次の1〜3章で注意を引き戻すべき事柄
 
-執筆前に以下を実行できます：
-
-```bash
-inkos plan chapter my-book --context "まずメンターとの対立に注意を引き戻す"
-inkos compose chapter my-book
-```
-
-これにより `story/runtime/chapter-XXXX.intent.md`、`context.json`、`rule-stack.yaml`、`trace.json` が生成されます。`intent.md` は人間が読める契約書で、その他は実行/デバッグ用のアーティファクトです。`plan` は LLM を呼び出して章の意図を作成します。`compose` はローカルドキュメントとステートのコンパイルのみを行うため、APIキーの設定完了前でも実行できます。
+方向は Studio Chat、TUI、`inkos agent` から調整します。Planner がタスク関連の意味的ワーキングセットを選び `intent.md` を作成し、Composer が実際の source、保護 tier、検索、圧縮を `context.json` と `trace.json` に記録します。
 
 ### 文字数管理
 
-`draft`、`write next`、`revise` は同じ保守的な文字数ガバナーを共有：
+`write next` と `revise` は同じ決定論的な文字数テレメトリを共有：
 
 - `--words` は正確なハード制限ではなく、目標バンドを設定
 - 中国語の章はデフォルトで `zh_chars`、英語の章はデフォルトで `en_words` を使用
@@ -349,11 +345,11 @@ inkos compose chapter my-book
 
 ### ローカルモデル互換性
 
-任意のOpenAI互換エンドポイント（`--provider custom`）に対応。ストリーム自動フォールバック — SSEがサポートされていない場合、InkOS は自動的に同期モードでリトライ。フォールバックパーサーが小型モデルの非標準出力を処理し、ストリーム中断時には部分コンテンツリカバリが作動。
+OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、カスタム互換エンドポイントに対応します。構造化出力欠落、ストリーム中断、出力上限は明示的に扱い、部分テキストを成功として保存しません。
 
 ### 信頼性
 
-章ごとに自動ステートスナップショットを作成 — `inkos write rewrite` で任意の章を執筆前の状態にロールバック可能。Writerは執筆前チェックリスト（コンテキストスコープ、リソース、保留中のフック、リスク）と執筆後決済テーブルを出力し、Auditorが両方をクロスバリデーション。ファイルロックにより同時書き込みを防止。執筆後バリデーターにはクロスチャプター反復検出と十数のハードルールによる自動スポット修正を搭載。
+章ごとにステートスナップショットを作成し、本文・索引・構造化状態を一つのアトミックファイルセットとして保存します。ファイルロックと Action キューが同時書き込みを防ぎ、レビューは observation を記録し、改稿は明示的な Action として実行されます。
 
 フックシステムはZodスキーマバリデーションを使用 — `lastAdvancedChapter` は整数、`status` は open/progressing/deferred/resolved のみ。LLMからのJSONデルタは `applyRuntimeStateDelta`（イミュータブル更新）と `validateRuntimeState`（構造チェック）を経て永続化。破損データは伝播されず、拒否されます。
 
@@ -384,27 +380,24 @@ InkOS は pi-agent harness を共通の推論・ツール呼び出しカーネ�
 | **Writer** | コンパイル済みコンテキストから散文を生成（文字数管理、対話駆動） |
 | **Observer** | 章テキストから9カテゴリのファクトを過剰抽出（キャラクター、ロケーション、リソース、関係性、感情、情報、フック、時間、身体状態） |
 | **Reflector** | JSONデルタを出力（フルMarkdownではない）；コードレイヤーがZodスキーマバリデーション後にイミュータブル書き込みを実行 |
-| **Normalizer** | 章が hard range から明確に外れた場合のみ、1パスで圧縮/拡張 |
 | **Continuity Auditor** | 構造化状態、制御ドキュメント、章コンテキストに対して下書きを検証 |
-| **Reviser** | 監査で発見された重大問題を修正。デフォルトの執筆チェーンでは自動修正は最大1回までで、その他は人間レビュー用にフラグ付け |
+| **Reviser** | ユーザー、Agent、または保存済み observation からの明示的な修正要求を適用し、新しい版をアトミックに記録 |
 
-監査に失敗すると、デフォルトのパイプラインは修正→再監査を1回だけ実行します。残った問題は結果と状態に保持され、人間レビューまたは後続コマンドで扱います。
+章本文と派生ストーリー状態はハード検証後にアトミックに保存されます。継続性と文章上の指摘は observation として保存され、修正は追跡可能な独立アクションとして実行されます。
 
 ### 長期記憶
 
-各書籍の正規記憶は三つの層に分かれています：
+正規メモリと検索プロジェクションは分離されています：
 
 | 層 | 目的 |
 |----|------|
 | `story/state/*.json` | 正規の構造化状態：現在状態、フック、章サマリーなど。Zodスキーマで検証 |
 | `story/*.md` | 人間が読めるプロジェクション：`current_state.md`、`pending_hooks.md`、`chapter_summaries.md`、`character_matrix.md` など |
-| `story/memory.db` | Node 22+ で自動有効化される SQLite 時系列メモリ。ファクト、フック、サマリーの関連性検索に使用 |
+| `story/memory.db` | 再構築可能な SQLite FTS5/BM25 検索プロジェクション。正規ストーリー事実ではない |
 
 継続性監査エージェントが下書きをこれらの状態に対してチェックします。キャラクターが目撃していないことを「覚えて」いたり、2章前に失った武器を取り出したりすると、監査エージェントがそれを検出します。
 
-Settler はフル Markdown ファイルをモデルに出力させず、JSON デルタを生成します。コードレイヤーがそれをイミュータブルに適用し、構造検証してから永続化します。Markdown は人間が読めるプロジェクションとして保持されます。既存書籍は初回実行時に legacy Markdown から自動移行します。
-
-Node 22+ では、SQLite時系列メモリデータベース（`story/memory.db`）が自動的に有効化され、過去のファクト、フック、チャプターサマリーの関連性ベースの取得をサポート — ファイル全量注入によるコンテキスト肥大化を防止。
+Settler は typed tool で完全な増分 delta を提出し、Host がイミュータブルに適用・検証します。検索インデックスは正規 JSON から再構築され、BM25 候補に LLM の意味選択を適用します。
 
 <p align="center">
   <img src="assets/arch-memory.svg" width="900" alt="長期記憶と状態">
@@ -418,16 +411,13 @@ Node 22+ では、SQLite時系列メモリデータベース（`story/memory.db`
 - `story/current_focus.md`：短期的なステアリング
 - `story/runtime/chapter-XXXX.intent.md`：章の目標、保持/回避リスト、対立の解決
 - `story/runtime/chapter-XXXX.context.json`：この章のために選択された実際のコンテキスト
-- `story/runtime/chapter-XXXX.rule-stack.yaml`：優先度レイヤーとオーバーライド関係
 - `story/runtime/chapter-XXXX.trace.json`：この章のコンパイルトレース
 
 つまり、ブリーフ、アウトラインノード、ブックルール、現在のリクエストが1つのプロンプトブロブに混ぜ合わされることはなくなりました。InkOS はまずコンパイルし、それから執筆します。
 
 ### 執筆ルールシステム
 
-Writerエージェントには約25の汎用執筆ルール（キャラクタークラフト、ナラティブテクニック、論理的一貫性、言語制約、脱AI化）があり、すべてのジャンルに適用されます。
-
-その上に、各ジャンルには専用ルール（禁止事項、言語制約、ペーシング、監査ディメンション）があり、各書籍には独自の `book_rules.md`（主人公の性格、数値上限、カスタム禁止事項）、`story_bible.md`（世界観設定）、`author_intent.md`（長期的な方向性）、`current_focus.md`（短期的なステアリング）があります。`volume_outline.md` はデフォルトプランとして機能しますが、v2入力ガバナンスでは現在の章の意図を自動的にオーバーライドしなくなりました。
+専門創作方法は Work Profile の Skill にあり、同じ ID のプロジェクト `SKILL.md` で置き換えられます。Agent コードは動的タスク、権威コンテキスト、typed tool protocol だけを保持します。
 
 ## 使用モード
 
@@ -440,27 +430,18 @@ inkos write next my-book              # Draft → audit → 自動修正、す�
 inkos write next my-book --count 5    # 5章連続で執筆
 ```
 
-`write next` はデフォルトで `plan -> compose -> write` ガバナンスチェーンを使用します。以前のプロンプトアセンブリパスが必要な場合は、`inkos.json` で明示的に設定してください：
+`write next` は唯一の `plan -> compose -> write -> review -> commit` 創作チェーンを使用します。レビューは observation を生成し、技術検証がアトミック保存を制御します。意味的な指摘が章の失敗状態へ変換されることはありません。
 
-```json
-{
-  "inputGovernanceMode": "legacy"
-}
-```
-
-デフォルトは `v2` になりました。`legacy` は明示的なフォールバックとして引き続き利用可能です。
-
-### 2. アトミックコマンド（コンポーザブル、外部エージェントフレンドリー）
+### 2. 明示的な能力コマンド
 
 ```bash
-inkos plan chapter my-book --context "まずメンターとの対立にフォーカス" --json
-inkos compose chapter my-book --json
-inkos draft my-book --context "ダンジョンボス戦とパーティダイナミクスにフォーカス" --json
-inkos audit my-book 31 --json
+inkos write next my-book --count 3
 inkos revise my-book 31 --json
+inkos review my-book --json
+inkos export my-book --format epub
 ```
 
-各コマンドは単一の操作を独立して実行。`--json` で構造化データを出力。`plan` / `compose` は入力を管理し、`draft` / `audit` / `revise` は散文と品質チェックを処理。外部AIエージェントから `exec` 経由で呼び出し可能で、スクリプトでも使用できます。
+これらは既に確定したユーザー操作です。自然言語の意図は pi-agent Harness に入り、現在の Work Profile capability surface で解決されます。
 
 ### 3. 自然言語エージェントモード
 
@@ -501,23 +482,16 @@ Studio の **Open World** と **Branching Interactive** は、先に書籍を作
 | `inkos book list` | すべての書籍を一覧表示 |
 | `inkos book delete <id>` | 書籍とそのすべてのデータを削除（`--force` で確認をスキップ） |
 | `inkos genre list/show/copy/create` | ジャンルの表示、コピー、作成 |
-| `inkos plan chapter [id]` | 次の章の `intent.md` を生成（`--context` / `--context-file` で現在のステアリング） |
-| `inkos compose chapter [id]` | 次の章の `context.json`、`rule-stack.yaml`、`trace.json` を生成 |
 | `inkos write next [id]` | フルパイプライン：次の章を執筆（`--words` でオーバーライド、`--count` でバッチ、`-q` クワイエットモード） |
 | `inkos write rewrite [id] <n>` | 第N章をリライト（ステートスナップショットを復元、`--force` で確認をスキップ） |
-| `inkos draft [id]` | ドラフトのみ執筆（`--words` で文字数をオーバーライド、`-q` クワイエットモード） |
-| `inkos audit [id] [n]` | 特定の章を監査 |
 | `inkos revise [id] [n]` | 特定の章を修正 |
 | `inkos agent <instruction>` | 自然言語エージェントモード |
-| `inkos review list [id]` | 下書きをレビュー |
-| `inkos review approve-all [id]` | 一括承認 |
+| `inkos review [id]` | 保存済み review observation を表示 |
 | `inkos status [id]` | プロジェクトのステータス |
-| `inkos export [id]` | 書籍をエクスポート（`--format txt/md/epub`、`--output <path>`、`--approved-only`） |
+| `inkos export [id]` | 書籍をエクスポート（`--format txt/md/epub`、`--output <path>`） |
 | `inkos radar scan` | 新規書籍の方向性に使う市場 / トレンド入力をスキャン |
 | `inkos fanfic init` | 原作素材から二次創作書籍を作成（`--from`、`--mode canon/au/ooc/cp`） |
 | `inkos short run` | 独立短編パッケージを生成 |
-| `inkos eval [id]` | 品質評価レポートを生成（`--json`、章範囲指定） |
-| `inkos consolidate [id]` | 長編の章要約を統合し、コンテキスト負荷を下げる |
 | `inkos forecast create/show/select` | 長編の非正史ルートを生成・再検証・選択。選択時は候補計画だけを保存し、正史は変更しない |
 | `inkos interact` | 外部 agent / CLI 自然言語入口（`--json`、`--message`、`--book`） |
 | `inkos config set-global` | グローバルLLM設定を設定（~/.inkos/.env） |
@@ -529,7 +503,7 @@ Studio の **Open World** と **Branching Interactive** は、先に書籍を作
 | `inkos style import <file> [id]` | スタイルフィンガープリントを書籍にインポート |
 | `inkos import canon [id] --from <parent>` | 番外 / スピンオフ用に親作品の正典を導入 |
 | `inkos import chapters [id] --from <path>` | 続編執筆用に既存の章をインポート（`--split`、`--resume-from`） |
-| `inkos analytics [id]` / `inkos stats [id]` | 書籍分析（監査合格率、主要な問題、章ランキング、トークン使用量） |
+| `inkos analytics [id]` / `inkos stats [id]` | 書籍分析（observation、章の長さ、トークン使用量） |
 | `inkos update` | 最新バージョンへ更新 |
 | `inkos` / `inkos studio` | Webワークベンチを起動（`-p` でポート指定、デフォルト4567） |
 | `inkos tui` | 端末フルスクリーン TUI を起動 |

@@ -16,7 +16,7 @@ describe("book reference bindings", () => {
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "inkos-book-reference-"));
-    await mkdir(join(root, "books", bookId, "story"), { recursive: true });
+    await mkdir(join(root, "works", bookId, "source", "story"), { recursive: true });
   });
 
   afterEach(async () => {
@@ -52,7 +52,7 @@ describe("book reference bindings", () => {
     });
 
     const bindingText = await readFile(
-      join(root, "books", bookId, "story", "reference_bindings.json"),
+      join(root, "works", bookId, "source", "story", "reference_bindings.json"),
       "utf-8",
     );
     expect(bindingText).not.toContain("误会让主角失去退路");
@@ -64,7 +64,7 @@ describe("book reference bindings", () => {
     const asset = await createReferenceAsset(root, "关系参考", "# 关系\n先合作后信任。\n");
     await bindBookReference(root, bookId, { materialId: asset.id, uses: ["关系推进"] });
     await writeFile(
-      join(root, "books", bookId, "story", "reference_bindings.json"),
+      join(root, "works", bookId, "source", "story", "reference_bindings.json"),
       JSON.stringify({
         version: 1,
         bookId,
@@ -99,7 +99,7 @@ describe("book reference context selection", () => {
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "inkos-reference-context-"));
-    await mkdir(join(root, "books", bookId, "story"), { recursive: true });
+    await mkdir(join(root, "works", bookId, "source", "story"), { recursive: true });
   });
 
   afterEach(async () => {
@@ -149,11 +149,11 @@ describe("book reference context selection", () => {
     ]);
   });
 
-  it("fails open when semantic selection is unavailable instead of dumping every reference into context", async () => {
+  it("fails loudly when semantic selection is unavailable", async () => {
     const asset = await createReferenceAsset(root, "长篇拆解", "# 开篇\nA\n\n# 中段\nB\n");
     await bindBookReference(root, bookId, { materialId: asset.id, uses: ["节奏"] });
 
-    const selected = await selectBookReferenceContext(root, bookId, {
+    await expect(selectBookReferenceContext(root, bookId, {
       chapterNumber: 8,
       goal: "推进中段",
       outlineNode: "第二次受挫",
@@ -161,10 +161,7 @@ describe("book reference context selection", () => {
       language: "zh",
     }, async () => {
       throw new Error("selector unavailable");
-    });
-
-    expect(selected.entries).toEqual([]);
-    expect(selected.notes).toEqual(["book-reference-selection-failed"]);
+    })).rejects.toThrow("selector unavailable");
   });
 
   it("lets semantic selection exclude a single-section asset instead of injecting it into every chapter", async () => {

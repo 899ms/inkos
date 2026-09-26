@@ -6,7 +6,6 @@ import { fetchJson } from "../hooks/use-api";
 import { TrendingUp, Loader2, Target, Clock } from "lucide-react";
 
 interface Recommendation {
-  readonly confidence: number;
   readonly platform: string;
   readonly genre: string;
   readonly concept: string;
@@ -99,16 +98,9 @@ export function RadarView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunct
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {result.recommendations.map((rec, i) => (
               <div key={i} className={`border ${c.cardStatic} rounded-lg p-5 space-y-3`}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center">
                   <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                     {rec.platform} · {rec.genre}
-                  </span>
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                    rec.confidence >= 0.7 ? "bg-emerald-500/10 text-emerald-600" :
-                    rec.confidence >= 0.4 ? "bg-amber-500/10 text-amber-600" :
-                    "bg-muted text-muted-foreground"
-                  }`}>
-                    {(rec.confidence * 100).toFixed(0)}%
                   </span>
                 </div>
                 <p className="text-sm font-semibold">{rec.concept}</p>

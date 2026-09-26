@@ -1,9 +1,10 @@
 import { BaseAgent } from "../agents/base.js";
 import type { LLMMessage } from "../llm/provider.js";
 import {
-  parseForecastModelOutput,
+  ForecastModelOutputSchema,
   type ForecastModelOutput,
 } from "./schema.js";
+import { ForecastResultToolSchema } from "./tool-schema.js";
 import {
   buildForecastRepairPrompt,
   buildForecastSystemPrompt,
@@ -38,21 +39,26 @@ export class NarrativeForecastAgent extends BaseAgent {
     ];
     const maxTokens = estimateForecastMaxTokens(input.branchCount, input.horizon);
 
-    const first = await this.chat(messages, { temperature: 0.6, maxTokens });
+    const tool = {
+      name: "submit_narrative_forecast",
+      label: input.language === "en" ? "Submit narrative forecast" : "提交剧情推演",
+      description: "Submit the complete non-canonical branch set.",
+      parameters: ForecastResultToolSchema,
+    } as const;
+    const first = await this.submitStructured(messages, tool, { temperature: 0.6, maxTokens });
     let firstError: unknown;
     try {
-      return validateGeneratedOutput(parseForecastModelOutput(first.content), input.branchCount);
+      return validateGeneratedOutput(ForecastModelOutputSchema.parse(first.result), input.branchCount);
     } catch (error) {
       firstError = error;
       this.log?.warn(`[narrative-forecast] model output invalid, retrying once: ${String(error)}`);
     }
 
-    const retry = await this.chat([
+    const retry = await this.submitStructured([
       ...messages,
-      { role: "assistant", content: first.content },
       { role: "user", content: buildForecastRepairPrompt(String(firstError), input.language) },
-    ], { temperature: 0.4, maxTokens });
-    return validateGeneratedOutput(parseForecastModelOutput(retry.content), input.branchCount);
+    ], tool, { temperature: 0.4, maxTokens });
+    return validateGeneratedOutput(ForecastModelOutputSchema.parse(retry.result), input.branchCount);
   }
 }
 

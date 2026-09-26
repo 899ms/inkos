@@ -2,7 +2,7 @@ import type { StoryGraph, StoryNode } from "./graph-schema.js";
 import { enumerateRuntimePaths } from "./paths.js";
 
 export interface ValidationIssue {
-  readonly code: "DEAD_END" | "BROKEN_LINK" | "UNREACHABLE" | "NO_PATH_TO_ENDING" | "VARIABLE_UNWRITTEN" | "VARIABLE_UNUSED" | "ENDING_VARIETY" | "IMAGE_MISSING" | "GATED_UNREACHABLE" | "ENDING_UNREACHABLE" | "ILLUSORY_BRANCH" | "LINEAR_GRAPH" | "ISOLATED_NODE" | "LONG_LINEAR_CHAIN";
+  readonly code: "DEAD_END" | "BROKEN_LINK" | "UNREACHABLE" | "NO_PATH_TO_ENDING" | "VARIABLE_UNWRITTEN" | "VARIABLE_UNUSED" | "VARIABLE_TYPE_MISMATCH" | "IMAGE_MISSING" | "GATED_UNREACHABLE" | "ENDING_UNREACHABLE" | "ILLUSORY_BRANCH" | "ISOLATED_NODE";
   readonly level: "error" | "warning" | "info";
   readonly message: string;
   readonly nodeIds: readonly string[];
@@ -18,7 +18,7 @@ function label(node: StoryNode): string {
 }
 
 export function validateStoryGraph(graph: StoryGraph): ValidationReport {
-  const issues: ValidationIssue[] = [];
+  const issues: ValidationIssue[] = validateVariableTypes(graph);
   const ids = new Set(graph.nodes.map((n) => n.id));
   const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
 
@@ -98,12 +98,44 @@ export function validateStoryGraph(graph: StoryGraph): ValidationReport {
   return { ok: issues.every((i) => i.level !== "error"), issues };
 }
 
+// The default value defines the runtime scalar type; `type` is also used for
+// domain labels such as resource/item/flag and is not a JavaScript type name.
+export function validateVariableTypes(graph: StoryGraph): ValidationIssue[] {
+  const variables = new Map(graph.variables.map(variable => [variable.name, variable]));
+  const issues: ValidationIssue[] = [];
+  for (const node of graph.nodes) {
+    const owners = [
+      ...node.choices.map(choice=>({label:`choice ${choice.id}`,operations:[...choice.effects,...(choice.condition?[choice.condition]:[])]})),
+      ...node.dialogue.map((line,index)=>({label:`dialogue ${index+1}`,operations:line.condition?[line.condition]:[]})),
+    ];
+    for (const owner of owners) for (const operation of owner.operations) {
+      const variable = variables.get(operation.var);
+      if (!variable) continue; // An incremental authoring draft may declare it later.
+      const numeric = ['add', 'sub', '>', '<', '>=', '<='].includes(operation.op);
+      if (typeof operation.value !== typeof variable.default ||
+          (numeric && typeof variable.default !== 'number')) {
+        issues.push({code:'VARIABLE_TYPE_MISMATCH',level:'error',nodeIds:[node.id],
+          message:`Variable ${variable.name} requires ${typeof variable.default} values; ${owner.label} uses an incompatible ${operation.op} operation`});
+      }
+    }
+  }
+  return issues;
+}
+
+export function assertVariableTypes(graph: StoryGraph): void {
+  const issues = validateVariableTypes(graph);
+  if (issues.length) throw Object.assign(new Error(issues.map(issue => issue.message).join('; ')), {
+    code: 'VARIABLE_TYPE_MISMATCH', issues,
+  });
+}
+
 export function reviewStoryGraph(graph: StoryGraph): ValidationReport {
   const issues: ValidationIssue[] = [...validateStoryGraph(graph).issues];
 
   const reads = new Set<string>();
   const writes = new Set<string>();
   for (const node of graph.nodes) {
+    for (const line of node.dialogue) if (line.condition) reads.add(line.condition.var);
     for (const choice of node.choices) {
       if (choice.condition) reads.add(choice.condition.var);
       for (const effect of choice.effects) writes.add(effect.var);
@@ -126,18 +158,6 @@ export function reviewStoryGraph(graph: StoryGraph): ValidationReport {
         level: "info",
         message: `变量「${v}」声明了但没有任何选项写入、也没有任何条件读取它——这是个多余的声明`,
         nodeIds: [],
-      });
-    }
-  }
-
-  if (graph.endings.length >= 2) {
-    const types = new Set(graph.endings.map((e) => e.type));
-    if (types.size === 1) {
-      issues.push({
-        code: "ENDING_VARIETY",
-        level: "info",
-        message: `${graph.endings.length} 个结局都是同一类型（${[...types][0]}），重玩价值低——考虑设计不同基调的结局`,
-        nodeIds: graph.endings.map((e) => e.nodeId),
       });
     }
   }
@@ -192,18 +212,6 @@ export function reviewStoryGraph(graph: StoryGraph): ValidationReport {
     }
   }
 
-  // LINEAR_GRAPH: only meaningful when there are intermediate normal nodes (a pure start→ending stub is not a drama)
-  const hasBranch = graph.nodes.some((n) => n.choices.length >= 2);
-  const hasNormalNode = graph.nodes.some((n) => n.type === "normal");
-  if (graph.nodes.some((n) => n.type === "start") && graph.endings.length > 0 && hasNormalNode && !hasBranch) {
-    issues.push({
-      code: "LINEAR_GRAPH",
-      level: "info",
-      message: `整个故事没有任何分叉选择——更像线性剧本而非互动影游，考虑加入分支`,
-      nodeIds: [],
-    });
-  }
-
   // ISOLATED_NODE (endings are reported by ENDING_UNREACHABLE, not as generic isolated nodes)
   // Skip nodes that already carry an UNREACHABLE issue from validateStoryGraph — that report
   // is more informative (BFS-based, not just topology), so the duplicate is noise.
@@ -237,18 +245,6 @@ export function reviewStoryGraph(graph: StoryGraph): ValidationReport {
     }
   }
 
-  // LONG_LINEAR_CHAIN: >=5 consecutive single-choice normal nodes
-  const CHAIN_THRESHOLD = 5;
-  const longChainHeads = findLongLinearChainHeads(graph, CHAIN_THRESHOLD);
-  for (const id of longChainHeads) {
-    issues.push({
-      code: "LONG_LINEAR_CHAIN",
-      level: "info",
-      message: `从节点「${id}」开始有一段较长的无分支直链（≥${CHAIN_THRESHOLD} 个单选项节点）——节奏可能偏拖，考虑插入分支或事件`,
-      nodeIds: [id],
-    });
-  }
-
   return { ok: issues.every((i) => i.level !== "error"), issues };
 }
 
@@ -269,36 +265,4 @@ function computeEdgeReachable(graph: StoryGraph): Set<string> {
     }
   }
   return reachable;
-}
-
-function findLongLinearChainHeads(graph: StoryGraph, threshold: number): string[] {
-  const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
-  const isChainNode = (id: string): boolean => {
-    const n = nodeById.get(id);
-    return n !== undefined && n.type === "normal" && n.choices.length === 1;
-  };
-  const incomingIsChainNode = new Map<string, boolean>();
-  for (const n of graph.nodes) {
-    for (const c of n.choices) {
-      if (isChainNode(n.id)) {
-        incomingIsChainNode.set(c.targetNodeId, true);
-      }
-    }
-  }
-  const heads: string[] = [];
-  for (const node of graph.nodes) {
-    if (!isChainNode(node.id)) continue;
-    if (incomingIsChainNode.get(node.id)) continue;
-    let length = 0;
-    let cur: string | undefined = node.id;
-    const visited = new Set<string>();
-    while (cur !== undefined && isChainNode(cur) && !visited.has(cur)) {
-      visited.add(cur);
-      length++;
-      const chainNode: StoryNode = nodeById.get(cur)!;
-      cur = chainNode.choices[0].targetNodeId;
-    }
-    if (length >= threshold) heads.push(node.id);
-  }
-  return heads;
 }

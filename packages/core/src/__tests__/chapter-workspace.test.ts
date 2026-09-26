@@ -35,7 +35,7 @@ describe("chapter workspace", () => {
 
     const runtimeDir = join(bookDir, "story", "runtime");
     await mkdir(runtimeDir, { recursive: true });
-    await writeFile(join(runtimeDir, "chapter-0002.plan.md"), "# Chapter 2 Plan\n\nKeep the witness alive.", "utf-8");
+    await writeFile(join(runtimeDir, "chapter-0002.intent.md"), "# Chapter 2 Plan\n\nKeep the witness alive.", "utf-8");
 
     await expect(readChapterPlanDocument(bookDir, 2))
       .resolves.toBe("# Chapter 2 Plan\n\nKeep the witness alive.");

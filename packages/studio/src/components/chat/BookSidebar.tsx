@@ -12,17 +12,11 @@ import { FoundationSection } from "../sidebar/FoundationSection";
 import { SummarySection } from "../sidebar/SummarySection";
 import { ChaptersSection } from "../sidebar/ChaptersSection";
 import { CharacterSection } from "../sidebar/CharacterSection";
-import { FrontmatterCards } from "../sidebar/FrontmatterCards";
 import { PendingHooksView } from "../sidebar/PendingHooksView";
 import {
   FOUNDATION_FILE_LABELS,
-  frontmatterToCards,
-  hasTableRows,
   presentCurrentState,
-  relabelOkrJargon,
   roleFromPath,
-  stripStructuralMarkers,
-  type TruthFrontmatter,
 } from "../../lib/truth-display";
 
 export interface BookSidebarProps {
@@ -43,13 +37,10 @@ function artifactLabel(file: string): string {
 
 // Read-mode body for an opened file. A few files need reader-friendly handling
 // instead of raw markdown: pending_hooks.md (a wide tracking table) renders as
-// cards, current_state.md hides its engineering seed note, and files with YAML
-// frontmatter (story_frame.md) render structured cards above clean prose.
+// cards and current_state.md gets a reader-facing empty state.
 function renderTruthBody(
   file: string | null,
   content: string,
-  frontmatter: TruthFrontmatter | null,
-  body: string | null,
 ) {
   if (file === "pending_hooks.md") {
     return <PendingHooksView content={content} />;
@@ -64,21 +55,7 @@ function renderTruthBody(
       <Streamdown plugins={streamdownPlugins} mode="static">{stateBody}</Streamdown>
     );
   }
-  if (file === "emotional_arcs.md" && !hasTableRows(content)) {
-    return (
-      <p className="text-[14px] leading-6 text-muted-foreground/60 italic">
-        还没有情感弧线记录。开始写作后，这里会记录角色在各章的情绪变化。
-      </p>
-    );
-  }
-  return (
-    <>
-      <FrontmatterCards cards={frontmatterToCards(frontmatter)} />
-      <Streamdown plugins={streamdownPlugins} mode="static">
-        {relabelOkrJargon(stripStructuralMarkers(body ?? content))}
-      </Streamdown>
-    </>
-  );
+  return <Streamdown plugins={streamdownPlugins} mode="static">{content}</Streamdown>;
 }
 
 function ArtifactView({ bookId }: { readonly bookId: string }) {
@@ -86,8 +63,6 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   const artifactChapter = useChatStore((s) => s.artifactChapter);
   const closeArtifact = useChatStore((s) => s.closeArtifact);
   const [content, setContent] = useState<string | null>(null);
-  const [frontmatter, setFrontmatter] = useState<TruthFrontmatter | null>(null);
-  const [body, setBody] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
@@ -101,21 +76,17 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   useEffect(() => {
     setEditing(false);
     setLoading(true);
-    setFrontmatter(null);
-    setBody(null);
     if (isChapter) {
       fetchJson<{ content: string }>(`/books/${bookId}/chapters/${artifactChapter}`)
         .then((data) => setContent(data.content ?? ""))
         .catch(() => setContent(null))
         .finally(() => setLoading(false));
     } else if (artifactFile) {
-      fetchJson<{ content: string | null; frontmatter?: TruthFrontmatter; body?: string }>(
+      fetchJson<{ content: string | null }>(
         `/books/${bookId}/truth/${artifactFile}`,
       )
         .then((data) => {
           setContent(data.content ?? "");
-          setFrontmatter(data.frontmatter ?? null);
-          setBody(data.body ?? null);
         })
         .catch(() => setContent(null))
         .finally(() => setLoading(false));
@@ -203,7 +174,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           />
         ) : (
           <div className="px-4 py-3 text-[15px] leading-7">
-            {renderTruthBody(isChapter ? null : artifactFile, content, frontmatter, body)}
+            {renderTruthBody(isChapter ? null : artifactFile, content)}
           </div>
         )}
       </div>
@@ -222,13 +193,11 @@ function PanelView({ bookId, theme: _theme, t, sse }: BookSidebarProps) {
     const last = latest[latest.length - 1];
     if (last.event === "write:start") setActiveOp("write");
     else if (last.event === "tool:start") {
-      const data = last.data as { tool?: string; args?: { agent?: string } } | null;
-      if (data?.tool === "sub_agent") {
-        const agent = data.args?.agent;
-        if (agent === "writer") setActiveOp("write");
-        else if (agent === "auditor") setActiveOp("audit");
-        else if (agent === "reviser") setActiveOp("revise");
-      }
+      const data = last.data as { tool?: string } | null;
+      const action = data?.tool?.split("__").at(-1);
+      if (action === "write_chapters") setActiveOp("write");
+      else if (action === "review_chapter") setActiveOp("audit");
+      else if (action === "revise_chapter") setActiveOp("revise");
     } else if (last.event === "write:complete" || last.event === "tool:end") {
       setActiveOp(null);
     }

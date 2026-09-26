@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath } from "../utils/posix-path.js";
-import type { MaterialAsset, MaterialPurpose } from "./ingest.js";
+import { MaterialAssetSchema, type MaterialAsset, type MaterialPurpose } from "./ingest.js";
 import {
   LocalSearchIndex,
   splitMarkdownForSearch,
@@ -40,12 +40,7 @@ export async function retrieveMaterials(
   const documents: SearchDocument[] = [];
   for (const asset of assets) {
     const markdownPath = safeChildPath(projectRoot, asset.markdownPath);
-    let markdown = "";
-    try {
-      markdown = await readFile(markdownPath, "utf-8");
-    } catch {
-      continue;
-    }
+    const markdown = await readFile(markdownPath, "utf-8");
     const normalizedPath = toPosixPath(asset.markdownPath);
     splitMarkdownForSearch(markdown).forEach((segment, index) => {
       documents.push({
@@ -94,19 +89,15 @@ async function listMaterialAssets(projectRoot: string): Promise<MaterialAsset[]>
   let entries: string[] = [];
   try {
     entries = await readdir(materialsDir);
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
   const assets: MaterialAsset[] = [];
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
-    try {
-      const raw = await readFile(join(materialsDir, entry), "utf-8");
-      const asset = JSON.parse(raw) as MaterialAsset;
-      if (asset.id && asset.markdownPath && asset.title) assets.push(asset);
-    } catch {
-      // Ignore corrupt stale manifests; retrieval should not break the chat turn.
-    }
+    const raw = await readFile(join(materialsDir, entry), "utf-8");
+    assets.push(MaterialAssetSchema.parse(JSON.parse(raw)));
   }
   return assets;
 }

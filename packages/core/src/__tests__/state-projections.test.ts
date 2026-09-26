@@ -33,10 +33,10 @@ describe("state projections", () => {
     expect(markdown).toBe([
       "# Pending Hooks",
       "",
-      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-      "| a-debt | 4 | relationship | progressing | 11 | Reveal the debt. | mid-arc | none |  | false |  |  | Old oath token resurfaces. |",
-      "| b-courier | 12 | mystery | open | 13 | Identify the courier. | mid-arc | none |  | false |  |  | The seal is still broken. |",
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| a-debt | 4 | relationship | progressing | 11 | Reveal the debt. | Old oath token resurfaces. |",
+      "| b-courier | 12 | mystery | open | 13 | Identify the courier. | The seal is still broken. |",
       "",
     ].join("\n"));
   });
@@ -78,7 +78,7 @@ describe("state projections", () => {
     ].join("\n"));
   });
 
-  it("renders current state projection with placeholders and additional notes", () => {
+  it("renders current state as generic typed facts without semantic slots", () => {
     const markdown = renderCurrentStateProjection({
       chapter: 12,
       facts: [
@@ -112,18 +112,13 @@ describe("state projections", () => {
     expect(markdown).toBe([
       "# Current State",
       "",
-      "| Field | Value |",
-      "| --- | --- |",
-      "| Current Chapter | 12 |",
-      "| Current Location | (not set) |",
-      "| Protagonist State | (not set) |",
-      "| Current Goal | Track the mentor debt through the river-port ledger. |",
-      "| Current Constraint | (not set) |",
-      "| Current Alliances | (not set) |",
-      "| Current Conflict | Guild pressure keeps pulling against the debt trail. |",
+      "> Current chapter: 12",
       "",
-      "## Additional State",
-      "- Lin Yue still hides the broken oath token.",
+      "| Subject | Predicate | Object | Valid from | Source chapter |",
+      "| --- | --- | --- | --- | --- |",
+      "| current_state | note_1 | Lin Yue still hides the broken oath token. | 12 | 12 |",
+      "| protagonist | Current Conflict | Guild pressure keeps pulling against the debt trail. | 12 | 12 |",
+      "| protagonist | Current Goal | Track the mentor debt through the river-port ledger. | 12 | 12 |",
       "",
     ].join("\n"));
   });

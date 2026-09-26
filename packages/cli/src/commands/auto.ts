@@ -1,6 +1,12 @@
 import { Command } from "commander";
-import { PipelineRunner, StateManager } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, getLegacyMigrationHint, resolveBookId, log, logError } from "../utils.js";
+import {
+  PipelineRunner,
+  StateManager,
+  createWriteChaptersTool,
+  executeExplicitCapabilityTool,
+  type Observation,
+} from "@actalk/inkos-core";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatAutoWriteAlreadyComplete,
   formatAutoWriteStart,
@@ -50,10 +56,6 @@ export const autoCommand = new Command("auto")
       const language = resolveCliLanguage(book.language);
       notifyLanguage = language;
       notifyBookName = book.title ?? bookId;
-      const migrationHint = await getLegacyMigrationHint(root, bookId);
-      if (migrationHint && !opts.json) {
-        log(`[migration] ${migrationHint}`);
-      }
 
       const startChapter = await state.getNextChapterNumber(bookId);
       if (startChapter > targetChapter) {
@@ -66,51 +68,42 @@ export const autoCommand = new Command("auto")
       }
 
       const config = await loadConfig();
-      // `inkos auto` is unattended batch writing, so the audit→revise loop must
-      // run inline: force "auto" regardless of book/project reviewMode settings.
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         quiet: opts.quiet,
-        chapterReviewMode: "auto",
       }));
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
       if (!opts.json) log(formatAutoWriteStart(language, bookId, startChapter, targetChapter));
 
       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
 
-      const results = [];
-      for (let chapter = startChapter; chapter <= targetChapter; chapter++) {
-        if (!opts.json) log(formatWriteNextProgress(language, chapter, targetChapter, bookId));
+      const count = targetChapter - startChapter + 1;
+      if (!opts.json) log(formatWriteNextProgress(language, startChapter, targetChapter, bookId));
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createWriteChaptersTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
+        workId: bookId,
+        parameters: {
+          instruction: `Write consecutive chapters through chapter ${targetChapter}.`,
+          bookId,
+          chapterCount: count,
+          ...(wordCount ? { chapterWordCount: wordCount } : {}),
+        },
+      });
+      const results = [...((action.data as {
+        readonly chapters?: ReadonlyArray<{
+          readonly chapterNumber: number;
+          readonly title: string;
+          readonly wordCount: number;
+          readonly observations: ReadonlyArray<Observation>;
+        }>;
+      } | undefined)?.chapters ?? [])];
 
-        let result;
-        try {
-          result = await pipeline.writeNextChapter(bookId, wordCount);
-        } catch (e) {
-          throw new Error(
-            `Chapter ${chapter} failed, stopping auto-write (${results.length} chapter(s) completed this run): ${e instanceof Error ? e.message : String(e)}`,
-            { cause: e },
-          );
-        }
-        results.push(result);
-
-        if (!opts.json) {
-          for (const line of formatWriteNextResultLines(language, {
-            chapterNumber: result.chapterNumber,
-            title: result.title,
-            wordCount: result.wordCount,
-            auditPassed: result.auditResult.passed,
-            revised: result.revised,
-            status: result.status,
-            issues: result.auditResult.issues,
-          })) {
-            log(line);
-          }
+      if (!opts.json) {
+        for (const result of results) {
+          for (const line of formatWriteNextResultLines(language, result)) log(line);
           log("");
-        }
-
-        if (result.status === "state-degraded") {
-          throw new Error(
-            `Chapter ${result.chapterNumber} finished in state-degraded status, stopping auto-write. Run "inkos write repair-state ${bookId} ${result.chapterNumber}" first, then re-run inkos auto.`,
-          );
         }
       }
 
@@ -132,7 +125,7 @@ export const autoCommand = new Command("auto")
             chapterNumber: r.chapterNumber,
             title: r.title,
             wordCount: r.wordCount,
-            auditPassed: r.auditResult.passed,
+            observationCount: r.observations.length,
           }))),
         }, config);
       }

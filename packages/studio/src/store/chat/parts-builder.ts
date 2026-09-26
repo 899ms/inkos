@@ -34,10 +34,6 @@ export interface ContextCompressionStreamEvent {
 
 // [zh, en] tuples resolved through tr() at call time so labels follow the
 // current app language instead of the language active at module load.
-const AGENT_LABELS: Record<string, readonly [string, string]> = {
-  architect: ["建书", "Create book"], writer: ["写作", "Write"], auditor: ["审计", "Audit"],
-  reviser: ["修订", "Revise"], exporter: ["导出", "Export"],
-};
 const TOOL_LABELS: Record<string, readonly [string, string]> = {
   read: ["读取文件", "Read file"], edit: ["编辑文件", "Edit file"], grep: ["搜索", "Search"], ls: ["列目录", "List directory"],
   context_compression: ["整理上下文", "Organize context"],
@@ -51,15 +47,22 @@ const TOOL_LABELS: Record<string, readonly [string, string]> = {
   create_narrative_forecast: ["剧情多线推演", "Narrative forecast"],
   get_narrative_forecast: ["核验剧情推演", "Recheck forecast"],
   select_narrative_branch: ["采用候选分支", "Select candidate branch"],
+  create_book: ["创建长篇", "Create long-form Work"],
+  revise_foundation: ["重建设定", "Revise foundation"],
+  write_chapters: ["写作章节", "Write chapters"],
+  review_chapter: ["审查章节", "Review chapter"],
+  revise_chapter: ["修订章节", "Revise chapter"],
+  export_book: ["导出作品", "Export Work"],
 };
 
-function resolveToolLabel(tool: string, agent?: string): string {
-  if (tool === "sub_agent" && agent) {
-    const label = AGENT_LABELS[agent];
-    return label ? tr(label[0], label[1]) : agent;
-  }
-  const label = TOOL_LABELS[tool];
-  return label ? tr(label[0], label[1]) : tool;
+function resolveToolLabel(tool: string, _agent?: string): string {
+  const action = actionToolName(tool);
+  const label = TOOL_LABELS[action];
+  return label ? tr(label[0], label[1]) : action;
+}
+
+function actionToolName(tool: string): string {
+  return tool.split("__").at(-1) ?? tool;
 }
 
 function compressionLabel(category: ContextCompressionCategory): string {
@@ -212,31 +215,16 @@ export function buildPartsFromEvents(events: StreamEvent[]): MessagePart[] {
       }
 
       case "tool:start": {
-        // For pipeline operations (sub_agent), move trailing text to thinking
-        // (it's the agent's reasoning before calling the tool, not user-facing content).
-        // For utility tools (read/grep/edit/ls), keep text as-is.
-        if (event.tool === "sub_agent") {
-          const last = parts[parts.length - 1];
-          if (last?.type === "text" && last.content) {
-            parts.pop();
-            const prevPart = parts[parts.length - 1];
-            if (prevPart?.type === "thinking") {
-              prevPart.content += (prevPart.content ? "\n\n" : "") + last.content;
-            } else {
-              parts.push({ type: "thinking", content: last.content, streaming: false });
-            }
-          }
-        }
-
+        const tool = actionToolName(event.tool);
         const stages: PipelineStage[] | undefined = event.stages?.length
           ? event.stages.map((label) => ({ label, status: "pending" as const }))
           : undefined;
 
         const exec: ToolExecution = {
           id: event.id,
-          tool: event.tool,
+          tool,
           agent: event.agent,
-          label: resolveToolLabel(event.tool, event.agent),
+          label: resolveToolLabel(tool, event.agent),
           status: "running",
           stages,
           startedAt: Date.now(),
@@ -256,7 +244,12 @@ export function buildPartsFromEvents(events: StreamEvent[]): MessagePart[] {
             if (event.isError) exec.error = localizeKnownRuntimeMessage(summarizeToolResult(event.result));
             else exec.result = summarizeToolResult(event.result);
             if (event.details !== undefined) exec.details = event.details;
-            if (!event.isError && (exec.tool === "play_start" || exec.tool === "play_step" || exec.tool === "play_revise")) {
+            if (
+              !event.isError
+              && event.details
+              && typeof event.details === "object"
+              && (event.details as Record<string, unknown>).presentation === "immersive-scene"
+            ) {
               suppressTextAfterPlayTool = true;
             }
             // Mark all remaining stages as completed

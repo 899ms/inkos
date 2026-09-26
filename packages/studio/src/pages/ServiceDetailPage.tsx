@@ -4,6 +4,7 @@ import { useServiceStore } from "../store/service";
 import { Eye, EyeOff, Loader2, ArrowLeft, Plus, Trash2, X } from "lucide-react";
 import { ServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { tr } from "../lib/app-language";
+import { isLLMApiFormat } from "@actalk/inkos-core/llm/api-format";
 import {
   deleteServiceConfig,
   matchServiceConfigEntryForDetail,
@@ -15,6 +16,7 @@ import {
   type ServiceDetailDetectedConfig as DetectedConfig,
   type ServiceDetailModelInfo as ModelInfo,
   type ServiceDetailVerifiedProbe as VerifiedProbe,
+  type LLMApiFormat,
 } from "./service-detail-state";
 
 interface Nav {
@@ -38,6 +40,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const loading = useServiceStore((s) => s.servicesLoading);
   const fetchServices = useServiceStore((s) => s.fetchServices);
   const refreshServices = useServiceStore((s) => s.refreshServices);
+  const fetchBankModels = useServiceStore((s) => s.fetchBankModels);
   const setStoreModels = useServiceStore((s) => s.setLiveModels);
   const clearStoreModels = useServiceStore((s) => s.clearModels);
 
@@ -53,13 +56,14 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const [customName, setCustomName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [temperature, setTemperature] = useState("0.7");
-  const [apiFormat, setApiFormat] = useState<"chat" | "responses">("chat");
+  const [apiFormat, setApiFormat] = useState<LLMApiFormat>("chat");
   const [stream, setStream] = useState(true);
   const [detectedModel, setDetectedModel] = useState<string>("");
   const [detectedConfig, setDetectedConfig] = useState<DetectedConfig | null>(null);
   const [verifiedProbe, setVerifiedProbe] = useState<VerifiedProbe | null>(null);
   const [configuredModels, setConfiguredModels] = useState<ModelInfo[]>([]);
   const [modelIdInput, setModelIdInput] = useState("");
+  const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
 
   // -- Unified connection status --
   const [status, setStatus] = useState<ConnectionStatus>({ state: "idle" });
@@ -76,7 +80,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           setBaseUrl(String(matched.baseUrl ?? ""));
         }
         if (typeof matched.temperature === "number") setTemperature(String(matched.temperature));
-        if (matched.apiFormat === "chat" || matched.apiFormat === "responses") setApiFormat(matched.apiFormat);
+        if (isLLMApiFormat(matched.apiFormat)) setApiFormat(matched.apiFormat);
         if (typeof matched.stream === "boolean") setStream(matched.stream);
         if (Array.isArray(matched.models)) {
           setConfiguredModels(mergeServiceDetailModels(matched.models.filter((model): model is string => typeof model === "string")));
@@ -151,12 +155,15 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       return;
     }
     setApiKey(trimmedKey);
+    setSaveFeedback(null);
     setStatus({ state: "testing" });
     try {
+      const preferredModel = modelIdInput.trim() || configuredModels[0]?.id || detectedModel || undefined;
       const result = await probeServiceForDetail(effectiveServiceId, {
         apiKey: trimmedKey,
         apiFormat,
         stream,
+        ...(preferredModel ? { preferredModel } : {}),
         ...(isCustom ? { baseUrl: baseUrl.trim() } : {}),
       });
       if (result.ok) {
@@ -178,7 +185,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           selectedModel: result.selectedModel,
           detected: result.detected,
         });
-        const mergedModels = mergeServiceDetailModels(configuredModels, models);
+        const mergedModels = mergeServiceDetailModels(configuredModels, preferredModel ? [preferredModel] : undefined, models);
         setConfiguredModels(mergedModels);
         setStatus({ state: "connected", models: mergedModels });
         setStoreModels(effectiveServiceId, mergedModels); // Write to global store
@@ -236,14 +243,19 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         if (isCustom && result.detectedConfig?.baseUrl) setBaseUrl(result.detectedConfig.baseUrl);
         setDetectedModel(result.detectedModel);
         setDetectedConfig(result.detectedConfig);
+        setConfiguredModels(result.status.models);
         setStoreModels(effectiveServiceId, result.status.models);
         setStatus(result.status);
+        setSaveFeedback(tr(
+          `已保存 ${result.status.models.length} 个模型，创作选择器将使用这份目录。`,
+          `Saved ${result.status.models.length} models. The writing picker will use this catalog.`,
+        ));
       } else {
         setStatus(result.status);
         if (result.status.state === "error") return;
       }
       await refreshServices();
-      nav.toServices();
+      await fetchBankModels();
     } catch (e) {
       setStatus({ state: "error", message: e instanceof Error ? e.message : tr("保存失败", "Save failed") });
     }
@@ -339,20 +351,24 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           {/* Status feedback */}
           {status.state === "connected" && (
             <span className="text-xs text-emerald-500">
-              {tr(`连接成功，${models.length} 个模型`, `Connected, ${models.length} models`)}
-              {detectedModel
-                ? tr(
-                    `，已自动匹配 ${detectedModel}${detectedConfig ? ` / ${detectedConfig.apiFormat === "responses" ? "Responses" : "Chat"} / ${detectedConfig.stream ? "流式" : "非流式"}` : ""}`,
-                    `, auto-matched ${detectedModel}${detectedConfig ? ` / ${detectedConfig.apiFormat === "responses" ? "Responses" : "Chat"} / ${detectedConfig.stream ? "streaming" : "non-streaming"}` : ""}`,
-                  )
-                : ""}
+              {saveFeedback ?? (
+                <>
+                  {tr(`连接成功，${models.length} 个模型`, `Connected, ${models.length} models`)}
+                  {detectedModel
+                    ? tr(
+                        `，已自动匹配 ${detectedModel}${detectedConfig ? ` / ${detectedConfig.apiFormat === "anthropic" ? "Anthropic Messages" : detectedConfig.apiFormat === "responses" ? "Responses" : "Chat / Completions"} / ${detectedConfig.stream ? "流式" : "非流式"}` : ""}`,
+                        `, auto-matched ${detectedModel}${detectedConfig ? ` / ${detectedConfig.apiFormat === "anthropic" ? "Anthropic Messages" : detectedConfig.apiFormat === "responses" ? "Responses" : "Chat / Completions"} / ${detectedConfig.stream ? "streaming" : "non-streaming"}` : ""}`,
+                      )
+                    : ""}
+                </>
+              )}
             </span>
           )}
           {status.state === "error" && (
             <span className="text-xs text-destructive">{status.message}</span>
           )}
           {status.state === "saved" && (
-            <span className="text-xs text-emerald-500">{tr("已保存", "Saved")}</span>
+            <span className="text-xs text-emerald-500">{saveFeedback ?? tr("已保存", "Saved")}</span>
           )}
         </div>
 
@@ -360,11 +376,12 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           <Field label={tr("协议类型", "Protocol")}>
             <select
               value={apiFormat}
-              onChange={(e) => setApiFormat(e.target.value as "chat" | "responses")}
+              onChange={(e) => setApiFormat(e.target.value as LLMApiFormat)}
               className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm"
             >
-              <option value="chat">Chat / Completions</option>
-              <option value="responses">Responses</option>
+              <option value="chat">OpenAI Chat Completions</option>
+              <option value="responses">OpenAI Responses</option>
+              <option value="anthropic">Anthropic Messages</option>
             </select>
           </Field>
 
@@ -410,7 +427,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
             </button>
           </div>
           <p className="text-xs text-muted-foreground/60">
-            {tr("测试连接发现的模型和手动添加的模型都会在保存后持久化；内置目录只作为兜底。", "Discovered and manually added models are persisted on save; the built-in catalog is only a fallback.")}
+            {tr("先点“测试连接”拉取最新列表，再点“保存”写入创作选择器。内置目录只在还没有保存过快照时作为兜底。", "Click “Test connection” to fetch the latest list, then “Save” to write it into the writing picker. The built-in catalog is only a fallback before a snapshot is saved.")}
           </p>
           {hasModelCatalog && (
           <div className="space-y-2">

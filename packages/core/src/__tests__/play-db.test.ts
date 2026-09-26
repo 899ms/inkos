@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { PlayDB } from "../play/play-db.js";
+import {applyPlayMutation} from '../play/play-reducer.js';
+import type {PlayMutationInput} from '../models/play.js';
 
 const require = createRequire(import.meta.url);
 let hasNodeSqlite = true;
@@ -16,12 +18,12 @@ try {
 const sqliteIt = hasNodeSqlite ? it : it.skip;
 
 describe("PlayDB", () => {
-  sqliteIt("upserts entities and reopens persisted data", async () => {
+  sqliteIt("persists claim transitions and entity origins while rejecting an unrelated transition", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-play-db-"));
 
     try {
       const db = new PlayDB(root);
-      db.upsertEntity({
+      const actor={
         id: "actor_songci",
         type: "actor",
         label: "宋词",
@@ -29,14 +31,26 @@ describe("PlayDB", () => {
         status: "active",
         createdEventId: "event-0001",
         updatedEventId: "event-0001",
-      });
+      } as const;
+      const mutation:PlayMutationInput={eventId:'event-0001',turn:1,actionKind:'investigate',summary:'Read a report.',
+        entities:{upsert:[actor,{id:'arrival-report',type:'claim',label:'Arrival report',summary:'An unverified report.'},{id:'arrival-chain',type:'proof_chain',label:'Arrival record chain',summary:'Records supporting the report.'}]},
+        edges:{upsert:[],expire:[]},stateSlots:{upsert:[]},evidence:{transitions:[{entityId:'arrival-report',to:'hinted'},{entityId:'arrival-chain',to:'seen'}]},blocked:false,blockedReason:'',notes:[],
+      };
+      applyPlayMutation({db,mutation,rawInput:'Read the report.'});
+      applyPlayMutation({db,mutation:{...mutation,eventId:'event-0002',turn:2,entities:{upsert:[{...actor,createdEventId:'event-0002',updatedEventId:'event-0002',status:'waiting'}]},evidence:{transitions:[]}},rawInput:'Wait.'});
+      expect(()=>applyPlayMutation({db,mutation:{...mutation,eventId:'invalid',turn:2,entities:{upsert:[]},evidence:{transitions:[{entityId:actor.id,to:'verified'}]}},rawInput:'Invalid transition'})).toThrow(expect.objectContaining({code:'PLAY_EVIDENCE_ENTITY_TYPE'}));
+      expect(db.snapshot().events).toHaveLength(2);
       db.close();
 
       const reopened = new PlayDB(root);
+      expect(reopened.getEvent('event-0001')?.actionKind).toBe('investigate');
       expect(reopened.getEntity("actor_songci")).toMatchObject({
         label: "宋词",
         type: "actor",
+        createdEventId:'event-0001',updatedEventId:'event-0002',
       });
+      expect(reopened.getStateSlotsForEntity('arrival-report')).toEqual(expect.arrayContaining([expect.objectContaining({value:expect.objectContaining({status:'hinted'})})]));
+      expect(reopened.getStateSlotsForEntity('arrival-chain')).toEqual(expect.arrayContaining([expect.objectContaining({value:expect.objectContaining({status:'seen'})})]));
       reopened.close();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -48,8 +62,8 @@ describe("PlayDB", () => {
     const db = new PlayDB(root);
 
     try {
-      db.upsertEntity({ id: "evidence_stats", type: "evidence", label: "地址统计" });
-      db.upsertEntity({ id: "claim_cohabit", type: "claim", label: "婚外同居" });
+      db.upsertEntity({ id: "evidence_stats", type: "evidence", label: "地址统计", summary: "地址证据" });
+      db.upsertEntity({ id: "claim_cohabit", type: "claim", label: "婚外同居", summary: "待证主张" });
       db.upsertEdge({
         id: "edge-supports",
         fromId: "evidence_stats",
@@ -76,9 +90,9 @@ describe("PlayDB", () => {
     const db = new PlayDB(root);
 
     try {
-      db.upsertEntity({ id: "evidence_stats", type: "evidence", label: "地址统计" });
-      db.upsertEntity({ id: "claim_cohabit", type: "claim", label: "婚外同居" });
-      db.upsertEntity({ id: "evidence_recording", type: "evidence", label: "录音" });
+      db.upsertEntity({ id: "evidence_stats", type: "evidence", label: "地址统计", summary: "地址证据" });
+      db.upsertEntity({ id: "claim_cohabit", type: "claim", label: "婚外同居", summary: "待证主张" });
+      db.upsertEntity({ id: "evidence_recording", type: "evidence", label: "录音", summary: "录音证据" });
       db.upsertEdge({
         id: "edge-supports-1",
         fromId: "evidence_stats",
@@ -111,7 +125,7 @@ describe("PlayDB", () => {
     const db = new PlayDB(root);
 
     try {
-      db.upsertEntity({ id: "actor_husband", type: "actor", label: "徐晋安" });
+      db.upsertEntity({ id: "actor_husband", type: "actor", label: "徐晋安", summary: "丈夫" });
       db.upsertStateSlot({
         id: "slot_husband_suspicion",
         ownerEntityId: "actor_husband",

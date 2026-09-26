@@ -1,4 +1,7 @@
 import { fetchJson } from "../hooks/use-api";
+import type { LLMApiFormat } from "@actalk/inkos-core/llm/api-format";
+
+export type { LLMApiFormat } from "@actalk/inkos-core/llm/api-format";
 
 export interface ServiceDetailModelInfo {
   readonly id: string;
@@ -23,8 +26,30 @@ export function mergeServiceDetailModels(
   return merged;
 }
 
+/**
+ * Decide which model ids to persist as the writing-picker snapshot.
+ * The on-screen catalog (test results + manual adds) is the contract:
+ * a later bank-only fallback must not replace a richer list the user already saw.
+ */
+export function resolveModelsToPersist(args: {
+  readonly displayedModels?: ReadonlyArray<ServiceDetailModelInfo | string>;
+  readonly probeModels?: ReadonlyArray<ServiceDetailModelInfo | string>;
+  readonly modelsSource?: "api" | "fallback";
+}): ServiceDetailModelInfo[] {
+  const displayed = mergeServiceDetailModels(args.displayedModels);
+  const probed = mergeServiceDetailModels(args.probeModels);
+
+  if (args.modelsSource === "fallback") {
+    return displayed.length > 0 ? displayed : probed;
+  }
+  if (args.modelsSource === "api") {
+    return mergeServiceDetailModels(probed, displayed);
+  }
+  return mergeServiceDetailModels(displayed, probed);
+}
+
 export interface ServiceDetailDetectedConfig {
-  readonly apiFormat?: "chat" | "responses";
+  readonly apiFormat?: LLMApiFormat;
   readonly stream?: boolean;
   readonly baseUrl?: string;
   readonly modelsSource?: "api" | "fallback";
@@ -51,7 +76,7 @@ export interface ServiceProbeResponse {
 export interface ServiceDetailVerifiedProbe {
   readonly apiKey: string;
   readonly baseUrl: string;
-  readonly apiFormat: "chat" | "responses";
+  readonly apiFormat: LLMApiFormat;
   readonly stream: boolean;
   readonly models: ServiceDetailModelInfo[];
   readonly selectedModel?: string;
@@ -62,9 +87,10 @@ export async function probeServiceForDetail(
   serviceId: string,
   body: {
     readonly apiKey: string;
-    readonly apiFormat: "chat" | "responses";
+    readonly apiFormat: LLMApiFormat;
     readonly stream: boolean;
     readonly baseUrl?: string;
+    readonly preferredModel?: string;
   },
   deps?: { readonly fetchJsonImpl?: JsonFetcher },
 ): Promise<ServiceProbeResponse> {
@@ -84,7 +110,7 @@ export async function rehydrateServiceConnectionStatus(args: {
   readonly shouldVerify: boolean;
   readonly isCustom: boolean;
   readonly baseUrl: string;
-  readonly apiFormat: "chat" | "responses";
+  readonly apiFormat: LLMApiFormat;
   readonly stream: boolean;
   readonly fetchJsonImpl?: JsonFetcher;
 }): Promise<{
@@ -129,7 +155,7 @@ export async function saveServiceConfig(args: {
   readonly resolvedCustomName: string;
   readonly apiKey: string;
   readonly baseUrl: string;
-  readonly apiFormat: "chat" | "responses";
+  readonly apiFormat: LLMApiFormat;
   readonly stream: boolean;
   readonly temperature: string;
   readonly detectedModel: string;
@@ -161,6 +187,9 @@ export async function saveServiceConfig(args: {
   }
 
   const verifiedBaseUrl = args.isCustom ? trimmedBaseUrl : "";
+  const preferredModel = mergeServiceDetailModels(args.configuredModels)[0]?.id
+    ?? args.detectedModel.trim()
+    ?? undefined;
   const verified = args.verifiedProbe;
   const canReuseVerifiedProbe = Boolean(
     verified
@@ -184,6 +213,7 @@ export async function saveServiceConfig(args: {
         apiKey: trimmedKey,
         apiFormat: args.apiFormat,
         stream: args.stream,
+        ...(preferredModel ? { preferredModel } : {}),
         ...(args.isCustom ? { baseUrl: trimmedBaseUrl } : {}),
       }, { fetchJsonImpl });
     } catch (error) {
@@ -204,8 +234,12 @@ export async function saveServiceConfig(args: {
   }
 
   const detectedModel = probe.selectedModel ?? args.detectedModel;
-  const savedModels = mergeServiceDetailModels(probe.models, args.configuredModels);
   const detectedConfig = probe.detected ?? null;
+  const savedModels = resolveModelsToPersist({
+    displayedModels: args.configuredModels,
+    probeModels: probe.models,
+    modelsSource: detectedConfig?.modelsSource ?? verified?.detected?.modelsSource,
+  });
   const savedApiFormat = detectedConfig?.apiFormat ?? args.apiFormat;
   const savedStream = typeof detectedConfig?.stream === "boolean" ? detectedConfig.stream : args.stream;
   const savedBaseUrl = args.isCustom ? (detectedConfig?.baseUrl ?? trimmedBaseUrl) : undefined;

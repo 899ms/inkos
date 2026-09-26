@@ -1,14 +1,12 @@
 import { BaseAgent } from "./base.js";
 import { completeLongForm } from "../llm/long-form-completion.js";
+import { materializeStoryGraph } from "../interactive-film/generate.js";
+import { InteractiveFilmPackageToolSchema, StoryboardPackageToolSchema } from "./production-document-tool.js";
 
-export type ScriptTargetFormat =
-  | "vertical_short_drama"
-  | "screenplay"
-  | "audio_drama"
-  | "interactive_script"
-  | "general_script";
+export type ScriptTargetFormat = string;
 
 export interface ScriptCreationInput {
+  readonly authorRequest?: string;
   readonly title: string;
   readonly sourceKind?: string;
   readonly targetFormat?: ScriptTargetFormat;
@@ -20,6 +18,7 @@ export interface ScriptCreationInput {
 }
 
 export interface StoryboardCreationInput {
+  readonly authorRequest?: string;
   readonly title: string;
   readonly sourceKind?: string;
   readonly sourceText?: string;
@@ -29,15 +28,10 @@ export interface StoryboardCreationInput {
   readonly granularity?: string;
   readonly maxShots?: number;
   readonly language?: "zh" | "en";
-  readonly segment?: {
-    readonly label: string;
-    readonly index: number;
-    readonly count: number;
-    readonly estimatedShots: number;
-  };
 }
 
 export interface InteractiveFilmCreationInput {
+  readonly authorRequest?: string;
   readonly title: string;
   readonly sourceKind?: string;
   readonly sourceText?: string;
@@ -50,8 +44,12 @@ export interface InteractiveFilmCreationInput {
   readonly language?: "zh" | "en";
 }
 
-abstract class LongFormProductionAgent extends BaseAgent {
-  protected async recoverProductionMarkdown(
+export class ScriptCreationAgent extends BaseAgent {
+  get name(): string {
+    return "script-creation-writer";
+  }
+
+  private async recoverProductionMarkdown(
     fragments: string,
     language: "zh" | "en",
     requiredHeadings: readonly string[],
@@ -89,13 +87,6 @@ abstract class LongFormProductionAgent extends BaseAgent {
     });
     return response.content.trim();
   }
-}
-
-export class ScriptCreationAgent extends LongFormProductionAgent {
-  get name(): string {
-    return "script-creation-writer";
-  }
-
   async writeScript(input: ScriptCreationInput): Promise<string> {
     const language = input.language ?? "zh";
     const messages = [
@@ -107,7 +98,7 @@ export class ScriptCreationAgent extends LongFormProductionAgent {
       language,
       generate: (continuationMessages) => this.chat(continuationMessages, {
         temperature: 0.55,
-        maxTokens: estimateScriptMaxTokens(input),
+        maxTokens: this.ctx.client.defaults.maxTokens,
       }),
       onContinuation: (pass) => this.log?.warn(`[script] Output limit reached; continuing pass ${pass}.`),
       recoverAfterContinuation: (fragments) => this.recoverProductionMarkdown(
@@ -116,68 +107,76 @@ export class ScriptCreationAgent extends LongFormProductionAgent {
         language === "en" ? ["## Characters", "## Script"] : ["## 人物", "## 剧本正文"],
       ),
     });
-    return extractProductionDocument(response.content, input.title);
+    return response.content.trim();
   }
 }
 
-export class StoryboardCreationAgent extends LongFormProductionAgent {
+export class StoryboardCreationAgent extends BaseAgent {
   get name(): string {
     return "storyboard-creation-writer";
   }
 
-  async writeStoryboard(input: StoryboardCreationInput): Promise<string> {
+  async writeStoryboard(input: StoryboardCreationInput) {
     const language = input.language ?? "zh";
-    const messages = [
+    const { result } = await this.submitStructured([
       { role: "system", content: buildStoryboardCreationSystemPrompt(language) },
       { role: "user", content: buildStoryboardCreationUserPrompt(input, language) },
-    ] as const;
-    const response = await completeLongForm({
-      messages,
-      language,
-      generate: (continuationMessages) => this.chat(continuationMessages, {
-        temperature: 0.45,
-        maxTokens: estimateStoryboardMaxTokens(input),
-      }),
-      onContinuation: (pass) => this.log?.warn(`[storyboard] Output limit reached; continuing pass ${pass}.`),
-      recoverAfterContinuation: (fragments) => this.recoverProductionMarkdown(
-        fragments,
-        language,
-        language === "en" ? ["## Storyboard", "## Image Prompts"] : ["## 分镜表", "## 图像提示词"],
-      ),
+    ], {
+      name: "submit_storyboard_package",
+      label: "Submit storyboard package",
+      description: "Submit the complete human-readable storyboard and its generation-ready image prompts in shot order.",
+      parameters: StoryboardPackageToolSchema,
+    }, {
+      temperature: 0.45,
+      maxTokens: this.ctx.client.defaults.maxTokens,
     });
-    return extractProductionDocument(response.content, input.title);
+    return {
+      storyboard: result.storyboard.trim(),
+      imagePrompts: result.imagePrompts.map((prompt) => prompt.trim()).filter(Boolean),
+    };
   }
 }
 
-export class InteractiveFilmCreationAgent extends LongFormProductionAgent {
+export class InteractiveFilmCreationAgent extends BaseAgent {
   get name(): string {
     return "interactive-film-creation-writer";
   }
 
-  async writeInteractiveFilm(input: InteractiveFilmCreationInput): Promise<string> {
+  async createInteractiveFilmPackage(input: InteractiveFilmCreationInput) {
     const language = input.language ?? "zh";
-    const messages = [
+    const { result } = await this.submitStructured([
       { role: "system", content: buildInteractiveFilmCreationSystemPrompt(language) },
       { role: "user", content: buildInteractiveFilmCreationUserPrompt(input, language) },
-    ] as const;
-    const response = await completeLongForm({
-      messages,
-      language,
-      generate: (continuationMessages) => this.chat(continuationMessages, {
-        temperature: 0.5,
-        maxTokens: estimateInteractiveFilmMaxTokens(input),
-      }),
-      onContinuation: (pass) => this.log?.warn(`[interactive-film] Output limit reached; continuing pass ${pass}.`),
-      recoverAfterContinuation: (fragments) => this.recoverProductionMarkdown(
-        fragments,
-        language,
-        language === "en"
-          ? ["## Story Tree", "## Variables and Flags", "## Ending Paths", "## Interactive Script", "## Storyboard and Image Prompts"]
-          : ["## 剧情树", "## 变量与旗标表", "## 多结局路径", "## 互动剧本", "## 分镜与图像提示词"],
-      ),
+    ], {
+      name: "submit_interactive_film_package",
+      label: "Submit interactive-film package",
+      description: "Submit the complete human-readable interactive-film production package. Each text field is a complete Markdown artifact; imagePrompts preserves shot order.",
+      parameters: InteractiveFilmPackageToolSchema,
+      validate: (result) => {
+        materializeStoryGraph({
+          projectId: "pending",
+          title: input.title,
+          content: result.storyGraph,
+        });
+        return result;
+      },
+    }, {
+      temperature: 0.5,
+      maxTokens: this.ctx.client.defaults.maxTokens,
     });
-    return extractProductionDocument(response.content, input.title);
+    return result;
   }
+}
+
+function productionBrief(input: {authorRequest?: string; requirements?: string}, language: "zh" | "en") {
+  const en = language === "en";
+  return [
+    ...(input.authorRequest?.trim() ? [en ? "## Author request" : "## 作者原始请求", input.authorRequest, ""] : []),
+    en ? "## Production brief" : "## 创作任务与方案",
+    en ? "This brief elaborates the task. Added production choices remain adjustable within the author's constraints."
+      : "以下说明展开创作任务；其中补充的制作选择可在作者约束内调整。",
+    input.requirements?.trim() || (en ? "Follow the author's request." : "遵循作者请求。"),
+  ];
 }
 
 export function renderScriptSpec(input: ScriptCreationInput): string {
@@ -197,12 +196,7 @@ export function renderScriptSpec(input: ScriptCreationInput): string {
         ? `- Source material: ${input.sourceKind}`
         : "- Source material: user input / conversation brief",
       "",
-      "## User Requirements",
-      input.requirements?.trim() || "Not separately specified; follow the instruction the user confirmed.",
-      "",
-      "## Adaptation Boundaries",
-      "- Preserve the characters, relationships, conflicts, key events, and taboos the user explicitly specified.",
-      "- Never decide adaptation intensity (\"faithful adaptation / commercial punch-up / low-budget shoot\") on the user's behalf; execute only the spec the user has confirmed.",
+      ...productionBrief(input, "en"),
       "",
       "## Source Material Summary",
       summarizeSourceForSpec(input.sourceText, "en"),
@@ -217,12 +211,7 @@ export function renderScriptSpec(input: ScriptCreationInput): string {
     input.episodeDuration ? `- 单集/单段时长：${input.episodeDuration}` : "- 单集/单段时长：未指定",
     input.sourceKind ? `- 原素材：${input.sourceKind}` : "- 原素材：用户输入/对话需求",
     "",
-    "## 用户要求",
-    input.requirements?.trim() || "未单独指定；以用户确认时的 instruction 为准。",
-    "",
-    "## 改编边界",
-    "- 优先保留用户明确指定的人物、关系、冲突、关键事件和禁忌。",
-    "- 不替用户擅自决定“忠实改编 / 商业强化 / 低成本拍摄”等强度；只执行用户已确认的规格。",
+    ...productionBrief(input, "zh"),
     "",
     "## 源素材摘要",
     summarizeSourceForSpec(input.sourceText),
@@ -235,20 +224,15 @@ export function renderStoryboardSpec(input: StoryboardCreationInput): string {
       `# ${input.title} Storyboard Creation Spec`,
       "",
       "## Goal",
-      `- Shot granularity: ${input.granularity?.trim() || "split by scene and key shots"}`,
-      `- Aspect ratio: ${input.aspectRatio?.trim() || "unspecified; default to what the user's material and target imply"}`,
-      `- Visual style: ${input.visualStyle?.trim() || "unspecified; judge from the user's material and target platform"}`,
+      `- Shot granularity: ${input.granularity?.trim() || "unspecified"}`,
+      `- Aspect ratio: ${input.aspectRatio?.trim() || "unspecified"}`,
+      `- Visual style: ${input.visualStyle?.trim() || "unspecified"}`,
       input.maxShots ? `- Shot cap: ${input.maxShots}` : "- Shot cap: unspecified",
       input.sourceKind
         ? `- Source material: ${input.sourceKind}`
         : "- Source material: user input / conversation brief",
       "",
-      "## User Requirements",
-      input.requirements?.trim() || "Not separately specified; follow the instruction the user confirmed.",
-      "",
-      "## Storyboard Boundaries",
-      "- A storyboard is a creative tool, not a locked-in shooting plan; the output must stay easy to discuss, extend, trim, and re-shoot.",
-      "- Follow only the art style, format, composition, and visual constraints the user has confirmed; never turn unstated preferences into default hard constraints.",
+      ...productionBrief(input, "en"),
       "",
       "## Source Material Summary",
       summarizeSourceForSpec(input.sourceText, "en"),
@@ -258,18 +242,13 @@ export function renderStoryboardSpec(input: StoryboardCreationInput): string {
     `# ${input.title} 分镜创作规格`,
     "",
     "## 目标",
-    `- 分镜粒度：${input.granularity?.trim() || "按场景和关键镜头拆分"}`,
-    `- 画幅：${input.aspectRatio?.trim() || "未指定，默认按用户素材目标判断"}`,
-    `- 视觉风格：${input.visualStyle?.trim() || "未指定，按用户素材和目标平台判断"}`,
+    `- 分镜粒度：${input.granularity?.trim() || "未指定"}`,
+    `- 画幅：${input.aspectRatio?.trim() || "未指定"}`,
+    `- 视觉风格：${input.visualStyle?.trim() || "未指定"}`,
     input.maxShots ? `- 镜头上限：${input.maxShots}` : "- 镜头上限：未指定",
     input.sourceKind ? `- 原素材：${input.sourceKind}` : "- 原素材：用户输入/对话需求",
     "",
-    "## 用户要求",
-    input.requirements?.trim() || "未单独指定；以用户确认时的 instruction 为准。",
-    "",
-    "## 分镜边界",
-    "- 分镜是创作工具，不替用户锁死最终拍法；输出要便于继续讨论、增删、改镜头。",
-    "- 只遵循用户已确认的画风、格式、构图和视觉限制；用户没说的，不写成默认硬限制。",
+    ...productionBrief(input, "zh"),
     "",
     "## 源素材摘要",
     summarizeSourceForSpec(input.sourceText),
@@ -299,12 +278,7 @@ export function renderInteractiveFilmSpec(input: InteractiveFilmCreationInput): 
         ? `- Source material: ${input.sourceKind}`
         : "- Source material: user input / conversation brief",
       "",
-      "## User Requirements",
-      input.requirements?.trim() || "Not separately specified; follow the instruction the user confirmed.",
-      "",
-      "## Interactive Film Boundaries",
-      "- Do not impose RPG stats, combat formulas, equipment tiers, or any other mechanics the user did not request.",
-      "- Never decide subject matter, budget, art style, or commercial punch-up intensity on the user's behalf; mark anything unspecified as adjustable.",
+      ...productionBrief(input, "en"),
       "",
       "## Source Material Summary",
       summarizeSourceForSpec(input.sourceText, "en"),
@@ -323,124 +297,24 @@ export function renderInteractiveFilmSpec(input: InteractiveFilmCreationInput): 
     input.referenceMode ? `- 参考模式：${input.referenceMode}` : "- 参考模式：用户未指定，不擅自套固定游戏模板",
     input.sourceKind ? `- 原素材：${input.sourceKind}` : "- 原素材：用户输入/对话需求",
     "",
-    "## 用户要求",
-    input.requirements?.trim() || "未单独指定；以用户确认时的 instruction 为准。",
-    "",
-    "## 互动影游边界",
-    "- 不擅自加入用户没有要求的 RPG 数值、战斗公式、装备等级或其他玩法系统。",
-    "- 不替用户擅自决定题材、预算、画风和商业强化强度；未指定处写为可调整。",
+    ...productionBrief(input, "zh"),
     "",
     "## 源素材摘要",
     summarizeSourceForSpec(input.sourceText),
   ].join("\n");
 }
 
-export function extractStoryboardImagePrompts(raw: string): string {
-  const section = extractMarkdownSection(raw, [
-    "图像提示词",
-    "分镜图提示词",
-    "Image Prompts",
-    "Shot Image Prompts",
-  ]);
-  const source = section?.trim() || raw.trim();
-  const prompts = extractPromptLines(source);
-  return prompts.length > 0 ? prompts.map((prompt, index) => `${index + 1}. ${prompt}`).join("\n") : "";
-}
-
-export function extractMarkdownSection(raw: string, headings: readonly string[]): string | undefined {
-  const lines = raw.split(/\r?\n/);
-  let start = -1;
-  let level = 0;
-  const normalizedHeadings = headings.map(normalizeHeadingText);
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = /^(#{1,6})\s*(.+?)\s*$/u.exec(lines[index] ?? "");
-    if (!match) continue;
-    const text = normalizeHeadingText(match[2]!);
-    if (normalizedHeadings.some((heading) => headingMatches(text, heading))) {
-      start = index + 1;
-      level = match[1]!.length;
-      break;
-    }
-  }
-  if (start < 0) return undefined;
-  let end = lines.length;
-  for (let index = start; index < lines.length; index += 1) {
-    const match = /^(#{1,6})\s+/u.exec(lines[index] ?? "");
-    if (match && match[1]!.length <= level) {
-      end = index;
-      break;
-    }
-  }
-  return lines.slice(start, end).join("\n");
-}
-
-export function countMarkdownSections(raw: string, headings: readonly string[]): number {
-  const normalizedHeadings = headings.map(normalizeHeadingText);
-  let count = 0;
-  for (const line of raw.split(/\r?\n/)) {
-    const match = /^(#{1,6})\s*(.+?)\s*$/u.exec(line);
-    if (!match) continue;
-    const text = normalizeHeadingText(match[2]!);
-    if (normalizedHeadings.some((heading) => headingMatches(text, heading))) count += 1;
-  }
-  return count;
-}
-
-export function extractProductionDocument(raw: string, title: string): string {
-  const lines = raw.split(/\r?\n/);
-  const normalizedTitle = normalizeHeadingText(title);
-  const start = lines.findIndex((line) => {
-    const match = /^#\s+(.+?)\s*$/u.exec(line);
-    if (!match) return false;
-    return normalizeHeadingText(match[1]!).startsWith(normalizedTitle);
-  });
-  return (start >= 0 ? lines.slice(start).join("\n") : raw).trim();
-}
-
-function normalizeHeadingText(text: string): string {
-  return text
-    .trim()
-    .replace(/^\*\*(.+)\*\*$/u, "$1")
-    .replace(/[`*_]+/gu, "")
-    .replace(/\s+/gu, " ")
-    .toLowerCase();
-}
-
-function headingMatches(text: string, heading: string): boolean {
-  if (text === heading) return true;
-  if (!text.startsWith(heading)) return false;
-  const rest = text.slice(heading.length).trim();
-  return rest === "" || /^[（(【\[\s:：\-—]/u.test(rest);
-}
-
-export function normalizeScriptEpisodeEndLabels(script: string): string {
-  const lines = script.split(/\r?\n/);
-  let currentEpisode: string | null = null;
-  return lines.map((line) => {
-    const heading = /^#{1,6}\s*第\s*([一二三四五六七八九十百千万\d]+)\s*集(?:\s|$)/u.exec(line.trim());
-    if (heading) currentEpisode = heading[1]!;
-    if (!currentEpisode) return line;
-    return line.replace(
-      /(字幕\s*[：:]\s*)第\s*[一二三四五六七八九十百千万\d]+\s*集完/gu,
-      `$1第${currentEpisode}集完`,
-    );
-  }).join("\n");
-}
 
 function buildScriptCreationSystemPrompt(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
     return [
-      "You are a script-creation tool, not a novel-continuation engine.",
-      "This is a non-interactive production call after user confirmation. Execute the confirmed creation spec and source material now.",
-      "Never ask a question, offer options for the user to choose, or defer writing. Resolve unspecified creative details with a coherent working choice; they remain editable later.",
+      "Produce the confirmed script artifact with the activated script-writing Skill.",
       "The deliverable must include the exact Markdown headings `## Characters` and `## Script`, followed by a complete performable script rather than a proposal or outline.",
       "Output Markdown. No process notes, no model self-narration, no \"Here is\" preamble.",
     ].join("\n");
   }
   return [
-    "你是剧本创作工具，不是小说续写器。",
-    "这是用户确认后的非交互生产调用。现在执行已确认的创作规格和源素材。",
-    "不得提问、给用户列待选方案或推迟落笔。未指定的创意细节采用连贯的工作版本，后续仍可编辑。",
+    "按已激活的剧本创作 Skill 生成确认的剧本工件。",
     "交付稿必须包含准确的 Markdown 标题 `## 人物` 和 `## 剧本正文`，并在其后给出完整可排演剧本，不能只交方案或大纲。",
     "输出 Markdown。不要写流程说明、模型自述或“以下是”。",
   ].join("\n");
@@ -463,7 +337,7 @@ function buildScriptCreationUserPrompt(input: ScriptCreationInput, language: "zh
       "",
       "## Script",
       "",
-      "Follow the target format. Vertical short drama: \"Episode N / scene slug / characters / action / dialogue / end-of-episode hook\". Standard screenplay: \"scene heading / action / character / dialogue\".",
+      "Use the target format defined by the activated Skill and confirmed spec.",
     ].join("\n");
   }
   return [
@@ -480,25 +354,27 @@ function buildScriptCreationUserPrompt(input: ScriptCreationInput, language: "zh
     "",
     "## 剧本正文",
     "",
-    "按目标格式输出。竖屏短剧使用“第N集 / 场次 / 人物 / 动作 / 对白 / 集尾钩子”；标准剧本使用“场景标题 / 动作 / 角色 / 对白”。",
+    "按已激活 Skill 和确认规格中的目标格式输出。",
   ].join("\n");
 }
 
 function buildStoryboardCreationSystemPrompt(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
     return [
-      "You are a storyboard-creation tool. Execute the confirmed visual spec and source material; unconfirmed choices remain adjustable.",
-      "Output Markdown. No model self-narration or process explanation.",
+      "Execute the confirmed visual spec with the activated storyboard Skill; unconfirmed choices remain adjustable.",
+      "Submit the complete human-readable storyboard and its image prompts together through the result tool. No model self-narration or process explanation.",
     ].join("\n");
   }
   return [
-    "你是分镜创作工具。执行用户确认的视觉规格和源素材；未确认的选择保持可调整。",
-    "输出 Markdown。不要写模型自述或流程解释。",
+    "按已激活的分镜 Skill 执行确认的视觉规格；未确认选择保持可调整。",
+    "通过结果工具同时提交完整可读分镜和对应图像提示词。不要写模型自述或流程解释。",
   ].join("\n");
 }
 
 function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, language: "zh" | "en" = "zh"): string {
-  const maxShots = input.maxShots ?? 24;
+  const maxShotsRule = input.maxShots
+    ? (language === "en" ? `Do not exceed ${input.maxShots} shots.` : `镜头总数不得超过 ${input.maxShots}。`)
+    : "";
   if (language === "en") {
     return [
       "## Storyboard Spec",
@@ -507,22 +383,15 @@ function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, langu
       "## Full Source Material",
       input.sourceText?.trim()
         || "The user did not provide full source material; write an extensible storyboard draft strictly from the storyboard spec and user requirements.",
-      ...(input.segment ? [
-        "",
-        "## Current Production Segment",
-        `Write only ${input.segment.label} (${input.segment.index + 1}/${input.segment.count}) in this call. The global shot cap is NOT the shot count for this call. Preserve all global requirements and follow the exact scene/segment shot count when the user confirmed one. Do not summarize or write any other segment.`,
-      ] : []),
       "",
       "## Output Format",
       `# ${input.title} Storyboard`,
       "",
       "## Storyboard",
       "",
-      `Output at most ${maxShots} shots. Each shot includes: shot number, visual, characters/objects, action, shot size/camera, dialogue/captions, suggested duration, notes.`,
+      maxShotsRule,
       "",
-      "## Image Prompts",
-      "",
-      "Write one generation-ready image prompt per shot. Each prompt MUST be its own `Prompt: ...` line; never merge it into the storyboard body, table headers, or explanations. Include only the visual constraints the user has confirmed.",
+      "Return the complete shot document in storyboard. Put one image prompt per shot only in imagePrompts, in shot order; do not append another prompt list to storyboard.",
     ].join("\n");
   }
   return [
@@ -531,37 +400,30 @@ function buildStoryboardCreationUserPrompt(input: StoryboardCreationInput, langu
     "",
     "## 完整源素材",
     input.sourceText?.trim() || "用户没有提供完整源素材；请严格根据分镜规格和用户要求写一个可继续扩展的分镜稿。",
-    ...(input.segment ? [
-      "",
-      "## 当前生产分段",
-      `本次只写${input.segment.label}（${input.segment.index + 1}/${input.segment.count}）。全局镜头上限不是本次镜头数。保留全部全局要求；用户已确认本场/本段镜头数时严格按该数量执行。不要概括或生成任何其他分段。`,
-    ] : []),
     "",
     "## 输出格式",
     `# ${input.title} 分镜`,
     "",
     "## 分镜表",
     "",
-    `输出不超过 ${maxShots} 个镜头。每个镜头包含：镜号、画面、人物/物件、动作、景别/机位、对白/字幕、时长建议、备注。`,
+    maxShotsRule,
     "",
-    "## 图像提示词",
-    "",
-    "为每个镜头写一条可用于生图的提示词。每条必须单独写成 `Prompt: ...`，不要混入分镜正文、表头或解释；只写用户确认过的视觉限制。",
+    "storyboard 字段只提交完整分镜文档。每镜头的一条图像提示词只放入 imagePrompts 数组，保持镜头顺序，不在分镜文档中再附提示词清单。",
   ].join("\n");
 }
 
 function buildInteractiveFilmCreationSystemPrompt(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
     return [
-      "You are an interactive-film creation tool. Execute the confirmed spec and source material; unconfirmed choices remain adjustable.",
-      "Output must be Markdown with the specified sections. No model self-narration, process notes, or \"Here is\" preamble.",
-      "Every storyboard image prompt must be its own standalone `Prompt: ...` line so downstream asset management can pick it up; include only the visual constraints the user has confirmed.",
+      "Execute the confirmed spec with the activated interactive-film Skill; unconfirmed choices remain adjustable.",
+      "Submit the complete package through the result tool. storyTree, flags, script, and storyboard are complete human-readable Markdown artifacts; imagePrompts preserve shot order; storyGraph is the playable graph for the same material.",
+      "Put image prompts only in imagePrompts, one per shot in shot order. The storyboard field contains the shot document without a duplicate prompt list; include only the user's established visual constraints.",
     ].join("\n");
   }
   return [
-    "你是互动影游创作工具。执行用户确认的规格和源素材；未确认的选择保持可调整。",
-    "输出必须是 Markdown，包含指定小节。不要写模型自述、流程说明或“以下是”。",
-    "分镜图提示词必须写成单独的 `Prompt: ...` 行，便于后续资产管理；只写用户确认过的视觉限制。",
+    "按已激活的互动影游 Skill 执行确认规格；未确认选择保持可调整。",
+    "通过结果工具提交完整交付包。storyTree、flags、script、storyboard 是完整且人可读的 Markdown 资产；imagePrompts 保持镜头顺序；storyGraph 是同一内容的可玩图谱。",
+    "图像提示词只放入 imagePrompts 数组，每镜头一条并保持镜头顺序；storyboard 字段只写分镜，不重复附提示词清单。只写用户已明确的视觉限制。",
   ].join("\n");
 }
 
@@ -579,19 +441,22 @@ function buildInteractiveFilmCreationUserPrompt(input: InteractiveFilmCreationIn
       `# ${input.title} Interactive Film Package`,
       "",
       "## Story Tree",
-      "Lay out main-line nodes, branch nodes, key choices, and merge/no-return relationships as Markdown. The multi-ending structure must be visible at a glance.",
+      "Provide the complete story tree using the activated Skill.",
       "",
       "## Variables and Flags",
-      "List each variable/flag: name, meaning, trigger, scope of impact, and related nodes. Variables may be relationships, states, evidence, items, identities, secret/public status, ending gates, and so on.",
+      "Provide the complete variables and flags surface using the activated Skill.",
       "",
       "## Ending Paths",
-      "For every ending: its unlock conditions, the key choice chain, the required variables/flags, plus any failure or hidden-ending conditions.",
+      "Provide every ending path and its conditions.",
       "",
       "## Interactive Script",
-      "Write a playable script per node: scene, characters, action, dialogue, player choices, variable changes, and branch destinations. Never write summaries only.",
+      "Provide the complete playable node scripts.",
       "",
       "## Storyboard and Image Prompts",
-      "List the key shots. Each shot includes visual, characters/objects, action, shot size, and suggested duration. After each shot, add exactly one standalone `Prompt: ...` line.",
+      "Return the shot document in storyboard and the corresponding prompt list only in imagePrompts, in shot order.",
+      "",
+      "## Playable Story Graph",
+      "Submit the complete graph for the same story in storyGraph: exactly one start, at least one meaningful choice with distinct destinations or state consequences, and every path can reach an ending. The opening node may carry the first branching choice directly.",
     ].join("\n");
   }
   return [
@@ -605,23 +470,30 @@ function buildInteractiveFilmCreationUserPrompt(input: InteractiveFilmCreationIn
     `# ${input.title} 互动影游方案`,
     "",
     "## 剧情树",
-    "用 Markdown 列出主线节点、分支节点、关键选择、回流/不可回流关系。必须能看出多结局结构。",
+    "按已激活 Skill 提交完整剧情树。",
     "",
     "## 变量与旗标表",
-    "列出变量/旗标名、含义、触发方式、影响范围、对应节点。变量可以是关系、状态、证据、物品、身份、公开/隐瞒、结局门槛等。",
+    "按已激活 Skill 提交完整变量与旗标面。",
     "",
     "## 多结局路径",
-    "列出每个结局的达成条件、关键选择链、必需变量/旗标，以及失败或隐藏结局条件。",
+    "提交全部结局路径及其条件。",
     "",
     "## 互动剧本",
-    "按节点写可演剧本：场景、人物、动作、对白、玩家选择、变量变化和分支去向。不要只写摘要。",
+    "提交完整可玩的节点剧本。",
     "",
     "## 分镜与图像提示词",
-    "列出关键镜头。每个镜头包含画面、人物/物件、动作、景别、时长建议。每个镜头后必须单独写一行 `Prompt: ...`。",
+    "storyboard 字段提交完整分镜；对应图像提示词只放入 imagePrompts 数组，保持镜头顺序。",
+    "",
+    "## 可玩故事图谱",
+    "在 storyGraph 字段提交同一剧情的完整可玩图谱：恰好一个 start，至少一个具有不同去向或状态后果的真实分支选择，且每条路径可达 ending。开场节点可以直接承载分支选择。",
   ].join("\n");
 }
 
 function formatScriptTarget(value: ScriptTargetFormat | undefined, language: "zh" | "en" = "zh"): string {
+  const custom = value?.trim();
+  if (custom && !["vertical_short_drama", "screenplay", "audio_drama", "interactive_script", "general_script"].includes(custom)) {
+    return custom;
+  }
   if (language === "en") {
     switch (value) {
       case "vertical_short_drama":
@@ -660,84 +532,4 @@ function summarizeSourceForSpec(sourceText: string | undefined, language: "zh" |
   }
   if (!text) return "未提供完整源素材。";
   return `已提供完整源素材，约 ${text.length} 字符；生成时会读取完整内容。`;
-}
-
-function estimateScriptMaxTokens(input: ScriptCreationInput): number {
-  const episodes = input.episodeCount ?? 6;
-  return Math.min(32000, Math.max(12000, episodes * 2200));
-}
-
-function estimateStoryboardMaxTokens(input: StoryboardCreationInput): number {
-  const shots = input.segment?.estimatedShots ?? input.maxShots ?? 24;
-  // Each shot includes both an editable shot record and a standalone image
-  // prompt. The old 700-token estimate cut off complete 13-shot scenes.
-  return Math.min(48000, Math.max(12000, shots * 1800));
-}
-
-function estimateInteractiveFilmMaxTokens(input: InteractiveFilmCreationInput): number {
-  const episodes = input.episodeCount ?? 6;
-  return Math.min(36000, Math.max(16000, episodes * 3000));
-}
-
-function extractPromptLines(markdown: string): string[] {
-  const prompts: string[] = [];
-  let promptColumnIndex = -1;
-  for (const rawLine of markdown.split(/\r?\n/)) {
-    const line = rawLine
-      .trim()
-      .replace(/^`{1,3}\s*/u, "")
-      .replace(/\s*`{1,3}$/u, "")
-      .trim();
-    if (!line) {
-      promptColumnIndex = -1;
-      continue;
-    }
-    const tableCells = parseMarkdownTableRow(line);
-    if (tableCells) {
-      if (isMarkdownTableSeparator(tableCells)) continue;
-      const headerIndex = tableCells.findIndex(isPromptColumnHeader);
-      if (headerIndex >= 0) {
-        promptColumnIndex = headerIndex;
-        continue;
-      }
-      if (promptColumnIndex >= 0) {
-        const prompt = cleanPromptText(tableCells[promptColumnIndex] ?? "");
-        if (prompt) prompts.push(prompt);
-      }
-      continue;
-    }
-    promptColumnIndex = -1;
-    const promptMatch = /(?:^|[|>\-\d.)、\s])(?:\*\*)?\s*(?:Prompt(?:\s+for\s+[^:*：]+)?|提示词(?:\s*[^:*：]+)?|图像提示词|分镜图提示词)\s*(?:\*\*)?\s*[：:]\s*(.+?)\s*$/iu.exec(line);
-    if (!promptMatch) continue;
-    const prompt = cleanPromptText(promptMatch[1]!);
-    if (prompt) prompts.push(prompt);
-  }
-  return prompts;
-}
-
-function parseMarkdownTableRow(line: string): string[] | undefined {
-  if (!line.startsWith("|") || !line.endsWith("|")) return undefined;
-  const cells = line.slice(1, -1).split("|").map((cell) => cell.trim());
-  return cells.length >= 2 ? cells : undefined;
-}
-
-function isMarkdownTableSeparator(cells: readonly string[]): boolean {
-  return cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
-}
-
-function isPromptColumnHeader(cell: string): boolean {
-  return /^(?:prompt|image\s*prompt|shot\s*prompt|提示词|图像提示词|分镜图提示词)$/iu.test(
-    cell.replace(/[`*_]+/gu, "").trim(),
-  );
-}
-
-function cleanPromptText(text: string): string {
-  return text
-    .replace(/^`{1,3}\s*/u, "")
-    .replace(/\s*`{1,3}$/u, "")
-    .replace(/\s*\|\s*$/u, "")
-    .replace(/\*\*$/u, "")
-    .replace(/^(?:Prompt(?:\s+for\s+[^:*：]+)?|提示词(?:\s*[^:*：]+)?|图像提示词|分镜图提示词)\s*[：:]\s*/iu, "")
-    .replace(/\s+/g, " ")
-    .trim();
 }

@@ -5,10 +5,19 @@ import type {
   TranslationGlossaryTerm,
   TranslationProjectManifest,
 } from "./types.js";
+import {
+  TranslationChapterFileSchema,
+  TranslationGlossarySchema,
+  TranslationProjectManifestSchema,
+  validateTranslationManifestOwnership,
+  normalizeTranslationArtifactPath,
+} from "./types.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { workDirectory } from "../harness/work-store.js";
+import { safeChildPath } from "../utils/path-safety.js";
 
 export function translationProjectDir(projectRoot: string, projectId: string): string {
-  return join(projectRoot, "translations", projectId);
+  return join(workDirectory(projectRoot, projectId), "source");
 }
 
 export function translationManifestPath(projectRoot: string, projectId: string): string {
@@ -19,21 +28,23 @@ export async function loadTranslationManifest(
   projectRoot: string,
   projectId: string,
 ): Promise<TranslationProjectManifest> {
-  return JSON.parse(await readFile(translationManifestPath(projectRoot, projectId), "utf-8")) as TranslationProjectManifest;
+  const path = translationManifestPath(projectRoot, projectId);
+  return validateTranslationManifestOwnership(TranslationProjectManifestSchema.parse(JSON.parse(await readFile(path, "utf-8"))),projectId);
 }
 
 export async function saveTranslationManifest(
   projectRoot: string,
   manifest: TranslationProjectManifest,
 ): Promise<void> {
-  await writeFile(translationManifestPath(projectRoot, manifest.id), JSON.stringify(manifest, null, 2), "utf-8");
+  const parsed = validateTranslationManifestOwnership(TranslationProjectManifestSchema.parse(manifest),manifest.id);
+  await writeFile(translationManifestPath(projectRoot, parsed.id), JSON.stringify(parsed, null, 2), "utf-8");
 }
 
 export async function loadTranslationChapter(
   projectRoot: string,
   chapterPath: string,
 ): Promise<TranslationChapterFile> {
-  return JSON.parse(await readFile(join(projectRoot, chapterPath), "utf-8")) as TranslationChapterFile;
+  return TranslationChapterFileSchema.parse(JSON.parse(await readFile(safeChildPath(projectRoot, chapterPath), "utf-8")));
 }
 
 export async function saveTranslationChapter(
@@ -41,7 +52,8 @@ export async function saveTranslationChapter(
   chapterPath: string,
   chapter: TranslationChapterFile,
 ): Promise<void> {
-  await writeFile(join(projectRoot, chapterPath), JSON.stringify(chapter, null, 2), "utf-8");
+  const parsed = TranslationChapterFileSchema.parse(chapter);
+  await writeFile(safeChildPath(projectRoot, chapterPath), JSON.stringify(parsed, null, 2), "utf-8");
 }
 
 export async function loadTranslationGlossary(
@@ -49,12 +61,11 @@ export async function loadTranslationGlossary(
   projectId: string,
 ): Promise<ReadonlyArray<TranslationGlossaryTerm>> {
   try {
-    const raw = JSON.parse(await readFile(join(translationProjectDir(projectRoot, projectId), "glossary.json"), "utf-8")) as {
-      terms?: unknown;
-    };
-    return Array.isArray(raw.terms) ? raw.terms.filter(isGlossaryTerm) : [];
-  } catch {
-    return [];
+    const raw = JSON.parse(await readFile(join(translationProjectDir(projectRoot, projectId), "glossary.json"), "utf-8"));
+    return TranslationGlossarySchema.parse(raw).terms;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
 }
 
@@ -81,11 +92,11 @@ export async function saveTranslationProgress(
     rootDir: projectRoot,
     writes: [
       {
-        relativePath: chapterPath,
+        relativePath: normalizeTranslationArtifactPath(projectId,chapterPath),
         content: `${JSON.stringify(chapter, null, 2)}\n`,
       },
       {
-        relativePath: join("translations", projectId, "glossary.json"),
+        relativePath: join("works", projectId, "source", "glossary.json"),
         content: `${JSON.stringify({ terms: mergeGlossaryTerms(terms) }, null, 2)}\n`,
       },
     ],
@@ -104,10 +115,4 @@ export function mergeGlossaryTerms(terms: ReadonlyArray<TranslationGlossaryTerm>
     });
   }
   return [...map.values()];
-}
-
-function isGlossaryTerm(value: unknown): value is TranslationGlossaryTerm {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
-  return typeof record.source === "string" && typeof record.target === "string";
 }

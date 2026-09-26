@@ -1,9 +1,19 @@
+import { ownsWorkMutation } from "../utils/work-mutation-scope.js";
 import { readFile, writeFile, mkdir, readdir, rm, stat, unlink, open } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import type { BookConfig } from "../models/book.js";
-import type { ChapterMeta } from "../models/chapter.js";
-import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
+import { BookConfigSchema, type BookConfig } from "../models/book.js";
+import { ChapterMetaSchema, type ChapterMeta } from "../models/chapter.js";
+import { resolveDurableStoryProgress } from "./state-bootstrap.js";
+import {
+  createWorkManifest,
+  listWorkManifests,
+  loadWorkManifest,
+  saveWorkManifest,
+  workDirectory,
+} from "../harness/work-store.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -92,18 +102,6 @@ export class StateManager {
       StateManager.defaultCurrentFocus(language),
     );
 
-    // Ensure style_guide includes writing methodology even without reference text
-    const styleGuidePath = join(storyDir, "style_guide.md");
-    try {
-      const existing = await readFile(styleGuidePath, "utf-8");
-      if (!existing.includes("写作方法论") && !existing.includes("Writing Methodology")) {
-        const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-        await writeFile(styleGuidePath, `${existing}\n\n${buildWritingMethodologySection(language)}`, "utf-8");
-      }
-    } catch {
-      const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-      await writeFile(styleGuidePath, buildWritingMethodologySection(language), "utf-8");
-    }
   }
 
   async loadControlDocuments(bookId: string): Promise<{
@@ -124,16 +122,12 @@ export class StateManager {
   }
 
   private async resolveControlDocumentLanguage(bookId: string): Promise<"zh" | "en"> {
-    try {
-      const raw = await readFile(join(this.bookDir(bookId), "book.json"), "utf-8");
-      const parsed = JSON.parse(raw) as { language?: unknown };
-      return parsed.language === "zh" ? "zh" : "en";
-    } catch {
-      return "en";
-    }
+    const raw = await readFile(join(this.bookDir(bookId), "book.json"), "utf-8");
+    return BookConfigSchema.parse(JSON.parse(raw)).language;
   }
 
   async acquireBookLock(bookId: string): Promise<() => Promise<void>> {
+    if (ownsWorkMutation(this.projectRoot, bookId)) return async () => {};
     await mkdir(this.bookDir(bookId), { recursive: true });
     const lockPath = join(this.bookDir(bookId), ".write.lock");
     const lockKey = this.normalizeLockKey(lockPath);
@@ -257,14 +251,7 @@ export class StateManager {
         ...(heartbeatAt !== undefined ? { heartbeatAt } : {}),
       };
     } catch {
-      const pid = this.extractLockPid(lockData);
-      const timestampMatch = lockData.match(/ts:(\d+)/);
-      const startedAt = timestampMatch ? Number.parseInt(timestampMatch[1] ?? "", 10) : undefined;
-      if (pid === undefined && startedAt === undefined) return undefined;
-      return {
-        ...(pid !== undefined ? { pid } : {}),
-        ...(Number.isFinite(startedAt) ? { startedAt, heartbeatAt: startedAt } : {}),
-      };
+      return undefined;
     }
   }
 
@@ -295,7 +282,10 @@ export class StateManager {
   }
 
   private async removeStaleLock(lockPath: string, expectedRaw: string): Promise<void> {
-    const currentRaw = await readFile(lockPath, "utf-8").catch(() => undefined);
+    const currentRaw = await readFile(lockPath, "utf-8").catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    });
     if (currentRaw === undefined) return;
     if (currentRaw !== expectedRaw) {
       return;
@@ -347,13 +337,6 @@ export class StateManager {
     }
   }
 
-  private extractLockPid(lockData: string): number | undefined {
-    const match = lockData.match(/pid:(\d+)/);
-    if (!match) return undefined;
-    const pid = Number.parseInt(match[1] ?? "", 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
-  }
-
   private isProcessAlive(pid: number): boolean {
     try {
       process.kill(pid, 0);
@@ -368,11 +351,11 @@ export class StateManager {
   }
 
   get booksDir(): string {
-    return join(this.projectRoot, "books");
+    return join(this.projectRoot, "works");
   }
 
   bookDir(bookId: string): string {
-    return join(this.booksDir, bookId);
+    return join(workDirectory(this.projectRoot, bookId), "source");
   }
 
   stateDir(bookId: string): string {
@@ -396,58 +379,51 @@ export class StateManager {
     if (!raw.trim()) {
       throw new Error(`book.json is empty for book "${bookId}"`);
     }
-    return JSON.parse(raw) as BookConfig;
+    return BookConfigSchema.parse(JSON.parse(raw));
   }
 
   async saveBookConfig(bookId: string, config: BookConfig): Promise<void> {
     await this.saveBookConfigAt(this.bookDir(bookId), config);
+    try {
+      await loadWorkManifest(this.projectRoot, bookId);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await saveWorkManifest(this.projectRoot, createWorkManifest({
+        id: bookId,
+        title: config.title,
+        profileId: "longform-novel",
+        language: config.language,
+        now: config.createdAt,
+        lineage: config.parentBookId
+          ? [{ relation: "derived-from", sourceWorkId: config.parentBookId }]
+          : [],
+        metadata: {
+          genre: config.genre,
+          platform: config.platform,
+          ...(config.fanficMode ? { fanficMode: config.fanficMode } : {}),
+        },
+      }));
+    }
+    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: bookId, updatedAt: config.updatedAt, accept: true, acceptPaths: ["source/book.json"] });
   }
 
   async saveBookConfigAt(bookDir: string, config: BookConfig): Promise<void> {
+    const parsed = BookConfigSchema.parse(config);
     await mkdir(bookDir, { recursive: true });
     await writeFile(
       join(bookDir, "book.json"),
-      JSON.stringify(config, null, 2),
+      JSON.stringify(parsed, null, 2),
       "utf-8",
     );
   }
 
-  async ensureRuntimeState(bookId: string, fallbackChapter = 0): Promise<void> {
-    await bootstrapStructuredStateFromMarkdown({
-      bookDir: this.bookDir(bookId),
-      fallbackChapter,
-    });
-  }
-
   async listBooks(): Promise<ReadonlyArray<string>> {
-    try {
-      const entries = await readdir(this.booksDir);
-      const bookIds: string[] = [];
-      for (const entry of entries) {
-        const bookJsonPath = join(this.booksDir, entry, "book.json");
-        try {
-          await stat(bookJsonPath);
-          bookIds.push(entry);
-        } catch {
-          // not a book directory
-        }
-      }
-      return bookIds;
-    } catch {
-      return [];
-    }
+    return (await listWorkManifests(this.projectRoot, "longform-novel")).map((work) => work.id);
   }
 
   async getNextChapterNumber(bookId: string): Promise<number> {
     const durableChapter = await resolveDurableStoryProgress({
       bookDir: this.bookDir(bookId),
-    });
-    // Ensure structured state is bootstrapped (side-effect: creates missing
-    // JSON files), but do NOT trust its chapter number for progress — only
-    // the contiguous durable artifact chain is authoritative.
-    await bootstrapStructuredStateFromMarkdown({
-      bookDir: this.bookDir(bookId),
-      fallbackChapter: durableChapter,
     });
     return durableChapter + 1;
   }
@@ -463,8 +439,9 @@ export class StateManager {
         if (!match) continue;
         chapterNumbers.add(parseInt(match[1]!, 10));
       }
-    } catch {
-      return 0;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
     }
 
     return chapterNumbers.size;
@@ -475,58 +452,15 @@ export class StateManager {
     try {
       const raw = await readFile(indexPath, "utf-8");
       const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed as ReadonlyArray<ChapterMeta>;
-      if (Array.isArray(parsed)) {
-        const rebuilt = await this.rebuildChapterIndexFromFiles(bookId);
-        return rebuilt.length > 0 ? rebuilt : parsed as ReadonlyArray<ChapterMeta>;
+      if (!Array.isArray(parsed)) throw new Error(`Chapter index is not an array: ${indexPath}`);
+      return parsed.map((entry) => ChapterMetaSchema.parse(entry));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (await this.getPersistedChapterCount(bookId) > 0) {
+        throw new Error(`Chapter index is missing while chapter files exist: ${indexPath}`);
       }
-    } catch {
-      const rebuilt = await this.rebuildChapterIndexFromFiles(bookId);
-      if (rebuilt.length > 0) return rebuilt;
-    }
-    return [];
-  }
-
-  private async rebuildChapterIndexFromFiles(bookId: string): Promise<ReadonlyArray<ChapterMeta>> {
-    return this.rebuildChapterIndexFromFilesAt(this.bookDir(bookId));
-  }
-
-  private async rebuildChapterIndexFromFilesAt(bookDir: string): Promise<ReadonlyArray<ChapterMeta>> {
-    const chaptersDir = join(bookDir, "chapters");
-    let files: string[];
-    try {
-      files = await readdir(chaptersDir);
-    } catch {
       return [];
     }
-
-    const rows = await Promise.all(files.flatMap(async (file) => {
-      const match = file.match(/^(\d+)[_-]?(.*?)\.md$/);
-      if (!match) return [];
-      const number = parseInt(match[1]!, 10);
-      if (!Number.isFinite(number) || number <= 0) return [];
-      const filePath = join(chaptersDir, file);
-      const [metadata, content] = await Promise.all([
-        stat(filePath).catch(() => null),
-        readFile(filePath, "utf-8").catch(() => ""),
-      ]);
-      const timestamp = (metadata?.mtime ?? new Date()).toISOString();
-      const rawTitle = match[2]?.replace(/^_+/, "").replace(/_/g, " ").trim();
-      return [{
-        number,
-        title: rawTitle || `第${number}章`,
-        status: "ready-for-review" as const,
-        wordCount: content.replace(/\s+/g, "").length,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        auditIssues: [],
-        lengthWarnings: [],
-      }];
-    }));
-
-    return rows
-      .flat()
-      .sort((a, b) => a.number - b.number);
   }
 
   async saveChapterIndex(
@@ -544,12 +478,16 @@ export class StateManager {
   ): Promise<void> {
     const chaptersDir = join(bookDir, "chapters");
     await mkdir(chaptersDir, { recursive: true });
-    const safeIndex = index.length === 0 && !options.allowEmptyWithChapterFiles
-      ? await this.rebuildChapterIndexFromFilesAt(bookDir).then((rebuilt) => rebuilt.length > 0 ? rebuilt : index)
-      : index;
+    if (index.length === 0 && !options.allowEmptyWithChapterFiles) {
+      const files = await readdir(chaptersDir);
+      if (files.some((file) => /^(\d+)_.*\.md$/u.test(file))) {
+        throw new Error("Refusing to save an empty chapter index while chapter files still exist.");
+      }
+    }
+    const validated = index.map((chapter) => ChapterMetaSchema.parse(chapter));
     await writeFile(
       join(chaptersDir, "index.json"),
-      JSON.stringify(safeIndex, null, 2),
+      JSON.stringify(validated, null, 2),
       "utf-8",
     );
   }
@@ -560,172 +498,126 @@ export class StateManager {
 
   async snapshotStateAt(bookDir: string, chapterNumber: number): Promise<void> {
     const storyDir = join(bookDir, "story");
-    const snapshotDir = join(storyDir, "snapshots", String(chapterNumber));
-    await mkdir(snapshotDir, { recursive: true });
-
-    const files = [
-      "current_state.md", "particle_ledger.md", "pending_hooks.md",
-      "chapter_summaries.md", "subplot_board.md", "emotional_arcs.md", "character_matrix.md",
-    ];
-    await Promise.all(
-      files.map(async (f) => {
-        try {
-          const content = await readFile(join(storyDir, f), "utf-8");
-          await writeFile(join(snapshotDir, f), content, "utf-8");
-        } catch {
-          // file doesn't exist yet
-        }
-      }),
-    );
-
+    const snapshotRoot = join("story", "snapshots", String(chapterNumber));
+    const writes: Array<{ relativePath: string; content: string }> = [];
+    for (const file of ["current_state.md", "pending_hooks.md", "chapter_summaries.md"]) {
+      try {
+        writes.push({ relativePath: join(snapshotRoot, file), content: await readFile(join(storyDir, file), "utf-8") });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
     const stateDir = join(bookDir, "story", "state");
-    const snapshotStateDir = join(snapshotDir, "state");
     try {
       const stateFiles = await readdir(stateDir);
-      if (stateFiles.length > 0) {
-        await mkdir(snapshotStateDir, { recursive: true });
-        await Promise.all(
-          stateFiles.map(async (fileName) => {
-            const content = await readFile(join(stateDir, fileName), "utf-8");
-            await writeFile(join(snapshotStateDir, fileName), content, "utf-8");
-          }),
-        );
+      for (const fileName of stateFiles) {
+        writes.push({
+          relativePath: join(snapshotRoot, "state", fileName),
+          content: await readFile(join(stateDir, fileName), "utf-8"),
+        });
       }
-    } catch {
-      // state directory missing — skip
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    if (!writes.some((write) => write.relativePath.startsWith(join(snapshotRoot, "state")))) {
+      throw new Error(`Cannot snapshot chapter ${chapterNumber}: structured runtime state is missing.`);
+    }
+    await commitAtomicFileSet({ rootDir: bookDir, writes });
   }
 
   async isCompleteBookDirectory(bookDir: string): Promise<boolean> {
-    // Phase 5 cleanup: prefer outline/* paths, fall back to legacy flat files
-    // so older books on disk still resolve as complete.
-    const requiredSingle = [
+    const required = [
       join(bookDir, "book.json"),
+      join(bookDir, "story", "outline", "story_frame.md"),
+      join(bookDir, "story", "outline", "volume_map.md"),
       join(bookDir, "story", "book_rules.md"),
       join(bookDir, "story", "current_state.md"),
       join(bookDir, "story", "pending_hooks.md"),
       join(bookDir, "chapters", "index.json"),
     ];
-
-    const eitherOr: Array<ReadonlyArray<string>> = [
-      // story_frame (new) OR story_bible (legacy)
-      [
-        join(bookDir, "story", "outline", "story_frame.md"),
-        join(bookDir, "story", "story_bible.md"),
-      ],
-      // volume_map (new) OR volume_outline (legacy)
-      [
-        join(bookDir, "story", "outline", "volume_map.md"),
-        join(bookDir, "story", "volume_outline.md"),
-      ],
-    ];
-
-    for (const requiredPath of requiredSingle) {
+    for (const requiredPath of required) {
       try {
         await stat(requiredPath);
-      } catch {
-        return false;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
       }
     }
-
-    for (const alternatives of eitherOr) {
-      let found = false;
-      for (const candidate of alternatives) {
-        try {
-          await stat(candidate);
-          found = true;
-          break;
-        } catch {
-          // try next alternative
-        }
-      }
-      if (!found) return false;
-    }
-
     return true;
   }
 
   async restoreState(bookId: string, chapterNumber: number): Promise<boolean> {
-    const storyDir = join(this.bookDir(bookId), "story");
-    const snapshotDir = join(storyDir, "snapshots", String(chapterNumber));
+    const bookDir = this.bookDir(bookId);
+    const prepared = await this.prepareStateRestore(bookDir, chapterNumber);
+    if (!prepared) return false;
+    await commitAtomicFileSet({ rootDir: bookDir, ...prepared });
+    return true;
+  }
 
-    const files = [
-      "current_state.md", "particle_ledger.md", "pending_hooks.md",
-      "chapter_summaries.md", "subplot_board.md", "emotional_arcs.md", "character_matrix.md",
-    ];
+  private async prepareStateRestore(
+    bookDir: string,
+    chapterNumber: number,
+  ): Promise<{
+    readonly writes: ReadonlyArray<{ readonly relativePath: string; readonly content: string }>;
+    readonly deletes: ReadonlyArray<string>;
+  } | null> {
+    const snapshotDir = join(bookDir, "story", "snapshots", String(chapterNumber));
+    const requiredFiles = ["current_state.md", "pending_hooks.md"];
+    const writes: Array<{ relativePath: string; content: string }> = [];
     try {
-      // current_state.md and pending_hooks.md are required;
-      // particle_ledger.md is optional (numericalSystem=false genres don't have it)
-      // the rest are optional (may not exist in older snapshots)
-      const requiredFiles = ["current_state.md", "pending_hooks.md"];
-      const optionalFiles = files.filter((f) => !requiredFiles.includes(f));
-
-      await Promise.all(
-        requiredFiles.map(async (f) => {
-          const content = await readFile(join(snapshotDir, f), "utf-8");
-          await writeFile(join(storyDir, f), content, "utf-8");
-        }),
-      );
-
-      await Promise.all(
-        optionalFiles.map(async (f) => {
-          const targetPath = join(storyDir, f);
-          try {
-            const content = await readFile(join(snapshotDir, f), "utf-8");
-            await writeFile(targetPath, content, "utf-8");
-          } catch {
-            await rm(targetPath, { force: true });
-          }
-        }),
-      );
-
-      const stateDir = this.stateDir(bookId);
-      let restoredStructuredState = false;
-      try {
-        const snapshotStateDir = join(snapshotDir, "state");
-        const stateFiles = await readdir(snapshotStateDir);
-        if (stateFiles.length > 0) {
-          restoredStructuredState = true;
-          await mkdir(stateDir, { recursive: true });
-          await Promise.all(
-            stateFiles.map(async (fileName) => {
-              const content = await readFile(join(snapshotStateDir, fileName), "utf-8");
-              await writeFile(join(stateDir, fileName), content, "utf-8");
-            }),
-          );
-        }
-      } catch {
-        // snapshot structured state missing — skip
+      for (const file of requiredFiles) {
+        writes.push({ relativePath: join("story", file), content: await readFile(join(snapshotDir, file), "utf-8") });
       }
-      if (!restoredStructuredState) {
-        await rm(stateDir, { recursive: true, force: true });
+      const stateFiles = await readdir(join(snapshotDir, "state"));
+      if (stateFiles.length === 0) return null;
+      for (const fileName of stateFiles) {
+        writes.push({
+          relativePath: join("story", "state", fileName),
+          content: await readFile(join(snapshotDir, "state", fileName), "utf-8"),
+        });
       }
-
-      return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
+    const deletes: string[] = [];
+    try {
+      writes.push({
+        relativePath: join("story", "chapter_summaries.md"),
+        content: await readFile(join(snapshotDir, "chapter_summaries.md"), "utf-8"),
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      deletes.push(join("story", "chapter_summaries.md"));
+    }
+    const snapshotStateNames = new Set(writes
+      .map((write) => write.relativePath)
+      .filter((path) => path.startsWith(join("story", "state")))
+      .map((path) => path.slice(join("story", "state").length + 1)));
+    try {
+      for (const fileName of await readdir(join(bookDir, "story", "state"))) {
+        if (!snapshotStateNames.has(fileName)) deletes.push(join("story", "state", fileName));
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return { writes, deletes };
   }
 
   /**
    * Roll back state to the snapshot at `targetChapter`, removing all chapters
    * after it and their associated files (chapter markdown, snapshots, runtime).
-   * Used by review reject to undo a bad chapter and everything that followed.
-   *
    * Returns the list of chapter numbers that were discarded.
    */
   async rollbackToChapter(
     bookId: string,
     targetChapter: number,
   ): Promise<ReadonlyArray<number>> {
-    const restored = await this.restoreState(bookId, targetChapter);
-    if (!restored) {
-      throw new Error(`Cannot restore snapshot for chapter ${targetChapter} in "${bookId}"`);
-    }
-
     const bookDir = this.bookDir(bookId);
     const chaptersDir = join(bookDir, "chapters");
     const index = await this.loadChapterIndex(bookId);
+    const restore = await this.prepareStateRestore(bookDir, targetChapter);
+    if (!restore) throw new Error(`Cannot restore snapshot for chapter ${targetChapter} in "${bookId}"`);
 
     const kept: ChapterMeta[] = [];
     const discarded: number[] = [];
@@ -738,83 +630,55 @@ export class StateManager {
       }
     }
 
-    // Delete chapter markdown files for discarded chapters
-    try {
-      const files = await readdir(chaptersDir);
-      for (const file of files) {
-        const match = file.match(/^(\d+)_.*\.md$/);
-        if (!match) continue;
-        const num = parseInt(match[1]!, 10);
-        if (num > targetChapter) {
-          await unlink(join(chaptersDir, file)).catch(() => {});
+    const deletes = new Set(restore.deletes);
+    const collectNumberedDeletes = async (
+      relativeDir: string,
+      numberOf: (name: string) => number | undefined,
+    ) => {
+      try {
+        for (const name of await readdir(join(bookDir, relativeDir))) {
+          const number = numberOf(name);
+          if (number !== undefined && number > targetChapter) deletes.add(join(relativeDir, name));
         }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-    } catch {
-      // chapters directory missing
+    };
+    await collectNumberedDeletes("chapters", (name) => {
+      const match = /^(\d+)_.*\.md$/u.exec(name);
+      return match ? Number.parseInt(match[1]!, 10) : undefined;
+    });
+    await collectNumberedDeletes(join("story", "snapshots"), (name) => {
+      const value = Number.parseInt(name, 10);
+      return Number.isFinite(value) ? value : undefined;
+    });
+    await collectNumberedDeletes(join("story", "runtime"), (name) => {
+      const match = /^chapter-(\d+)\./u.exec(name);
+      return match ? Number.parseInt(match[1]!, 10) : undefined;
+    });
+    await collectNumberedDeletes(join("story", "drafts"), (name) => {
+      const match = /^(\d+)_.*\.md$/u.exec(name);
+      return match ? Number.parseInt(match[1]!, 10) : undefined;
+    });
+    for (const file of ["memory.db", "memory.db-shm", "memory.db-wal"]) {
+      deletes.add(join("story", file));
     }
-
-    // Delete snapshots for discarded chapters
-    const snapshotsDir = join(bookDir, "story", "snapshots");
-    try {
-      const snapshots = await readdir(snapshotsDir);
-      for (const snap of snapshots) {
-        const num = parseInt(snap, 10);
-        if (Number.isFinite(num) && num > targetChapter) {
-          await rm(join(snapshotsDir, snap), { recursive: true, force: true });
-        }
-      }
-    } catch {
-      // snapshots directory missing
-    }
-
-    // Delete runtime artifacts for discarded chapters
-    const runtimeDir = join(bookDir, "story", "runtime");
-    try {
-      const runtimeFiles = await readdir(runtimeDir);
-      for (const file of runtimeFiles) {
-        const match = file.match(/^chapter-(\d+)\./);
-        if (!match) continue;
-        const num = parseInt(match[1]!, 10);
-        if (num > targetChapter) {
-          await unlink(join(runtimeDir, file)).catch(() => {});
-        }
-      }
-    } catch {
-      // runtime directory missing
-    }
-
-    // Also check story/drafts/ for discarded chapter files
-    const draftsDir = join(bookDir, "story", "drafts");
-    try {
-      const draftFiles = await readdir(draftsDir);
-      for (const file of draftFiles) {
-        const match = file.match(/^(\d+)_.*\.md$/);
-        if (!match) continue;
-        const num = parseInt(match[1]!, 10);
-        if (num > targetChapter) {
-          await unlink(join(draftsDir, file)).catch(() => {});
-        }
-      }
-    } catch {
-      // drafts directory missing
-    }
-
-    // Drop any persisted sqlite acceleration index so discarded chapters
-    // cannot leak back into retrieval after the markdown/state rollback.
-    await Promise.all([
-      rm(join(bookDir, "story", "memory.db"), { force: true }),
-      rm(join(bookDir, "story", "memory.db-shm"), { force: true }),
-      rm(join(bookDir, "story", "memory.db-wal"), { force: true }),
-    ]);
-
-    await this.saveChapterIndex(bookId, kept);
+    await commitAtomicFileSet({
+      rootDir: bookDir,
+      writes: [
+        ...restore.writes,
+        { relativePath: join("chapters", "index.json"), content: `${JSON.stringify(kept, null, 2)}\n` },
+      ],
+      deletes: [...deletes],
+    });
     return discarded;
   }
 
   private async writeIfMissing(path: string, content: string): Promise<void> {
     try {
       await stat(path);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       await writeFile(path, content, "utf-8");
     }
   }

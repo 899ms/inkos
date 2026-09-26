@@ -29,7 +29,7 @@ describe("generate_node_image tool", () => {
     const tool = createGenerateNodeImageTool(root, "p", stub);
     await tool.execute("call-1", { nodeId: "s" } as never);
     const g = await loadStoryGraph(root, "p");
-    expect(g?.nodes.find(n => n.id === "s")?.imageSlot?.assetRef).toBe("interactive-films/p/assets/nodes/s.png");
+    expect(g?.nodes.find(n => n.id === "s")?.imageSlot?.assetRef).toBe("works/p/source/assets/nodes/s.png");
     expect(generatedSize).toBe("1536x1024");
   });
 

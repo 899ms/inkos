@@ -30,12 +30,6 @@ export interface BookSummary {
   readonly chapterCount: number;
   readonly lastChapterNumber: number;
   readonly totalWords: number;
-  readonly approvedChapters: number;
-  readonly pendingReview: number;
-  readonly pendingReviewChapters: number;
-  readonly failedReview: number;
-  readonly failedChapters: number;
-  readonly recentRunStatus?: string | null;
   readonly updatedAt: string;
 }
 
@@ -50,16 +44,18 @@ export interface BookDetail extends BookSummary {
 export interface ChapterSummary {
   readonly number: number;
   readonly title: string;
-  readonly status: string;
   readonly wordCount: number;
-  readonly auditIssueCount: number;
+  readonly observationCount: number;
   readonly updatedAt: string;
   readonly fileName: string | null;
 }
 
 export interface ChapterDetail extends ChapterSummary {
-  readonly auditIssues: ReadonlyArray<string>;
-  readonly reviewNote?: string;
+  readonly observations: ReadonlyArray<{
+    readonly code: string;
+    readonly summary: string;
+    readonly evidence: ReadonlyArray<string>;
+  }>;
   readonly content: string;
 }
 
@@ -80,57 +76,6 @@ export interface TruthFileSummary {
 
 export interface TruthFileDetail extends TruthFileSummary {
   readonly content: string | null;
-}
-
-// --- Review ---
-
-export interface ReviewActionPayload {
-  readonly chapterNumber: number;
-  readonly reason?: string;
-}
-
-// --- Runs ---
-
-export type RunAction = "draft" | "audit" | "revise" | "write-next";
-
-export type RunStatus = "queued" | "running" | "succeeded" | "failed";
-
-export interface RunLogEntry {
-  readonly timestamp: string;
-  readonly level: "info" | "warn" | "error";
-  readonly message: string;
-}
-
-export interface RunActionPayload {
-  readonly chapterNumber?: number;
-}
-
-export interface StudioRun {
-  readonly id: string;
-  readonly bookId: string;
-  readonly chapter: number | null;
-  readonly chapterNumber: number | null;
-  readonly action: RunAction;
-  readonly status: RunStatus;
-  readonly stage: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly startedAt: string | null;
-  readonly finishedAt: string | null;
-  readonly logs: ReadonlyArray<RunLogEntry>;
-  readonly result?: unknown;
-  readonly error?: string;
-}
-
-export interface RunStreamEvent {
-  readonly type: "snapshot" | "status" | "stage" | "log";
-  readonly runId: string;
-  readonly run?: StudioRun;
-  readonly status?: RunStatus;
-  readonly stage?: string;
-  readonly log?: RunLogEntry;
-  readonly result?: unknown;
-  readonly error?: string;
 }
 
 // --- API Error Response ---

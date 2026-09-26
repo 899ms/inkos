@@ -1,14 +1,11 @@
 import { BaseAgent } from "./base.js";
-
-export interface ValidationWarning {
-  readonly category: string;
-  readonly description: string;
-}
+import { StateValidationToolSchema } from "./state-validation-tool.js";
+import type { Observation } from "../models/observation.js";
 
 export interface ValidationResult {
-  readonly warnings: ReadonlyArray<ValidationWarning>;
-  readonly passed: boolean;
-  readonly repairRequired?: boolean;
+  readonly observations: ReadonlyArray<Observation>;
+  readonly consistent: boolean;
+  readonly reconciliationRequired: boolean;
 }
 
 export interface StateValidationAuthorityContext {
@@ -21,9 +18,7 @@ export interface StateValidationAuthorityContext {
  * Validates Settler output by comparing old and new truth files via LLM.
  * Catches contradictions, missing state changes, and temporal inconsistencies.
  *
- * Uses a minimal verdict protocol instead of requiring structured JSON:
- *   Line 1: PASS, REPAIR, or FAIL
- *   Remaining lines: free-form warnings (one per line, optional category prefix)
+ * The model submits a typed reconciliation decision; prose has no authority.
  */
 export class StateValidatorAgent extends BaseAgent {
   get name(): string {
@@ -40,57 +35,16 @@ export class StateValidatorAgent extends BaseAgent {
     language: "zh" | "en" = "zh",
     authorityContext?: StateValidationAuthorityContext,
   ): Promise<ValidationResult> {
-    const stateDiff = this.computeDiff(oldState, newState, "State Card");
-    const hooksDiff = this.computeDiff(oldHooks, newHooks, "Hooks Pool");
-
-    // Skip validation if nothing changed
-    if (!stateDiff && !hooksDiff) {
-      return { warnings: [], passed: true, repairRequired: false };
+    if (oldState === newState && oldHooks === newHooks) {
+      return { observations: [], consistent: true, reconciliationRequired: false };
     }
 
     const langInstruction = language === "en"
       ? "Respond in English."
       : "用中文回答。";
 
-    const systemPrompt = `You are a continuity validator for a novel writing system. ${langInstruction}
-
-Given the chapter text and the CHANGES made to truth files (state card + hooks pool), check for contradictions:
-
-1. State change without narrative support — truth file says something changed but the chapter text doesn't describe it
-2. Missing state change — chapter text describes something happening but the truth file didn't capture it
-3. Temporal impossibility — character moves locations without transition, injury heals without time passing
-4. Hook anomaly — a hook disappeared without being marked resolved, or a new hook has no basis in the chapter
-5. Retroactive edit — truth file change implies something happened in a PREVIOUS chapter, not the current one
-6. Cross-truth key-setting conflict — numbered rules, named laws, ranks, identities, locations, or relationship labels in the new truth files contradict the chapter text or the authority context
-
-Output format (simple, NOT JSON):
-- First line: exactly PASS, REPAIR, or FAIL (nothing else on this line)
-- Following lines: one warning per line, optionally prefixed with [category]
-- If no issues at all, just output: PASS
-
-Verdict semantics:
-- PASS: the truth-file projection is complete enough and consistent with the chapter.
-- REPAIR: the chapter itself is valid, but a state change or hook transition is missing, stale, or incomplete. The host will regenerate only the truth-file settlement.
-- FAIL: the proposed truth-file changes directly contradict the chapter or authority context.
-
-Example:
-PASS
-[unsupported_change] State card says character moved to the forest, but text only shows intent
-[minor] Hook H03 advanced but text mention is brief
-
-If the chapter establishes a state change that the truth files missed:
-REPAIR
-[missing_state_update] The chapter moves Lin to the harbor, but the state card still says station
-
-Or if there are hard contradictions:
-FAIL
-[contradiction] State says character is dead but chapter text shows them speaking
-[unsupported_change] New location not mentioned anywhere in chapter text
-
-IMPORTANT: Output FAIL ONLY for hard contradictions — facts that directly conflict with the chapter text. Output REPAIR for missing state updates and hook-management omissions that should be regenerated. Do NOT fail for:
-- Slightly ahead-of-text inferences
-- Reasonable extrapolations from text
-Minor details that do not affect ongoing continuity may remain warnings with PASS.`;
+    const systemPrompt = `Validate the derived truth projection against the current chapter and supplied authority using the activated long-writing Skill. ${langInstruction}
+Do not rewrite the chapter or silently resolve contradictory sources. A hook marked superseded retains an explicitly withdrawn plan for history; its original premise is not active canon or a future promise. Verify its notes against the current withdrawal authority, rather than requiring that premise to occur in the chapter. Set reconciliationRequired=true only when a different truth projection can resolve the mismatch; a contradiction inside the chapter or between authorities remains a reported observation and does not authorize another settlement pass. Submit the Boolean decision and a concise Markdown report with concrete evidence through the validation tool. Use an empty report when there are no findings.`;
 
     const authorityBlock = this.buildAuthorityContextBlock(authorityContext);
 
@@ -98,46 +52,48 @@ Minor details that do not affect ongoing continuity may remain warnings with PAS
 
 ${authorityBlock}
 
-## State Card Changes
-${stateDiff || "(no changes)"}
+## Previous State Card
+${oldState}
 
-## Hooks Pool Changes
-${hooksDiff || "(no changes)"}
+## Proposed State Card
+${newState}
+
+## Previous Hooks
+${oldHooks}
+
+## Proposed Hooks
+${newHooks}
 
 ## Chapter Text (for reference)
 ${chapterContent}`;
 
     try {
-      const response = await this.chat(
+      const { result } = await this.submitStructured(
         [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        { temperature: 0.1 },
+        {
+          name: "submit_state_validation",
+          label: language === "en" ? "Submit state validation" : "提交状态对账",
+          description: "Submit whether state reconciliation is required and the concrete evidence.",
+          parameters: StateValidationToolSchema,
+          validate: result => {
+            if(result.reconciliationRequired && !result.reportMarkdown.trim()) throw Object.assign(new Error(JSON.stringify({code:"STATE_RECONCILIATION_REASON_REQUIRED",instruction:"Explain the projection mismatch that requires recalculation."})),{code:"STATE_RECONCILIATION_REASON_REQUIRED"});
+            return result;
+          },
+        },
+        { temperature: 0.1, maxTokens: Math.min(8192, this.ctx.client.defaults.maxTokens) },
       );
-
-      return this.parseResult(response.content);
+      return {
+        observations: result.reportMarkdown.trim() ? [{code:result.reconciliationRequired ? "state-reconciliation" : "state-projection-review",summary:result.reportMarkdown.trim(),evidence:[]}] : [],
+        consistent: !result.reconciliationRequired,
+        reconciliationRequired: result.reconciliationRequired,
+      };
     } catch (error) {
-      this.log?.warn(`State validation failed: ${error}`);
+      this.log?.warn(`State reconciliation review unavailable: ${error}`);
       throw error;
     }
-  }
-
-  private computeDiff(oldText: string, newText: string, label: string): string | null {
-    if (oldText === newText) return null;
-
-    const oldLines = oldText.split("\n").filter((l) => l.trim());
-    const newLines = newText.split("\n").filter((l) => l.trim());
-
-    const added = newLines.filter((l) => !oldLines.includes(l));
-    const removed = oldLines.filter((l) => !newLines.includes(l));
-
-    if (added.length === 0 && removed.length === 0) return null;
-
-    const parts = [`### ${label}`];
-    if (removed.length > 0) parts.push("Removed:\n" + removed.map((l) => `- ${l}`).join("\n"));
-    if (added.length > 0) parts.push("Added:\n" + added.map((l) => `+ ${l}`).join("\n"));
-    return parts.join("\n");
   }
 
   private buildAuthorityContextBlock(authorityContext?: StateValidationAuthorityContext): string {
@@ -149,173 +105,17 @@ ${chapterContent}`;
 
     return [
       "## Authority / Cross-Truth Context",
-      "Authority priority: current chapter text > runtime truth files/current summaries > story_frame/book_rules > legacy story_bible intro or marketing-style prose. If the current chapter establishes a numbered/name mapping, new truth files must follow that mapping instead of preserving an older intro-only version.",
+      "Contradictory authority must be reported for reconciliation rather than silently reordered.",
       "",
-      "### story_frame / legacy story_bible excerpt",
+      "### story_frame",
       storyFrame || "(empty)",
       "",
       "### book_rules excerpt",
       bookRules || "(empty)",
       "",
-      "### recent chapter_summaries excerpt",
+      "### chapter_summaries",
       chapterSummaries || "(empty)",
     ].join("\n");
   }
 
-  private parseResult(content: string): ValidationResult {
-    const trimmed = content.trim();
-    if (!trimmed) {
-      throw new Error("LLM returned empty response");
-    }
-
-    const jsonResult = this.tryParseJsonResult(trimmed);
-    if (jsonResult) {
-      return jsonResult;
-    }
-
-    const lines = trimmed.split("\n").map((line) => line.trim()).filter(Boolean);
-    if (lines.length === 0) {
-      throw new Error("LLM returned empty response");
-    }
-
-    const verdictLine = lines[0]!;
-    if (!/^(PASS|REPAIR|FAIL)$/i.test(verdictLine)) {
-      throw new Error("State validator returned invalid response");
-    }
-    const passed = /^PASS$/i.test(verdictLine);
-    const repairRequired = /^REPAIR$/i.test(verdictLine);
-
-    const warnings: ValidationWarning[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i]!;
-      if (/^(PASS|REPAIR|FAIL)$/i.test(line)) continue;
-
-      const categoryMatch = line.match(/^\[([^\]]+)\]\s*(.+)$/);
-      if (categoryMatch) {
-        warnings.push({
-          category: categoryMatch[1]!.trim(),
-          description: categoryMatch[2]!.trim(),
-        });
-      } else if (line.startsWith("- ") || line.startsWith("* ")) {
-        warnings.push({
-          category: "general",
-          description: line.slice(2).trim(),
-        });
-      } else if (line.length > 5) {
-        warnings.push({
-          category: "general",
-          description: line,
-        });
-      }
-    }
-
-    return { warnings, passed, repairRequired };
-  }
-
-  private tryParseJsonResult(text: string): ValidationResult | null {
-    const direct = this.tryParseExactJsonResult(text);
-    if (direct) {
-      return direct;
-    }
-
-    const candidate = extractBalancedJsonObject(text);
-    if (!candidate) {
-      return null;
-    }
-    return this.tryParseExactJsonResult(candidate);
-  }
-
-  private tryParseExactJsonResult(text: string): ValidationResult | null {
-    try {
-      const parsed = JSON.parse(text) as {
-        warnings?: Array<{ category?: string; description?: string }>;
-        passed?: boolean;
-        repairRequired?: boolean;
-      };
-      if (typeof parsed.passed !== "boolean") return null;
-      return {
-        warnings: (parsed.warnings ?? []).map((w) => ({
-          category: w.category ?? "unknown",
-          description: w.description ?? "",
-        })),
-        passed: parsed.passed,
-        repairRequired: parsed.repairRequired === true,
-      };
-    } catch {
-      return null;
-    }
-  }
-}
-
-function extractBalancedJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
-  if (start < 0) {
-    return null;
-  }
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let endIndex = -1;
-
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index]!;
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === "\"") {
-      inString = true;
-      continue;
-    }
-
-    if (char === "{") {
-      depth += 1;
-      continue;
-    }
-
-    if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        endIndex = index;
-        break;
-      }
-      if (depth < 0) {
-        return null;
-      }
-    }
-  }
-
-  if (endIndex < 0) return null;
-
-  // Only accept the candidate if what follows the closing brace is
-  // nothing, whitespace, or a structural JSON terminator.
-  // This rejects trailing content like "{...} more text here"
-  const followingChar = text[endIndex + 1];
-  if (
-    followingChar !== undefined &&
-    followingChar !== "\n" &&
-    followingChar !== "\r" &&
-    followingChar !== "\t" &&
-    followingChar !== " " &&
-    followingChar !== "," &&
-    followingChar !== "]" &&
-    followingChar !== "}"
-  ) {
-    return null;
-  }
-
-  return text.slice(start, endIndex + 1);
 }

@@ -41,7 +41,7 @@ interface AttachSessionStreamListenersInput {
   sessionId: string;
   streamTs: number;
   sourceRequestId?: string;
-  streamEs: EventSource;
+  streamEs: import("../../../../lib/studio-events").StudioEventStream;
   set: SliceSet;
   get: SliceGet;
 }
@@ -317,6 +317,30 @@ export function attachSessionStreamListeners({
     for (const throttle of progressThrottles.values()) throttle.flush();
   };
 
+  // Reconcile from the server after reconnect, or when a detached HTTP round
+  // terminates. The transcript and request identity remain authoritative.
+  streamEs.addEventListener("session:snapshot", (event: MessageEvent) => {
+    const runtime = get().sessions[sessionId];
+    if (!runtime?.detachedChatRequestId || runtime.stream !== streamEs) return;
+    try {
+      const data = JSON.parse(event.data);
+      if (data.session?.sessionId !== sessionId) return;
+      flushTextDeltas();
+      void get().loadSessionDetail(sessionId, true, data);
+    } catch { /* A malformed event cannot change execution state. */ }
+  });
+  streamEs.addEventListener("request:snapshot", (event: MessageEvent) => {
+    const runtime = get().sessions[sessionId];
+    if (!runtime?.detachedChatRequestId || runtime.stream !== streamEs) return;
+    try {
+      const data = JSON.parse(event.data);
+      if (!sessionMatchesEvent(sessionId, data) || data.status === "running") return;
+      if (data.requestId !== runtime.detachedChatRequestId) return;
+      flushTextDeltas();
+      void get().loadSessionDetail(sessionId, true);
+    } catch { /* Reconnect will read the saved state again. */ }
+  });
+
   streamEs.addEventListener("draft:complete", flushTextDeltas);
   streamEs.addEventListener("draft:error", flushTextDeltas);
 
@@ -480,23 +504,6 @@ export function attachSessionStreamListeners({
           const [messages, stream] = getOrCreateStream(runtime.messages, streamTs);
           const parts = [...(stream.parts ?? [])];
 
-          if (data.tool === "sub_agent") {
-            const last = parts[parts.length - 1];
-            if (last?.type === "text" && last.content) {
-              parts.pop();
-              const prev = parts[parts.length - 1];
-              if (prev?.type === "thinking") {
-                parts[parts.length - 1] = {
-                  ...prev,
-                  content: prev.content + (prev.content ? "\n\n" : "") + last.content,
-                };
-              } else {
-                parts.push({ type: "thinking", content: last.content, streaming: false });
-              }
-            }
-          }
-
-          const agent = data.tool === "sub_agent" ? (data.args?.agent as string | undefined) : undefined;
           const stages: PipelineStage[] | undefined = Array.isArray(data.stages) && data.stages.length > 0
             ? (data.stages as string[]).map((label) => ({ label, status: "pending" as const }))
             : undefined;
@@ -506,8 +513,7 @@ export function attachSessionStreamListeners({
             execution: {
               id: executionId,
               tool: data.tool as string,
-              agent,
-              label: resolveToolLabel(data.tool as string, agent),
+              label: resolveToolLabel(data.tool as string),
               status: "running",
               args: data.args as Record<string, unknown> | undefined,
               stages,

@@ -1,17 +1,10 @@
-export { buildAgentSystemPrompt } from "./agent-system-prompt.js";
 export {
-  createSubAgentTool,
   createReadTool,
-  createWriteTruthFileTool,
-  createRenameEntityTool,
-  createPatchChapterTextTool,
-  createEditTool,
-  createWriteFileTool,
   createShortFictionRunTool,
+  createShortFictionReviseTool,
   createScriptCreationTool,
   createStoryboardCreationTool,
   createInteractiveFilmCreationTool,
-  createTranslationCreateTool,
   createFanficBookTool,
   createContinuationImportTool,
   createSpinoffBookTool,
@@ -20,6 +13,9 @@ export {
   createIngestMaterialTool,
   createManageBookReferenceTool,
   createImportChaptersTool,
+  createImportCanonTool,
+  createRefreshFanficCanonTool,
+  createResyncChapterStateTool,
   createGenerateCoverTool,
   createPlayStartTool,
   createPlayReviseTool,
@@ -27,6 +23,18 @@ export {
   createGrepTool,
   createLsTool,
 } from "./agent-tools.js";
+export {
+  createTranslationCreateTool,
+  createTranslationRunTool,
+  createTranslationRevisionTool,
+  createTranslationExportTool,
+} from "../harness/tools/translation.js";
+export {
+  createWriteTruthFileTool,
+  createRenameEntityTool,
+  createPatchChapterTextTool,
+  createReplaceChapterTextTool,
+} from "../harness/tools/longform-edits.js";
 export {
   abortAgentSession,
   runAgentSession,
@@ -36,10 +44,11 @@ export {
   type AgentSessionResult,
 } from "./agent-session.js";
 export {
-  createBookContextTransform,
-  createInteractiveFilmContextTransform,
-} from "./context-transform.js";
-export { createUseSkillTool, type CreateUseSkillToolOptions } from "./skill-tool.js";
+  createUseSkillTool,
+  hydrateActivatedSkillGuidance,
+  type CreateUseSkillToolOptions,
+} from "./skill-tool.js";
+export { appendActivatedSkillGuidance } from "../agents/base.js";
 export {
   createSetWorldAnchorTool,
   createUpsertCharactersTool,

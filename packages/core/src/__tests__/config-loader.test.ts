@@ -94,7 +94,7 @@ describe("loadProjectConfig local provider auth", () => {
       language: "zh",
       llm: {
         services: [
-          { service: "moonshot", temperature: 1, maxTokens: 4096 },
+          { service: "moonshot", temperature: 1 },
         ],
         defaultModel: "kimi-k2.5",
       },
@@ -130,7 +130,7 @@ describe("loadProjectConfig local provider auth", () => {
       language: "zh",
       llm: {
         services: [
-          { service: "minimax", temperature: 0.9, maxTokens: 4096 },
+          { service: "minimax", temperature: 0.9 },
         ],
         defaultModel: "MiniMax-M2.7",
       },

@@ -45,16 +45,10 @@ function buildPlan(chapter: number): PlanChapterOutput {
     intent: {
       chapter,
       goal: "取回账册离开旧港",
-      outlineNode: "Chapter 1: return",
-      arcContext: "卷纲节点：第一卷序章",
-      mustKeep: ["林越父亲已死", "母亲遗物"],
-      mustAvoid: ["提前揭露母亲身份"],
-      styleEmphasis: ["潮湿氛围", "短句交替"],
     },
     memo: {
       chapter,
       goal: "取回账册离开旧港",
-      isGoldenOpening: true,
       threadRefs: ["H1"],
       body: MEMO_BODY,
     },
@@ -78,20 +72,14 @@ describe("persisted-governed-plan round trip", () => {
     const plan = buildPlan(1);
     await savePersistedPlan(dir, plan);
 
-    const persisted = await readFile(join(dir, "story", "runtime", "chapter-0001.plan.md"), "utf-8");
-    expect(persisted.trimStart()).not.toMatch(/^---\s*\n/);
-    expect(persisted).toContain("## 本章目标");
-    expect(persisted).toContain("## 关联线索");
+    const persisted = JSON.parse(await readFile(join(dir, "story", "runtime", "chapter-0001.plan.json"), "utf-8"));
+    expect(persisted.version).toBe(2);
+    expect(persisted.memo).toEqual(plan.memo);
 
     const loaded = await loadPersistedPlan(dir, 1);
     expect(loaded).not.toBeNull();
     expect(loaded!.memo).toEqual(plan.memo);
     expect(loaded!.intent.goal).toBe(plan.intent.goal);
-    expect(loaded!.intent.outlineNode).toBe(plan.intent.outlineNode);
-    expect(loaded!.intent.arcContext).toBe(plan.intent.arcContext);
-    expect(loaded!.intent.mustKeep).toEqual(plan.intent.mustKeep);
-    expect(loaded!.intent.mustAvoid).toEqual(plan.intent.mustAvoid);
-    expect(loaded!.intent.styleEmphasis).toEqual(plan.intent.styleEmphasis);
     expect(loaded!.plannerInputs).toEqual(plan.plannerInputs);
   });
 
@@ -102,35 +90,17 @@ describe("persisted-governed-plan round trip", () => {
     expect(loaded).toBeNull();
   });
 
-  it("returns null when memo body is missing required sections", async () => {
+  it("rejects an invalid typed cache", async () => {
     const dir = await mkdtemp(join(tmpdir(), "inkos-plan-"));
     await mkdir(join(dir, "story", "runtime"), { recursive: true });
 
-    // Corrupt memo body: drop the 不要做 heading.
-    const corrupt = `---
-chapter: 1
-goal: 取回账册离开旧港
-isGoldenOpening: true
-threadRefs: []
-intent:
-  goal: 取回账册离开旧港
-  outlineNode: Chapter 1
-  mustKeep: []
-  mustAvoid: []
-  styleEmphasis: []
-plannerInputs: []
----
-## 当前任务
-只有一段。
-`;
     await writeFile(
-      join(dir, "story", "runtime", "chapter-0001.plan.md"),
-      corrupt,
+      join(dir, "story", "runtime", "chapter-0001.plan.json"),
+      JSON.stringify({ version: 2, intent: { chapter: 1, goal: "目标" } }),
       "utf-8",
     );
 
-    const loaded = await loadPersistedPlan(dir, 1);
-    expect(loaded).toBeNull();
+    await expect(loadPersistedPlan(dir, 1)).rejects.toThrow();
   });
 
   it("returns null when chapter number does not match", async () => {

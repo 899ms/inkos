@@ -9,19 +9,12 @@ import type {
 } from "../../types";
 import { localizeKnownRuntimeMessage } from "../../../../lib/error-copy";
 import { tr } from "../../../../lib/app-language";
+import { summarizeToolResult, toolResultDisplayText } from "../../../../shared/tool-result";
 
 const NULL_BOOK_KEY = "__null__";
 
 // [zh, en] tuples resolved through tr() at call time so labels follow the
 // current app language instead of the language active at module load.
-const AGENT_LABELS: Record<string, readonly [string, string]> = {
-  architect: ["建书", "Create book"],
-  writer: ["写作", "Write"],
-  auditor: ["审计", "Audit"],
-  reviser: ["修订", "Revise"],
-  exporter: ["导出", "Export"],
-};
-
 const TOOL_LABELS: Record<string, readonly [string, string]> = {
   read: ["读取文件", "Read file"],
   edit: ["编辑文件", "Edit file"],
@@ -38,6 +31,17 @@ const TOOL_LABELS: Record<string, readonly [string, string]> = {
   play_start: ["启动互动世界", "Start interactive world"],
   play_revise: ["重做互动回合", "Redo play turn"],
   play_step: ["推进互动世界", "Advance interactive world"],
+  create_book: ["创建长篇", "Create long-form Work"],
+  create_work: ["创建作品", "Create Work"],
+  export_work: ["导出作品", "Export Work"],
+  review_and_export_work_artifact: ["审稿并导出", "Review and export"],
+  review_work_artifact: ["审稿", "Review artifact"],
+  revise_work_artifact: ["修订作品", "Revise artifact"],
+  revise_foundation: ["重建设定", "Revise foundation"],
+  write_chapters: ["写作章节", "Write chapters"],
+  review_chapter: ["审查章节", "Review chapter"],
+  revise_chapter: ["修订章节", "Revise chapter"],
+  export_book: ["导出作品", "Export Work"],
 };
 
 export function bookKey(bookId: string | null | undefined): string {
@@ -49,32 +53,27 @@ export function extractErrorMessage(error: string | { code?: string; message?: s
   return localizeKnownRuntimeMessage(error.message ?? "Unknown error");
 }
 
-export function resolveToolLabel(tool: string, agent?: string): string {
-  if (tool === "sub_agent" && agent) {
-    const label = AGENT_LABELS[agent];
-    return label ? tr(label[0], label[1]) : agent;
-  }
+export function resolveToolLabel(tool: string, _agent?: string): string {
+  tool = actionToolName(tool);
   const label = TOOL_LABELS[tool];
   return label ? tr(label[0], label[1]) : tool;
 }
 
+function actionToolName(tool: string): string {
+  return tool.split("__").at(-1) ?? tool;
+}
+
+function normalizeToolExecution(execution: ToolExecution): ToolExecution {
+  const tool = actionToolName(execution.tool);
+  const displayText = (execution.details as { displayText?: unknown } | undefined)?.displayText;
+  return { ...execution, tool,
+    label: tool !== execution.tool || execution.label === tool ? resolveToolLabel(tool, execution.agent) : execution.label,
+    ...(typeof displayText === "string" ? { result: displayText }
+      : typeof execution.result === "string" ? { result: toolResultDisplayText(execution.result) } : {}) };
+}
+
 export function summarizeResult(result: unknown): string {
-  if (typeof result === "string") return result.slice(0, 2000);
-  if (result && typeof result === "object") {
-    const record = result as Record<string, unknown>;
-    if (typeof record.content === "string") return record.content.slice(0, 2000);
-    if (Array.isArray(record.content)) {
-      const text = record.content
-        .map((part) => {
-          const item = part as { type?: unknown; text?: unknown };
-          return item.type === "text" && typeof item.text === "string" ? item.text : "";
-        })
-        .filter(Boolean)
-        .join("\n");
-      if (text.trim()) return text.slice(0, 2000);
-    }
-  }
-  return String(result).slice(0, 2000);
+  return summarizeToolResult(result);
 }
 
 export function extractToolDetails(result: unknown): unknown {
@@ -83,16 +82,16 @@ export function extractToolDetails(result: unknown): unknown {
 }
 
 export function extractToolError(result: unknown): string {
-  if (typeof result === "string") return localizeKnownRuntimeMessage(result).slice(0, 500);
+  if (typeof result === "string") return localizeKnownRuntimeMessage(result);
   if (result && typeof result === "object") {
     const record = result as Record<string, unknown>;
-    if (typeof record.content === "string") return localizeKnownRuntimeMessage(record.content).slice(0, 500);
+    if (typeof record.content === "string") return localizeKnownRuntimeMessage(record.content);
     if (record.content && Array.isArray(record.content)) {
       const textPart = record.content.find((content: any) => content.type === "text");
-      if (textPart) return localizeKnownRuntimeMessage((textPart as any).text ?? "").slice(0, 500);
+      if (textPart) return localizeKnownRuntimeMessage((textPart as any).text ?? "");
     }
   }
-  return localizeKnownRuntimeMessage(String(result)).slice(0, 500);
+  return localizeKnownRuntimeMessage(String(result));
 }
 
 export function getOrCreateStream(
@@ -163,6 +162,7 @@ export function withToolExecutions(
   executions: ReadonlyArray<ToolExecution>,
 ): Message {
   if (executions.length === 0) return message;
+  executions = executions.map(normalizeToolExecution);
   const existingIds = new Set((message.toolExecutions ?? []).map((execution) => execution.id));
   const missing = executions.filter((execution) => !existingIds.has(execution.id));
   if (missing.length === 0) return message;
@@ -186,7 +186,12 @@ export function createSessionRuntime(input: {
   sessionId: string;
   bookId: string | null;
   sessionKind?: SessionRuntime["sessionKind"];
+  profileId?: string;
+  workId?: string | null;
+  proposalAction?: SessionRuntime["proposalAction"];
   playMode?: SessionRuntime["playMode"];
+  modelOverride?: string;
+  serviceOverride?: string;
   title: string | null;
   messages?: ReadonlyArray<Message>;
   isDraft?: boolean;
@@ -195,7 +200,12 @@ export function createSessionRuntime(input: {
     sessionId: input.sessionId,
     bookId: input.bookId,
     sessionKind: input.sessionKind,
+    profileId: input.profileId,
+    workId: input.workId,
+    proposalAction: input.proposalAction,
     playMode: input.playMode,
+    modelOverride: input.modelOverride,
+    serviceOverride: input.serviceOverride,
     title: input.title,
     messages: input.messages ?? [],
     stream: null,
@@ -217,15 +227,16 @@ export function deserializeMessages(
       if (message.thinking) parts.push({ type: "thinking", content: message.thinking, streaming: false });
       if (toolExecutions) {
         for (const execution of toolExecutions) {
-          parts.push({ type: "tool", execution });
+          parts.push({ type: "tool", execution: normalizeToolExecution(execution) });
         }
       }
       if (message.content) parts.push({ type: "text", content: message.content });
       return {
         role: message.role as "user" | "assistant",
+        kind: message.kind,
         content: message.content,
         thinking: message.thinking,
-        toolExecutions,
+        toolExecutions: toolExecutions?.map(normalizeToolExecution),
         timestamp: message.timestamp,
         parts: parts.length > 0 ? parts : undefined,
       };
@@ -236,6 +247,7 @@ export function mergeToolExecution(
   messages: ReadonlyArray<Message>,
   execution: ToolExecution,
 ): ReadonlyArray<Message> {
+  execution = normalizeToolExecution(execution);
   let found = false;
   const next = messages.map((message) => {
     const hasDirectExecution = message.toolExecutions?.some((item) => item.id === execution.id) ?? false;
@@ -244,6 +256,15 @@ export function mergeToolExecution(
     ) ?? false;
     if (!hasDirectExecution && !hasPartExecution) return message;
 
+    if (found) {
+      return {
+        ...message,
+        toolExecutions: message.toolExecutions?.filter((item) => item.id !== execution.id),
+        parts: message.parts?.filter((part) => (
+          part.type !== "tool" || part.execution.id !== execution.id
+        )),
+      };
+    }
     found = true;
     const toolExecutions = hasDirectExecution
       ? message.toolExecutions?.map((item) => item.id === execution.id ? execution : item)
@@ -327,6 +348,12 @@ export function updateToolPartById(
       (part) => part.type === "tool" && part.execution.id === executionId,
     ) ?? false;
     if (!hasPart) return message;
+    if (found) {
+      const parts = (message.parts ?? []).filter((part) => (
+        part.type !== "tool" || part.execution.id !== executionId
+      ));
+      return { ...message, ...deriveFlat(parts), parts };
+    }
     found = true;
     const parts = (message.parts ?? []).map((part) => (
       part.type === "tool" && part.execution.id === executionId
@@ -370,8 +397,8 @@ export function markRunningToolsFailed(
 function extractSessionToolExecutions(message: SessionMessage): ToolExecution[] | undefined {
   const direct = (message as any).toolExecutions;
   if (Array.isArray(direct)) return direct as ToolExecution[];
-  const legacy = (message as any).legacyDisplay?.toolExecutions;
-  return Array.isArray(legacy) ? legacy as ToolExecution[] : undefined;
+  const executions = (message as any).display?.toolExecutions;
+  return Array.isArray(executions) ? executions as ToolExecution[] : undefined;
 }
 
 type ProposalResolution = "confirmed" | "rejected";
@@ -386,14 +413,8 @@ function proposedActionFrom(exec: ToolExecution): string | null {
 
 function completesProposedAction(exec: ToolExecution, action: string): boolean {
   if (exec.status !== "completed") return false;
-  if (action === "create_book") return exec.tool === "sub_agent" && exec.agent === "architect";
-  if (action === "short_run") return exec.tool === "short_fiction_run";
-  if (action === "play_start") return exec.tool === "play_start";
-  if (action === "generate_cover") return exec.tool === "generate_cover";
-  if (action === "script_create") return exec.tool === "script_create";
-  if (action === "storyboard_create") return exec.tool === "storyboard_create";
-  if (action === "interactive_film_create") return exec.tool === "interactive_film_create";
-  return false;
+  if (!exec.details || typeof exec.details !== "object") return false;
+  return (exec.details as Record<string, unknown>).requestedIntent === action;
 }
 
 export function deriveResolvedProposals(
@@ -442,7 +463,7 @@ export function updateSession(
 
 export function upsertSessionSummary(
   sessions: Record<string, SessionRuntime>,
-  summary: Pick<SessionSummary, "sessionId" | "bookId" | "sessionKind" | "playMode" | "title">,
+  summary: Pick<SessionSummary, "sessionId" | "bookId" | "sessionKind" | "profileId" | "workId" | "proposalAction" | "playMode" | "modelOverride" | "serviceOverride" | "title">,
 ): Record<string, SessionRuntime> {
   const existing = sessions[summary.sessionId];
   return {
@@ -452,7 +473,12 @@ export function upsertSessionSummary(
           ...existing,
           bookId: summary.bookId,
           sessionKind: summary.sessionKind ?? existing.sessionKind,
+          profileId: summary.profileId ?? existing.profileId,
+          workId: summary.workId ?? existing.workId,
+          proposalAction: summary.proposalAction ?? existing.proposalAction,
           playMode: summary.playMode ?? existing.playMode,
+          modelOverride: summary.modelOverride ?? existing.modelOverride,
+          serviceOverride: summary.serviceOverride ?? existing.serviceOverride,
           title: summary.title,
         }
       : createSessionRuntime(summary),

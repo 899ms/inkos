@@ -7,7 +7,7 @@ import { loadStoryGraph } from "@actalk/inkos-core";
 
 describe("POST /api/v1/projects/:id/story-graph/delta", () => {
   let root: string;
-  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-delta-")); await mkdir(join(root, "interactive-films", "p"), { recursive: true }); });
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "if-delta-")); await mkdir(join(root, "works", "p", "source"), { recursive: true }); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
   it("applies a delta and returns the new rev", async () => {

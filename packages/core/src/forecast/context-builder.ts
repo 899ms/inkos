@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { formatRecentSummaries, readSubplotBoard } from "../agents/planner-context.js";
 import { readCharacterContext, readStoryFrame, readVolumeMap } from "../utils/outline-paths.js";
+import { loadRuntimeStateSnapshot } from "../state/runtime-state-store.js";
+import { renderChapterSummariesProjection, renderCurrentStateProjection, renderHooksProjection } from "../state/state-projections.js";
+import { BookConfigSchema } from "../models/book.js";
+import { resolveDurableStoryProgress } from "../state/state-bootstrap.js";
 
 // Read-only view of the canonical book used as forecast input. Everything in
 // here MUST stay side-effect free: building a forecast context never creates
 // or repairs canonical files (that is why StateManager.loadControlDocuments,
 // which seeds defaults, is deliberately not used).
-
-const RECENT_SUMMARY_LIMIT = 8;
 
 export interface ForecastContextSections {
   readonly authorIntent: string;
@@ -20,7 +21,6 @@ export interface ForecastContextSections {
   readonly volumeMap: string;
   readonly recentChapterSummaries: string;
   readonly characterContext: string;
-  readonly subplotBoard: string;
 }
 
 export interface ForecastContext {
@@ -45,20 +45,25 @@ export async function buildForecastContext(params: {
     collectFingerprintFiles(bookDir),
   ]);
 
-  const [authorIntent, currentFocus, currentState, pendingHooks] = await Promise.all([
+  const [authorIntent, currentFocus, runtimeSnapshot] = await Promise.all([
     readOrEmpty(join(storyDir, "author_intent.md")),
     readOrEmpty(join(storyDir, "current_focus.md")),
-    readOrEmpty(join(storyDir, "current_state.md")),
-    readOrEmpty(join(storyDir, "pending_hooks.md")),
+    loadRuntimeStateSnapshot(bookDir),
   ]);
+  if (runtimeSnapshot.manifest.lastAppliedChapter !== baseChapter) {
+    throw new Error(
+      `Forecast context is inconsistent: chapter index is at ${baseChapter}, runtime state is at ${runtimeSnapshot.manifest.lastAppliedChapter}.`,
+    );
+  }
 
-  const [storyFrame, volumeMap, characterContext, subplotBoard, chapterSummariesRaw] = await Promise.all([
+  const [storyFrame, volumeMap, characterContext] = await Promise.all([
     readStoryFrame(bookDir),
     readVolumeMap(bookDir),
     readCharacterContext(bookDir),
-    readSubplotBoard(storyDir),
-    readOrEmpty(join(storyDir, "chapter_summaries.md")),
   ]);
+  const currentState = renderCurrentStateProjection(runtimeSnapshot.currentState, bookConfig.language);
+  const pendingHooks = renderHooksProjection(runtimeSnapshot.hooks, bookConfig.language);
+  const chapterSummariesRaw = renderChapterSummariesProjection(runtimeSnapshot.chapterSummaries, bookConfig.language);
 
   const contextFingerprint = computeContextFingerprint({
     baseChapter,
@@ -79,10 +84,9 @@ export async function buildForecastContext(params: {
       storyFrame,
       volumeMap,
       recentChapterSummaries: chapterSummariesRaw.trim()
-        ? formatRecentSummaries(chapterSummariesRaw, baseChapter + 1, RECENT_SUMMARY_LIMIT)
+        ? chapterSummariesRaw.trim()
         : "",
       characterContext,
-      subplotBoard,
     },
   };
 }
@@ -104,24 +108,15 @@ export function computeContextFingerprint(input: {
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
-// Every fixed-path file buildForecastContext (directly or via its helpers)
-// reads into the prompt, including the legacy fallbacks readStoryFrame /
-// readVolumeMap / readCharacterContext may resolve to. story/runtime/** —
+// Every fixed-path file buildForecastContext reads into the prompt. story/runtime/** —
 // where forecasts themselves live — is deliberately NOT part of this list,
 // so a forecast can never invalidate itself.
 const FINGERPRINT_FIXED_INPUTS: ReadonlyArray<string> = [
   "book.json",
   "story/author_intent.md",
-  "story/chapter_summaries.md",
-  "story/character_matrix.md",
   "story/current_focus.md",
-  "story/current_state.md",
   "story/outline/story_frame.md",
   "story/outline/volume_map.md",
-  "story/pending_hooks.md",
-  "story/story_bible.md",
-  "story/subplot_board.md",
-  "story/volume_outline.md",
 ];
 
 // Same tier directories readRoleCards enumerates.
@@ -147,8 +142,9 @@ async function collectFingerprintFiles(
       let names: string[];
       try {
         names = (await readdir(dir)).filter((name) => name.endsWith(".md"));
-      } catch {
-        return [];
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
       }
       return Promise.all(names.map(async (name) =>
         [`story/roles/${tier}/${name}`, await readOrEmpty(join(dir, name))] as const));
@@ -183,7 +179,6 @@ export function renderForecastContextMarkdown(context: ForecastContext): string 
     [zh ? "卷映射" : "Volume map", context.sections.volumeMap],
     [zh ? "近期章节摘要" : "Recent chapter summaries", context.sections.recentChapterSummaries],
     [zh ? "人物与关系" : "Characters and relationships", context.sections.characterContext],
-    [zh ? "支线看板" : "Subplot board", context.sections.subplotBoard],
   ];
 
   const blocks = [
@@ -198,16 +193,9 @@ export function renderForecastContextMarkdown(context: ForecastContext): string 
 }
 
 async function readBookConfig(bookDir: string): Promise<{ readonly title: string; readonly language: "zh" | "en" }> {
-  try {
-    const raw = await readFile(join(bookDir, "book.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { title?: unknown; language?: unknown };
-    return {
-      title: typeof parsed.title === "string" ? parsed.title : "",
-      language: parsed.language === "en" ? "en" : "zh",
-    };
-  } catch {
-    return { title: "", language: "zh" };
-  }
+  const raw = await readFile(join(bookDir, "book.json"), "utf-8");
+  const parsed = BookConfigSchema.parse(JSON.parse(raw));
+  return { title: parsed.title, language: parsed.language ?? "zh" };
 }
 
 /**
@@ -215,20 +203,7 @@ async function readBookConfig(bookDir: string): Promise<{ readonly title: string
  * this value: a new canonical chapter invalidates old forecasts.
  */
 async function resolveBaseChapter(bookDir: string): Promise<number> {
-  let files: string[];
-  try {
-    files = await readdir(join(bookDir, "chapters"));
-  } catch {
-    return 0;
-  }
-  let max = 0;
-  for (const file of files) {
-    const match = file.match(/^(\d+)[_-]?.*\.md$/);
-    if (!match) continue;
-    const number = Number.parseInt(match[1]!, 10);
-    if (Number.isFinite(number) && number > max) max = number;
-  }
-  return max;
+  return resolveDurableStoryProgress({ bookDir });
 }
 
 async function readStateFiles(bookDir: string): Promise<ReadonlyArray<{ readonly name: string; readonly content: string }>> {
@@ -236,8 +211,9 @@ async function readStateFiles(bookDir: string): Promise<ReadonlyArray<{ readonly
   let names: string[];
   try {
     names = (await readdir(stateDir)).filter((name) => name.endsWith(".json")).sort();
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
   return Promise.all(names.map(async (name) => ({
     name,
@@ -248,7 +224,8 @@ async function readStateFiles(bookDir: string): Promise<ReadonlyArray<{ readonly
 async function readOrEmpty(path: string): Promise<string> {
   try {
     return await readFile(path, "utf-8");
-  } catch {
-    return "";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
   }
 }

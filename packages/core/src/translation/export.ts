@@ -1,8 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { toPosixPath } from "../utils/posix-path.js";
 import { EPub } from "epub-gen-memory";
 import { loadTranslationChapter, loadTranslationManifest, translationProjectDir } from "./run-store.js";
 import type { TranslationExportFormat, TranslationExportResult } from "./types.js";
+import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 
 export async function writeTranslationExport(
   projectRoot: string,
@@ -35,6 +37,10 @@ export async function writeTranslationExport(
   } else {
     await writeFile(outputPath, await renderTextExport(projectRoot, projectId, format), "utf-8");
   }
+
+  await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: true,
+    acceptPaths: [toPosixPath(relative(join(projectRoot, "works", projectId), outputPath))],
+  });
 
   return {
     outputPath,

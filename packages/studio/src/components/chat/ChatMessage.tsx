@@ -9,6 +9,7 @@ import { XCircle } from "lucide-react";
 
 export interface ChatMessageProps {
   readonly role: "user" | "assistant";
+  readonly kind?: "message" | "error";
   readonly content: string;
   readonly timestamp: number;
   readonly theme: Theme;
@@ -16,10 +17,11 @@ export interface ChatMessageProps {
 
 export const ChatMessage = memo(function ChatMessage({
   role,
+  kind = "message",
   content,
 }: ChatMessageProps) {
   const isUser = role === "user";
-  const isError = content.startsWith("\u2717");
+  const isError = kind === "error";
 
   return (
     <Message from={role}>
@@ -29,7 +31,7 @@ export const ChatMessage = memo(function ChatMessage({
         ) : isError ? (
           <div className="flex items-center gap-2 text-[17px] leading-[1.72] text-destructive">
             <XCircle size={14} className="shrink-0" />
-            <span>{content.replace(/^\u2717\s*/, "")}</span>
+            <span>{content}</span>
           </div>
         ) : (
           <MessageResponse>{content}</MessageResponse>

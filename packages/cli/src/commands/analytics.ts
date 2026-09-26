@@ -25,16 +25,9 @@ export const analyticsCommand = new Command("analytics")
         log(`  Total chapters: ${analytics.totalChapters}`);
         log(`  Total words: ${analytics.totalWords.toLocaleString()}`);
         log(`  Avg words/chapter: ${analytics.avgWordsPerChapter.toLocaleString()}`);
-        log(`  Audit pass rate: ${analytics.auditPassRate}%`);
+        log(`  Review observations: ${analytics.observationCount}`);
+        log(`  Chapters with observations: ${analytics.chaptersWithObservations}`);
         log("");
-
-        if (Object.keys(analytics.statusDistribution).length > 0) {
-          log("  Status distribution:");
-          for (const [status, count] of Object.entries(analytics.statusDistribution)) {
-            log(`    ${status}: ${count}`);
-          }
-          log("");
-        }
 
         if (analytics.tokenStats) {
           log("  Token usage:");
@@ -51,20 +44,6 @@ export const analyticsCommand = new Command("analytics")
           log("");
         }
 
-        if (analytics.topIssueCategories.length > 0) {
-          log("  Most common issue categories:");
-          for (const { category, count } of analytics.topIssueCategories) {
-            log(`    ${category}: ${count}`);
-          }
-          log("");
-        }
-
-        if (analytics.chaptersWithMostIssues.length > 0) {
-          log("  Chapters with most issues:");
-          for (const { chapter, issueCount } of analytics.chaptersWithMostIssues) {
-            log(`    Ch.${chapter}: ${issueCount} issues`);
-          }
-        }
       }
     } catch (e) {
       if (opts.json) {

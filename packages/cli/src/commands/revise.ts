@@ -1,6 +1,13 @@
 import { Command } from "commander";
-import { DEFAULT_REVISE_MODE, PipelineRunner, StateManager, resolveRevisionGate, type ReviseMode } from "@actalk/inkos-core";
-import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import {
+  DEFAULT_REVISE_MODE,
+  PipelineRunner,
+  StateManager,
+  createReviseChapterTool,
+  executeExplicitCapabilityTool,
+  type ReviseMode,
+} from "@actalk/inkos-core";
+import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
 import {
   formatNotifyCommandTitle,
   formatNotifyFailureBody,
@@ -11,7 +18,7 @@ import {
 import { sendCommandNotification } from "../notify-helper.js";
 
 export const reviseCommand = new Command("revise")
-  .description("Revise a chapter based on audit issues")
+  .description("Revise a chapter from user direction and review observations")
   .argument("[book-id]", "Book ID (auto-detected if only one book)")
   .argument("[chapter]", "Chapter number (defaults to latest)")
   .option("--mode <mode>", "Revise mode: spot-fix, polish, rewrite, rework, anti-detect", DEFAULT_REVISE_MODE)
@@ -42,27 +49,39 @@ export const reviseCommand = new Command("revise")
       notifyBookName = book.title ?? bookId;
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: opts.brief,
-        revisionGate: resolveRevisionGate(book, config.writing),
       }));
 
       const mode = opts.mode as ReviseMode;
       if (!opts.json) log(`Revising "${bookId}"${chapterNumber ? ` chapter ${chapterNumber}` : " (latest)"} [mode: ${mode}]...`);
 
-      const result = await pipeline.reviseDraft(bookId, chapterNumber, mode);
+      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createReviseChapterTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
+        workId: bookId,
+        parameters: {
+          instruction: opts.brief?.trim() || "Revise the chapter from its persisted observations and Work authority.",
+          bookId,
+          ...(chapterNumber ? { chapterNumber } : {}),
+          mode,
+        },
+      });
+      const result = action.data as {
+        readonly chapterNumber: number;
+        readonly wordCount: number;
+        readonly changed: boolean;
+        readonly observations: ReadonlyArray<unknown>;
+      };
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
-      } else if (!result.applied) {
-        log(`  Chapter ${result.chapterNumber}: kept original draft`);
-        if (result.skippedReason) log(`  Reason: ${result.skippedReason}`);
       } else {
-        log(`  Chapter ${result.chapterNumber} revised`);
+        log(result.changed
+          ? `  Chapter ${result.chapterNumber} revised`
+          : `  Chapter ${result.chapterNumber}: no actionable change`);
         log(`  Words: ${result.wordCount}`);
-        log(`  Status: ${result.status}`);
-        log("  Fixed:");
-        for (const fix of result.fixedIssues) {
-          log(`    - ${fix}`);
-        }
+        log(`  Review observations: ${result.observations.length}`);
       }
 
       // Unlike write commands, the pipeline sends no notification for
@@ -72,10 +91,9 @@ export const reviseCommand = new Command("revise")
           title: formatNotifyCommandTitle(language, "revise", notifyBookName, true),
           body: formatNotifyReviseBody(language, {
             chapterNumber: result.chapterNumber,
-            applied: result.applied,
+            changed: result.changed,
             wordCount: result.wordCount,
-            fixedCount: result.fixedIssues.length,
-            skippedReason: result.skippedReason,
+            observationCount: result.observations.length,
           }),
         }, config);
       }

@@ -31,6 +31,14 @@ describe("hash route", () => {
       expect(parseHash("#/book/new")).toEqual({ page: "book-create" });
     });
 
+    it("parses a generic Work inspector route", () => {
+      expect(parseHash("#/work/%E5%9B%9E%E5%A3%B0%E8%88%AA%E7%BA%BF")).toEqual({ page: "work", workId: "回声航线" });
+    });
+
+    it("parses a generic Work Agent route", () => {
+      expect(parseHash("#/work-chat/demo/script")).toEqual({ page: "work-chat", workId: "demo", profileId: "script" });
+    });
+
     it("parses config as services (redirect)", () => {
       expect(parseHash("#/config")).toEqual({ page: "services" });
     });
@@ -89,6 +97,14 @@ describe("hash route", () => {
 
     it("book-create -> #/book/new", () => {
       expect(routeToHash({ page: "book-create" })).toBe("#/book/new");
+    });
+
+    it("round-trips a generic Work inspector route", () => {
+      expect(routeToHash({ page: "work", workId: "回声航线" })).toBe("#/work/%E5%9B%9E%E5%A3%B0%E8%88%AA%E7%BA%BF");
+    });
+
+    it("round-trips a generic Work Agent route", () => {
+      expect(routeToHash({ page: "work-chat", workId: "demo", profileId: "script" })).toBe("#/work-chat/demo/script");
     });
 
     it("services -> #/services", () => {

@@ -20,7 +20,7 @@ export async function loadLLMEnvLayers(
 ): Promise<LLMEnvLayers> {
   const global = await parseEnvFile(GLOBAL_ENV_PATH);
   const project = await parseEnvFile(join(root, ".env"));
-  // Compatibility: modelOverrides.apiKeyEnv and detector config still read process.env directly.
+  // Process-level consumers such as modelOverrides.apiKeyEnv read this shared environment.
   hydrateProcessEnvFromEnvFiles(processEnv, global, project);
 
   return {
@@ -44,19 +44,16 @@ export function studioIgnoredEnv(layers: LLMEnvLayers): LLMEnvMap {
   return mergeEnvMaps(layers.global, layers.project, layers.process);
 }
 
-export function cliOverlayEnv(layers: LLMEnvLayers): LLMEnvMap {
-  return mergeEnvMaps(layers.global, layers.project, layers.process);
-}
-
-export function legacyEnv(layers: LLMEnvLayers): LLMEnvMap {
+export function mergedLLMEnv(layers: LLMEnvLayers): LLMEnvMap {
   return mergeEnvMaps(layers.global, layers.project, layers.process);
 }
 
 async function parseEnvFile(path: string): Promise<LLMEnvMap> {
   try {
     return parse(await readFile(path, "utf-8"));
-  } catch {
-    return {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
   }
 }
 

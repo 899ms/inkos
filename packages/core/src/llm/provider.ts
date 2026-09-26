@@ -17,12 +17,12 @@ import { getEndpoint } from "./providers/index.js";
 import { lookupModel } from "./providers/lookup.js";
 import { fetchWithProxy } from "../utils/proxy-fetch.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
-import { isLlmStubEnabled, stubChatCompletion } from "../agent/llm-stub.js";
 import { createLeadingThinkTagStripper, stripLeadingThinkBlock } from "./think-tag-stripper.js";
 import {
   agentTrajectoryHeaders,
   beginAgentModelCall,
 } from "./agent-trajectory.js";
+import type { LLMApiFormat } from "./api-format.js";
 
 
 // === Streaming Monitor Types ===
@@ -36,7 +36,7 @@ export interface StreamProgress {
 
 export type OnStreamProgress = (progress: StreamProgress) => void;
 
-const INKOS_USER_AGENT = "InkOS/1.3.5";
+const INKOS_USER_AGENT = "InkOS/2.0.0";
 const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 8192 * 3;
 const TRANSIENT_LLM_RETRIES = 2;
 const DEFAULT_FIRST_STREAM_EVENT_TIMEOUT_MS = 120_000;
@@ -61,14 +61,39 @@ export class LLMStreamInactivityError extends Error {
   }
 }
 
-interface StreamActivityDeadline {
+export class LLMRequestTimeoutError extends Error {
+  readonly code = "LLM_REQUEST_TIMEOUT";
+  constructor(readonly timeoutMs: number) {
+    super(`LLM request did not complete within ${timeoutMs}ms`);
+    this.name = "LLMRequestTimeoutError";
+  }
+}
+
+/** Buffered responses have a total request deadline, not a stream inactivity clock. */
+export function createRequestDeadline(callerSignal?: AbortSignal) {
+  const timeoutMs = readPositiveTimeout(process.env.INKOS_LLM_REQUEST_TIMEOUT_MS, 300_000);
+  const controller = new AbortController();
+  let error: LLMRequestTimeoutError | undefined;
+  const timer = setTimeout(() => {
+    error = new LLMRequestTimeoutError(timeoutMs);
+    controller.abort(error);
+  }, timeoutMs);
+  timer.unref?.();
+  return {
+    signal: callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal,
+    timeoutError: () => error,
+    stop: () => clearTimeout(timer),
+  };
+}
+
+export interface StreamActivityDeadline {
   readonly signal: AbortSignal;
   readonly activity: () => void;
   readonly stop: () => void;
   readonly timeoutError: () => LLMStreamInactivityError | undefined;
 }
 
-function createStreamActivityDeadline(
+export function createStreamActivityDeadline(
   callerSignal?: AbortSignal,
   defaults: Required<StreamDeadlineOptions> = {
     firstEventTimeoutMs: DEFAULT_FIRST_STREAM_EVENT_TIMEOUT_MS,
@@ -126,50 +151,64 @@ export function guardAssistantMessageStream<TApi extends PiApi>(
   deadlineOptions?: StreamDeadlineOptions,
 ): AssistantMessageEventStream {
   const guarded = createAssistantMessageEventStream();
-  const deadline = createStreamActivityDeadline(callerSignal, undefined, deadlineOptions);
 
   void (async () => {
-    let terminalSeen = false;
-    try {
-      const upstream = start(deadline.signal);
-      const iterator = upstream[Symbol.asyncIterator]();
-      while (true) {
-        const next = await nextWithAbort(iterator, deadline.signal);
-        if (next.done) break;
-        const event = next.value;
-        deadline.activity();
-        terminalSeen ||= event.type === "done" || event.type === "error";
-        guarded.push(event);
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= TRANSIENT_LLM_RETRIES; attempt += 1) {
+      const deadline = createStreamActivityDeadline(callerSignal, undefined, deadlineOptions);
+      let terminalSeen = false;
+      let externallyVisibleEvents = 0;
+      try {
+        const upstream = start(deadline.signal);
+        const iterator = upstream[Symbol.asyncIterator]();
+        while (true) {
+          const next = await nextWithAbort(iterator, deadline.signal);
+          if (next.done) break;
+          const event = next.value;
+          if (("delta" in event && event.delta.length > 0)
+            || event.type === "toolcall_start" || event.type === "toolcall_end"
+            || event.type === "done" || event.type === "error") deadline.activity();
+          if (event.type === "error" && externallyVisibleEvents === 0
+            && isTransientLLMHttpError(new Error(event.error.errorMessage ?? ""))) {
+            throw new Error(event.error.errorMessage);
+          }
+          if (((event.type === "text_delta" || event.type === "toolcall_delta") && event.delta.length > 0)
+            || event.type === "toolcall_start" || event.type === "toolcall_end") {
+            externallyVisibleEvents += 1;
+          }
+          terminalSeen ||= event.type === "done" || event.type === "error";
+          guarded.push(event.type === "done" && event.reason === "length"
+            ? { ...event, message: { ...event.message, content: event.message.content.filter((part) => part.type !== "toolCall") } }
+            : event);
+        }
+        if (!terminalSeen) throw new Error("LLM stream ended without a terminal event");
+        return;
+      } catch (error) {
+        lastError = deadline.timeoutError() ?? error;
+        const retryableZeroEventFailure = externallyVisibleEvents === 0
+          && !(lastError instanceof LLMStreamInactivityError)
+          && (isTransientLLMHttpError(lastError) || isTransientLLMTransportError(lastError))
+          && !callerSignal?.aborted
+          && attempt < TRANSIENT_LLM_RETRIES;
+        if (!retryableZeroEventFailure) break;
+        deadline.stop();
+        if (!(lastError instanceof LLMStreamInactivityError)) {
+          try { await abortableDelay(800 * (attempt + 1), callerSignal); }
+          catch (error) { lastError = error; break; }
+        }
+      } finally {
+        deadline.stop();
       }
-      if (!terminalSeen) throw new Error("LLM stream ended without a terminal event");
-    } catch (error) {
-      const resolved = deadline.timeoutError() ?? error;
-      const message: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: callerSignal?.aborted ? "aborted" : "error",
-        errorMessage: resolved instanceof Error ? resolved.message : String(resolved),
-        timestamp: Date.now(),
-      };
-      guarded.push({
-        type: "error",
-        reason: message.stopReason === "aborted" ? "aborted" : "error",
-        error: message,
-      });
-    } finally {
-      deadline.stop();
     }
+    const message: AssistantMessage & {errorCode?: string} = {
+      role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: callerSignal?.aborted ? "aborted" : "error",
+      errorMessage: lastError instanceof Error ? lastError.message : String(lastError),
+      ...(lastError instanceof LLMStreamInactivityError ? {errorCode:"MODEL_STREAM_INACTIVITY"} : {}),
+      timestamp: Date.now(),
+    };
+    guarded.push({ type: "error", reason: message.stopReason === "aborted" ? "aborted" : "error", error: message });
   })();
 
   return guarded;
@@ -275,7 +314,7 @@ export interface LLMClient {
   readonly provider: "openai" | "anthropic";
   readonly service?: string;
   readonly configSource?: LLMConfig["configSource"];
-  readonly apiFormat: "chat" | "responses";
+  readonly apiFormat: LLMApiFormat;
   readonly stream: boolean;
   readonly proxyUrl?: string;
   readonly _piModel?: PiModel<PiApi>;
@@ -287,12 +326,6 @@ export interface LLMClient {
      * 命中模型卡时来自 providers bank 的 modelCard.maxOutput；未知模型走写作兜底预算。
      */
     readonly maxTokens: number;
-    /**
-     * Legacy mock compatibility only. v2 provider resolution no longer caps
-     * per-call maxTokens from project config; model max output comes from the
-     * provider bank.
-     */
-    readonly maxTokensCap?: number | null;
     readonly thinkingBudget: number;
     readonly extra: Record<string, unknown>;
   };
@@ -301,7 +334,6 @@ export interface LLMClient {
 // === Factory ===
 
 export function createLLMClient(config: LLMConfig): LLMClient {
-  // C1 (v2.0.0)：config.maxTokens / maxTokensCap 已删除；defaults.maxTokens 完全从 modelCard 推导。
   const _earlyCard = lookupModel(config.service ?? "custom", config.model);
   const defaults = {
     temperature: config.temperature ?? 0.7,
@@ -326,7 +358,7 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     ? resolveProviderCompat(inkosProvider, baseUrl)
     : undefined;
 
-  const provider = config.provider === "anthropic" ? "anthropic" : "openai";
+  const provider = config.provider === "anthropic" || piApi === "anthropic-messages" ? "anthropic" : "openai";
   // pi-ai provider 字段：大多数情况 pi-ai 会按 baseUrl 自动嗅探（openrouter.ai / api.z.ai /
   // api.x.ai / deepseek.com / anthropic.com 等）。这里只列 pi-ai 嗅探不到、需要显式指定的少数情况。
   let piProvider: string;
@@ -376,6 +408,7 @@ function resolvePiApi(
   presetApi: PiApi | undefined,
 ): PiApi {
   if (serviceName === "custom") {
+    if (apiFormat === "anthropic") return "anthropic-messages";
     return apiFormat === "responses" ? "openai-responses" : "openai-completions";
   }
   return (presetApi ?? "openai-completions") as PiApi;
@@ -754,13 +787,14 @@ function isIncompleteLLMResponseError(error: unknown): boolean {
 function isRetryableLLMError(error: unknown): boolean {
   // PartialResponseError = 流在生成中途被掐断（网关切长连接等）。重试会完整
   // 重新生成一次，比把半截内容当成功交付（截断的章节/设定文件）要正确。
+  if (error instanceof LLMStreamInactivityError || error instanceof LLMRequestTimeoutError) return false;
   return error instanceof PartialResponseError
     || isIncompleteLLMResponseError(error)
     || isTransientLLMTransportError(error)
     || isTransientLLMHttpError(error);
 }
 
-async function withTransientLLMRetry<T>(
+export async function withTransientLLMRetry<T>(
   run: (attempt: number) => Promise<T>,
   options?: { readonly enabled?: boolean; readonly signal?: AbortSignal },
 ): Promise<T> {
@@ -1449,8 +1483,6 @@ export async function chatCompletion(
     readonly retry?: boolean;
   },
 ): Promise<LLMResponse> {
-  if (isLlmStubEnabled()) return Promise.resolve(stubChatCompletion(messages, model));
-  // C1 (v2.0.0)：删除 maxTokensCap 机制。per-call 显式传的 maxTokens 永远不被裁剪。
   const resolved = {
     temperature: clampTemperatureForModel(
       client.service,

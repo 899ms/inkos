@@ -15,7 +15,13 @@ import {
   type PlayStateSlot,
   type PlayStateSlotInput,
 } from "../models/play.js";
-import type { PlayGraphSnapshot } from "./play-file-db.js";
+
+export interface PlayGraphSnapshot {
+  readonly entities: PlayEntity[];
+  readonly edges: PlayEdge[];
+  readonly stateSlots: PlayStateSlot[];
+  readonly events: PlayEvent[];
+}
 
 const require = createRequire(import.meta.url);
 
@@ -39,8 +45,7 @@ const EDGE_SELECT_COLUMNS = `
   valid_until_event AS validUntilEventId,
   source_event_id AS sourceEventId,
   visibility_json AS visibilityJson,
-  strength,
-  confidence
+  strength
 `;
 
 const STATE_SLOT_SELECT_COLUMNS = `
@@ -70,10 +75,10 @@ export class PlayDB {
     const { DatabaseSync } = require("node:sqlite");
     this.db = new DatabaseSync(join(runDir, "play.db"));
     this.db.exec("PRAGMA journal_mode = WAL");
-    this.migrate();
+    this.initializeSchema();
   }
 
-  private migrate(): void {
+  private initializeSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS entities (
         id TEXT PRIMARY KEY,
@@ -95,8 +100,7 @@ export class PlayDB {
         valid_until_event TEXT,
         source_event_id TEXT NOT NULL,
         visibility_json TEXT NOT NULL DEFAULT '{}',
-        strength REAL,
-        confidence REAL
+        strength REAL
       );
 
       CREATE TABLE IF NOT EXISTS state_slots (
@@ -152,8 +156,8 @@ export class PlayDB {
     this.db.prepare(
       `INSERT OR REPLACE INTO edges (
          id, from_id, type, to_id, value_json, valid_from_event, valid_until_event,
-         source_event_id, visibility_json, strength, confidence
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         source_event_id, visibility_json, strength
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       parsed.id,
       parsed.fromId,
@@ -165,7 +169,6 @@ export class PlayDB {
       parsed.sourceEventId,
       JSON.stringify(parsed.visibility),
       parsed.strength ?? null,
-      parsed.confidence ?? null,
     );
   }
 
@@ -318,7 +321,6 @@ interface EdgeRow {
   readonly sourceEventId: string;
   readonly visibilityJson: string;
   readonly strength: number | null;
-  readonly confidence: number | null;
 }
 
 interface StateSlotRow {
@@ -363,7 +365,6 @@ function rowToEdge(row: EdgeRow): PlayEdge {
     sourceEventId: row.sourceEventId,
     visibility: parseJsonObject(row.visibilityJson),
     ...(row.strength === null ? {} : { strength: row.strength }),
-    ...(row.confidence === null ? {} : { confidence: row.confidence }),
   });
 }
 

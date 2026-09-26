@@ -31,10 +31,10 @@ export function renderForecastComparisonMarkdown(forecast: NarrativeForecast): s
       ];
 
   const tableHeader = zh
-    ? ["| 分支 | 标题 | 意图匹配 | 风险数 | 前提 |", "| --- | --- | --- | --- | --- |"]
-    : ["| Branch | Title | Intent fit | Risks | Premise |", "| --- | --- | --- | --- | --- |"];
+    ? ["| 分支 | 标题 | 风险数 | 前提 |", "| --- | --- | --- | --- |"]
+    : ["| Branch | Title | Risks | Premise |", "| --- | --- | --- | --- |"];
   const tableRows = forecast.branches.map((branch) =>
-    `| ${branch.branchId} | ${escapeCell(branch.title)} | ${branch.intentAlignment.score} | ${branch.risks.length} | ${escapeCell(branch.premise)} |`);
+    `| ${branch.branchId} | ${escapeCell(branch.title)} | ${branch.risks.length} | ${escapeCell(branch.premise)} |`);
 
   const sections = forecast.branches.map((branch) => renderBranchSection(branch, zh));
 
@@ -168,7 +168,7 @@ function renderBranchSection(
     "",
     `${sub} ${labels.alignment}`,
     "",
-    `${branch.intentAlignment.score}/100 — ${branch.intentAlignment.rationale}`,
+    branch.intentRationale,
   ].join("\n");
 }
 

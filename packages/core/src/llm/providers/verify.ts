@@ -1,10 +1,11 @@
 import { getEndpoint } from "./index.js";
 import { resolveServiceModelsBaseUrl } from "../service-presets.js";
 import { fetchWithProxy } from "../../utils/proxy-fetch.js";
+import type { LLMApiFormat } from "../api-format.js";
 
 export interface VerifyResult {
   readonly recommendedTransport?: {
-    readonly apiFormat?: "chat" | "responses";
+    readonly apiFormat?: LLMApiFormat;
     readonly stream?: boolean;
   };
   readonly probe: {

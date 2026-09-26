@@ -137,7 +137,7 @@ describe("splitChapters", () => {
     expect(chapters[0]?.title).toBe("Chapter 1");
   });
 
-  it("strips a Project Gutenberg trailer from the final chapter content", () => {
+  it("preserves the complete final chapter without guessing which prose is removable", () => {
     const input = [
       "Chapter 1: Finale",
       "",
@@ -150,7 +150,11 @@ describe("splitChapters", () => {
     const chapters = splitChapters(input);
 
     expect(chapters).toHaveLength(1);
-    expect(chapters[0]?.content).toBe("The harbor bells rang once and went silent.");
-    expect(chapters[0]?.content).not.toContain("Project Gutenberg");
+    expect(chapters[0]?.content).toBe([
+      "The harbor bells rang once and went silent.",
+      "",
+      "Project Gutenberg™ depends upon and cannot survive without widespread",
+      "public support and donations to carry out its mission.",
+    ].join("\n"));
   });
 });
