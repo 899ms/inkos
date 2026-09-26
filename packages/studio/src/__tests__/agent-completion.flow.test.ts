@@ -4,12 +4,14 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { evictAgentCache } from "@actalk/inkos-core";
 import { createStudioServer } from "../api/server.js";
 
 it("keeps answered and blocked outcomes distinct through API delivery and session reload", async () => {
   const root = await mkdtemp(join(tmpdir(), "inkos-api-completion-"));
   const outcomes = [{ status: "answered", message: "A concise answer." }, { status: "blocked", message: "The requested source is unavailable." }];
   let calls = 0;
+  let sessionId: string | undefined;
   const upstream = createServer(async (request, response) => {
     for await (const _chunk of request) {}
     const outcome = outcomes[calls++];
@@ -28,6 +30,7 @@ it("keeps answered and blocked outcomes distinct through API delivery and sessio
     const app = createStudioServer({} as never, root);
     const post = (body: unknown) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const { session } = await (await app.request("/api/v1/sessions", post({ sessionKind: "chat" }))).json();
+    sessionId = session.sessionId;
     const first = await app.request("/api/v1/agent", post({ sessionId: session.sessionId, instruction: "Explain a scene.", model: "fixture-model", service: "custom:fixture" }));
     expect(first.status).toBe(200);
     expect(await first.json()).toMatchObject({ completionStatus: "answered", response: outcomes[0].message });
@@ -39,6 +42,7 @@ it("keeps answered and blocked outcomes distinct through API delivery and sessio
     expect(detail.session.messages.filter((m: { role: string }) => m.role === "assistant").map((m: { content: string }) => m.content)).toEqual(outcomes.map(x => x.message));
     expect(calls).toBe(2);
   } finally {
+    if (sessionId) evictAgentCache(sessionId);
     upstream.closeAllConnections(); await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });
   }

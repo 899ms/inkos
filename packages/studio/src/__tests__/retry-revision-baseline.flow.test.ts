@@ -4,11 +4,12 @@ import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {it,expect} from 'vitest';
-import {createWorkManifest,saveWorkManifest,loadWorkManifest,syncWorkSourceArtifacts} from '@actalk/inkos-core';
+import {createWorkManifest,saveWorkManifest,loadWorkManifest,syncWorkSourceArtifacts,evictAgentCache} from '@actalk/inkos-core';
 import {createStudioServer} from '../api/server.js';
 
 it('keeps the original revision across a failed write, server recreation and native retry, while a new request gets a new baseline',async()=>{
  const root=await mkdtemp(join(tmpdir(),'inkos-retry-baseline-'));let phase:'first'|'retry'|'fresh'='first',mainCalls=0,artifactId='',initialRevision='';const reviews:any[]=[];
+ let sessionId:string|undefined;
  const upstream=createServer(async(req,res)=>{
   const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));
   const send=(name:string,args:unknown)=>{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{role:'assistant',tool_calls:[{id:'call-'+Date.now(),type:'function',function:{name,arguments:JSON.stringify(args)}}]}}]}));};
@@ -32,6 +33,7 @@ it('keeps the original revision across a failed write, server recreation and nat
   const original=await syncWorkSourceArtifacts({projectRoot:root,workId:'gallery',accept:true,writes:[{relativePath:'works/gallery/source/script.md',content:'Nora opens the gallery.\n\nThe visitor waits.\n'}]});artifactId=original.artifacts[0]!.id;initialRevision=original.artifacts[0]!.currentRevisionId!;
   const app=createStudioServer({} as never,root),post=(body:unknown)=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const {session}=await(await app.request('/api/v1/sessions',post({sessionKind:'work',profileId:'script',workId:'gallery'}))).json();
+  sessionId=session.sessionId;
   const instruction='Change only the final paragraph; preserve the first paragraph and review the result.',request={sessionId:session.sessionId,instruction,workId:'gallery',profileId:'script',model:'fixture',service:'custom:fixture'};
   const first=await app.request('/api/v1/agent',post({...request,clientRequestId:'first-request'}));expect(first.status).toBeGreaterThanOrEqual(400);
   const afterWrite=await loadWorkManifest(root,'gallery');expect(afterWrite.artifacts[0]!.currentRevisionId).not.toBe(initialRevision);
@@ -44,5 +46,5 @@ it('keeps the original revision across a failed write, server recreation and nat
   const retained=await(await restarted.request(`/api/v1/sessions/${session.sessionId}`)).json();expect(retained.chatRequest.requestId).toBe('second-request');expect(retained.chatRequest.baselineWork.artifacts[0].currentRevisionId).toBe(initialRevision);
   phase='fresh';await restarted.request('/api/v1/agent',post({...request,instruction:'Review this current draft.',clientRequestId:'fresh-request'}));
   const fresh=await(await restarted.request(`/api/v1/sessions/${session.sessionId}`)).json();expect(fresh.chatRequest.baselineWork.artifacts[0].currentRevisionId).toBe(afterWrite.artifacts[0]!.currentRevisionId);
- }finally{upstream.closeAllConnections();await new Promise<void>(resolve=>upstream.close(()=>resolve()));await rm(root,{recursive:true,force:true});}
+ }finally{if(sessionId)evictAgentCache(sessionId);upstream.closeAllConnections();await new Promise<void>(resolve=>upstream.close(()=>resolve()));await rm(root,{recursive:true,force:true});}
 },20000);
