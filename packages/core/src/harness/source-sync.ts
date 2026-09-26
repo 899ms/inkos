@@ -88,9 +88,9 @@ export async function syncWorkSourceArtifacts(input: {
     pending.set(path, write);
   }
   // An explicit write set owns its own revisions, not every candidate in the Work.
-  const acceptPaths = input.acceptPaths ?? (input.writes
+  const acceptPaths = (input.acceptPaths ?? (input.writes
     ? [...pending.keys()].map(path => toPosixPath(join("source", path)))
-    : undefined);
+    : undefined))?.map(toPosixPath);
   const files = [...new Set([...(await listFiles(sourceRoot)), ...pending.keys()])].sort();
   const presentWorkPaths = new Set(files.map((file) => toPosixPath(join("source", file))));
   const updatedAt = input.updatedAt ?? new Date().toISOString();
@@ -287,7 +287,8 @@ async function listFiles(root: string): Promise<string[]> {
       const path = join(directory, entry.name);
       if ((await lstat(path)).isSymbolicLink()) continue;
       if (entry.isDirectory()) await visit(path);
-      else if (entry.isFile()) files.push(relative(root, path));
+      // Discovery and pending writes must share one key before deduplication.
+      else if (entry.isFile()) files.push(toPosixPath(relative(root, path)));
     }
   };
   await visit(root);

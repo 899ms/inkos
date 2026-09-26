@@ -170,6 +170,7 @@ describe("creative harness mini-flows", () => {
       })],
     });
     const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+    try {
     const runtime = new CreativeHarnessRuntime(root, capabilities, createBuiltInWorkProfileRegistry(), episodes);
     const handle = runtime.startEpisode({
       episodeId: "episode-authority",
@@ -226,7 +227,7 @@ describe("creative harness mini-flows", () => {
       authorityEpisode: "completed",
       interruptedEpisode: "failed",
     });
-    episodes.close();
+    } finally { episodes.close(); }
   });
 
   it("lists canonical Works without treating runtime-only directories as Works", async () => {

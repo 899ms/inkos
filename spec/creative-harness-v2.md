@@ -23,6 +23,9 @@ Skills; they do not replace the author's requested scope.
   request's original baseline remains available across retries for comparison.
 - Atomic file sets journal multi-file writes. Interrupted operations can recover
   without treating an unfinished candidate as an accepted version.
+- Filesystem discovery, pending writes, acceptance scopes, and image receipts
+  use the same `/`-separated artifact identity on all platforms. One native path
+  and its registered path must not create competing updates to one artifact.
 - Short-fiction revision checkpoints carry a stable operation identity and
   completed chapter progress. A changed instruction cannot silently reset that
   operation; source changes are detected before resuming.
@@ -54,7 +57,11 @@ and reports conflicts rather than overwriting them.
 
 The frozen `delivery-verification-2026-09-25` candidate has source digest
 `7fe5443820cf7e566c68765ce9f3d86ca6820c76d7fdb5b5874d52d011456232`.
-Its 758 source files match the implementation submitted with this document.
+Its 758 source files match implementation commit `7e60e13`. Subsequent Windows
+integration fixes normalize artifact identities before deduplication and scope
+checks, and close cached test sessions before deleting their temporary projects.
+The frozen candidate remains unchanged; its real-model evidence describes that
+baseline, while GitHub CI checks the current integration commit.
 
 - Node 22 and Node 24 each passed 1,093 checks: Core 701, Studio 304, CLI 88.
 - Fresh installation matched all 1,779 packaged production files.

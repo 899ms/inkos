@@ -14,7 +14,7 @@ import {decodeStructuredFields} from '../agent/structured-arguments.js';
 import {mkdtemp,rm,mkdir,writeFile,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {runAgentSession} from '../agent/agent-session.js';
+import {runAgentSession,evictAgentCache} from '../agent/agent-session.js';
 import {readTranscriptEvents} from '../interaction/session-transcript.js';
 import { loadBookSession } from '../interaction/book-session-store.js';
 import {PlayStore} from '../play/play-store.js';
@@ -62,7 +62,7 @@ describe("guardedPiNonStreaming", () => {
       expect(tools).not.toContain('adaptation__imitation_create');
       expect(tools).not.toContain('workspace__create_work');
       expect(await listWorkManifests(root)).toHaveLength(0);
-    }finally{await rm(root,{recursive:true,force:true});}
+    }finally{evictAgentCache('entry');await rm(root,{recursive:true,force:true});}
   });
   it('initializes a generic long-form Work in place and preserves a composed profile without overwriting an initialized book',async()=>{
     const root=await mkdtemp(join(tmpdir(),'inkos-bound-initialization-'));
@@ -105,7 +105,7 @@ describe("guardedPiNonStreaming", () => {
       const chapter=await new WriterAgent({client:boundedClient,model:model.id,projectRoot:root,bookId:"generic"}).writeChapter({book:JSON.parse(original),bookDir:join(root,"works/generic/source"),chapterNumber:1,chapterIntent:"Return the receipt",chapterMemo:{chapter:1,goal:"Return the receipt",body:"The owner accepts the sealed receipt.",threadRefs:[]},contextPackage:{chapter:1,selectedContext:[{source:"story/parent_canon.md",reason:"Original ownership",excerpt:canon,protection:"protected"}]}});
       expect(chapter.chapterNumber).toBe(1);
       expect(calls).toEqual(["submit_chapter_draft","submit_runtime_state_delta"]);
-    }finally{await rm(root,{recursive:true,force:true});}
+    }finally{evictAgentCache('initialization');await rm(root,{recursive:true,force:true});}
   });
   it('repairs an invalid world proposal before one commit and delivers without another main-model call',async()=>{
     const root=await mkdtemp(join(tmpdir(),'inkos-play-terminal-'));
@@ -137,7 +137,7 @@ describe("guardedPiNonStreaming", () => {
       expect(finalDB.snapshot?.().edges.some(edge=>edge.id==="self-hold")).toBe(false);
       finalDB.close?.();
       expect((await readTranscriptEvents(root,'world-session')).filter(e=>e.type==='request_committed')).toHaveLength(2);
-    }finally{await rm(root,{recursive:true,force:true});}
+    }finally{evictAgentCache('world-session');await rm(root,{recursive:true,force:true});}
   });
   it('preserves candidate chapters and repairs only failing components before measured delivery',async()=>{
     const root=await mkdtemp(join(tmpdir(),'inkos-short-contract-')),calls:Record<string,number>={};
@@ -271,7 +271,7 @@ describe("guardedPiNonStreaming", () => {
       expect(calls[1]!.tools.map(t=>t.function.name)).toEqual(expect.arrayContaining(['workspace__review_and_export_work_artifact','workspace__revise_work_artifact']));
       expect(calls[1]!.messages.at(-3)?.content).toBe(request);
       expect((await readTranscriptEvents(root,'create-fixture')).filter(e=>e.type==='request_committed')).toHaveLength(2);
-    } finally {await rm(root,{recursive:true,force:true});}
+    } finally {evictAgentCache('create-fixture');await rm(root,{recursive:true,force:true});}
   });
   it('persists the created Work before a failed continuation and resumes with its capabilities',async()=>{
     const root=await mkdtemp(join(tmpdir(),'inkos-target-failure-'));let calls=0;let targetAtContinuation:unknown;
@@ -296,7 +296,7 @@ describe("guardedPiNonStreaming", () => {
       expect(resumed).toMatchObject({workId:'script',profileId:'script'});
       expect(resumed.errorMessage).toBeUndefined();
       expect(resumedBodies[0]!.tools.map(tool=>tool.function.name)).toContain('workspace__review_and_export_work_artifact');
-    } finally {await rm(root,{recursive:true,force:true});}
+    } finally {evictAgentCache('target-fixture');await rm(root,{recursive:true,force:true});}
   });
   it('accepts a complete multi-chapter batch as flat prose and preserves quotes and line breaks',async()=>{
     const prose=['Mara said, "Keep it locked."\nThe receipt listed a name.','The owner signed: "Received."\nMara handed over the key.'];
@@ -323,7 +323,7 @@ describe("guardedPiNonStreaming", () => {
       expect(calls[0]?.messages.slice(-3).map(m=>m.role)).toEqual(['user','assistant','tool']);
       expect(calls[0]?.messages.at(-3)?.content).toBe(request);
       expect((await readTranscriptEvents(root,'resume-fixture')).filter(e=>e.type==='request_started').map(e=>e.input)).toEqual([request]);
-    } finally {await rm(root,{recursive:true,force:true});}
+    } finally {evictAgentCache('resume-fixture');await rm(root,{recursive:true,force:true});}
   });
   it('decodes only schema-valid JSON fields and leaves malformed or wrong-shaped content rejected',()=>{
     const schema=Type.Object({items:Type.Array(Type.Object({name:Type.String()})),text:Type.String()});

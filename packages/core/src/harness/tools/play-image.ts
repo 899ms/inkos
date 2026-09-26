@@ -1,4 +1,5 @@
 import { relative } from 'node:path';
+import { toPosixPath } from '../../utils/posix-path.js';
 import { StateManager } from '../../state/manager.js';
 import { withWorkMutationScope, runInWorkMutationQueue } from '../../utils/work-mutation-scope.js';
 import { syncWorkSourceArtifacts } from '../source-sync.js';
@@ -45,7 +46,7 @@ export function createPlayImageTool(root:string,worldId:string,runId='main'):Age
       const receipts=new Map<string,ActionArtifactRef>();
       const entry=await generatePlayImage({root,runDir,key,prompt,signal,prepareSceneBrief:params.target==='scene',withCommitLock:locked,commit:async(writes)=>{
         const work=await syncWorkSourceArtifacts({projectRoot:root,workId:worldId,accept:true,episodeId:_id,writes});
-        const paths=new Set(writes.map(write=>relative(`works/${worldId}`,write.relativePath)));
+        const paths=new Set(writes.map(write=>toPosixPath(relative(`works/${worldId}`,write.relativePath))));
         for(const artifact of work.artifacts){
           const revision=artifact.revisions.find(r=>r.id===artifact.currentRevisionId);
           if(revision&&paths.has(revision.path))receipts.set(artifact.id,{workId:worldId,artifactId:artifact.id,revisionId:revision.id,path:revision.path});
